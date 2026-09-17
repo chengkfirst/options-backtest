@@ -1,0 +1,16 @@
+# 数据缓存：从外部数据源派生，可重新获取，且会随回测区间增长
+.cache/
+
+# 回测产出：每次运行都会重生成
+out/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# macOS
+.DS_Store
