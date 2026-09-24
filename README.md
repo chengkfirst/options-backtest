@@ -142,7 +142,8 @@ ctx.signal("名字", default=...)    取信号；缺失且没给默认值会**�
 跟踪止盈、按论据失效、分批建仓 —— 都要**每天重算**。
 
 ```python
-from backtest.engine.review import Close, Reduce, Add
+from backtest import run
+from backtest.engine.review import Add, Close, Reduce
 
 def review(ctx, pos):
     # ③ 跟踪止盈：从最高点回吐三分之一就走
@@ -159,7 +160,11 @@ def review(ctx, pos):
 
     return None      # 继续持有
 
-run(..., review=review, engine="event_driven")
+r = run(symbol="QQQ", start="2023-01-01", end="2023-06-30",
+        entry="close < sma_20 * 0.98",
+        exit={"hold_days": 20, "dte_floor": 7},
+        engine="event_driven", review=review)
+print(len(r.trades), "笔")
 ```
 
 `pos` 里有 `mfe_so_far` / `mae_so_far`（**截至今天**，不是事后回看）、`ratio`、
@@ -182,13 +187,14 @@ run(..., review=review, engine="event_driven")
 三步，全程有工具：
 
 ```python
-from backtest.data.adapters import describe_schema, check_file
+from backtest.data.adapters import check_file, describe_schema
 
-describe_schema()           # 1. 要哪些列、每列什么含义、缺了会怎样
-check_file("你的路径")       # 2. 跑回测**之前**先体检：致命 / 警告 两档
+print(describe_schema())    # 1. 要哪些列、每列什么含义、缺了会怎样
+# check_file("你的路径")     # 2. 跑回测之前先体检：致命 / 警告 两档　# 不跑
 ```
 
 ```python
+# 不跑（需要你自己的数据文件）
 run(..., chain="file:你的路径")                        # 3a. 列名标准
 run(..., chain={"kind": "file", "path": "你的路径",     # 3b. 列名对不上
                 "column_map": {"trade_date": "asof"}})
@@ -222,6 +228,11 @@ greeks 按 Black-Scholes 推）**并标记来源**——供应商给的 delta �
 # 怎么读结果
 
 ```python
+from backtest import run
+
+r = run(symbol="QQQ", start="2023-01-01", end="2023-06-30",
+        exit={"hold_days": 10, "dte_floor": 5}, engine="event_driven")
+
 r.stats()            # 笔数、胜率、盈亏比、平均持有
 r.distribution()     # 分位数、尾部、偏度峰度
 r.by_exit_reason()   # 按了结原因分组
@@ -258,12 +269,14 @@ r.manifest()         # 配置 + 数据来源 + 依赖版本（可复现的凭据
 # 开发
 
 ```bash
-python -m tools.status              # ← 一屏看完项目到哪了（算出来的，不会过期）
-pytest                              # 全部测试（293 个）
-python -m tools.check_deps          # 依赖方向检查
-python -m tools.baseline check      # 回归基线比对
-python -m tools.baseline update     # 显式更新基线（会打印前后差异）
+python -m tools.check               # ← **提交前跑这个**：六道守卫一起跑
+python -m tools.check --fast        #   改动小的时候，跳过耗时的两道
+python -m tools.status              #   一屏看完项目到哪了（算出来的，不会过期）
+python -m tools.baseline update     #   显式更新基线（会打印前后差异）
 ```
+
+检查规则与流程见 **[规范.md](规范.md)**。一句话：**能被工具检查的才叫规范，
+写在文档里的只是愿望。**
 
 ## 怎么保持统一
 
@@ -284,13 +297,19 @@ python -m tools.baseline update     # 显式更新基线（会打印前后差异
 这类本来就没法自动判定，所以 `tools/status.py` 只统计它们、并**标明是手写的**，
 不假装是算出来的。
 
-三道防线各拦不同的东西：
+六道守卫各拦不同的东西，**每一道都对应一个真实发生过的错误**：
 
-| 防线 | 拦什么 |
+| 守卫 | 拦下过什么 |
 |---|---|
-| 截断重算属性测试 | 前视偏差——把数据截到 t 重算，日期 t 的信号必须逐位一致 |
-| 依赖方向检查 | 模块反向依赖；定价泄漏到数据层之外；**未登记的模块直接失败** |
-| 回归基线 | 代码改动带来的非预期结果变化 |
+| 测试套件 | 行为回归；截断重算属性测试守住前视偏差 |
+| 依赖方向 | 定价泄漏到上层；**未登记的模块悄悄绕过检查** |
+| 发布完整性 | `.gitignore` 写宽了，整个 `backtest/research/` 包从没上传过 |
+| 回归基线 | 改动带来的非预期结果变化 |
+| 组件定义 | 界面字段不是 `run()` 真认识的参数，填了没效果还不报错 |
+| 文档代码 | README 里的示例跑不通——那比没有文档更糟 |
+
+新增一道守卫的标准：**先有一个具体的错，再有守卫**。没踩过的坑不设防，
+否则守卫会变成没人看的噪音。
 
 ## 目录
 
