@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 import numpy as np
@@ -85,9 +85,37 @@ class TradeTableEngine:
 
     def _guard(self, strategy: Strategy) -> None:
         """拒绝本引擎无法正确处理的配置，而不是给出近似结果。"""
+        if strategy.review is not None:
+            raise StartupError(
+                "逐日复查只能用事件驱动引擎。成交表引擎向量化算出场——一次性算完"
+                "整个持有窗口的首次触发，根本没有「逐日」这个环节。"
+                "改用 engine='event_driven'。"
+            )
+        if strategy.plan is not None:
+            raise StartupError(
+                "计划式策略只能用事件驱动引擎。成交表引擎各笔独立、向量化算出场，"
+                "表达不了'这一笔用这套出场规则'——而那正是计划式的要点。"
+                "改用 engine='event_driven'。"
+            )
         self.signals.require(list(strategy.entry.requires))
         if strategy.exit.hold_days is None and strategy.exit.dte_floor is None:
             raise StartupError("缺少时间类了结条件，仓位会被拖到到期")
+
+        # 执行延迟一天意味着：剩余 dte_floor 日那天做决策，剩余 dte_floor-1 日那天成交。
+        # 下限小于 lag+1 时成交日落在到期日或之后，了结意图会落空，仓位被静默拖到结算。
+        lag = self.config.execution_lag_days
+        floor = strategy.exit.dte_floor
+        if floor is not None and floor < lag + 1:
+            raise StartupError(
+                f"剩余到期下限 {floor} 个交易日过小：执行延迟为 {lag} 天，"
+                f"决策日之后还要 {lag} 天才成交，下限至少为 {lag + 1}。"
+                f"否则了结意图会落空，仓位被静默拖到到期结算。"
+            )
+        if strategy.sizing.method != "fixed":
+            raise StartupError(
+                f"成交表引擎只支持固定张数：各笔独立计算，不存在\"当前权益\"，"
+                f"因此 {strategy.sizing.method} 无从算起。请改用 engine=\"event_driven\"。"
+            )
         for feature, why in self.UNSUPPORTED.items():
             if getattr(strategy, feature, None):
                 raise StartupError(
@@ -102,6 +130,10 @@ class TradeTableEngine:
         records: list[TradeRecord] = []
         trade_id = 0
 
+        #: 已接受的交易，用来判断"这张合约此刻是否已在持仓"。
+        #: 成交表本来是无状态的，这是唯一一处例外——为的是与事件驱动引擎语义一致。
+        held: list[TradeRecord] = []
+
         for signal_day in sessions:
             view = self.signals.on(signal_day)
             if not strategy.entry.condition(view):
@@ -115,9 +147,20 @@ class TradeTableEngine:
                 continue
 
             record = self._build_trade(trade_id + 1, signal_day, entry_day, strategy)
-            if record is not None:
-                trade_id += 1
-                records.append(record)
+            if record is None:
+                continue
+            if not strategy.allow_stacking and any(
+                r.contract == record.contract and r.entry_date <= entry_day < r.exit_date
+                for r in held
+            ):
+                self.events.record(
+                    EventKind.CANDIDATE_DROPPED, entry_day,
+                    "同一合约已在持仓中，allow_stacking 为假", str(record.contract))
+                continue
+            trade_id += 1
+            record = replace(record, trade_id=trade_id)
+            records.append(record)
+            held.append(record)
 
         return TradeTableResult(
             records=tuple(records),
@@ -137,6 +180,10 @@ class TradeTableEngine:
             self.config,
             self.market.calendar,
             entry_day,
+            # 链取执行日的，信号视图取**决策日**的。自定义选约函数可以用 T 日看到的
+            # 东西决定"要一张什么样的"，但不许看 T+1 的行情——那等于拿成交日的涨跌
+            # 反过来挑行权价。
+            self.signals.on(signal_day),
         )
         if not selection.ok:
             self.events.record(
@@ -410,7 +457,12 @@ class TradeTableEngine:
         )
 
     def _context(self, quote: dict, day: date, contract: ContractId) -> dict[str, Maybe[float]]:
-        """入场／了结时的上下文变量，供事后任意分组分析。无需重跑回测。"""
+        """入场／了结时的上下文变量，供事后任意分组分析。无需重跑回测。
+
+        两个来源：**期权链**给出合约自身的状态（IV、delta、价值状态），**信号层**
+        给出标的当时的状态（均线、RSI、波动率）。后者不可省——"进场时 RSI 多少"
+        是分组分析最常用的切法之一，事后补不回来。
+        """
 
         def numeric(key: str) -> Maybe[float]:
             value = quote.get(key)
@@ -424,16 +476,23 @@ class TradeTableEngine:
             if spot.is_present
             else Maybe.missing("标的价不可用")
         )
-        return {
+        context: dict[str, Maybe[float]] = {
             "underlying_price": spot,
             "iv": numeric("iv"),
             "delta": numeric("delta"),
+            "gamma": numeric("gamma"),
+            "vega": numeric("vega"),
+            "theta": numeric("theta"),
             "moneyness": moneyness,
             "dte_calendar": Maybe.some(float((contract.expiry - day).days)),
             "dte_trading": Maybe.some(
                 float(self.market.calendar.sessions_between(day, contract.expiry))
             ),
         }
+        view = self.signals.on(day)
+        for name in self.signals.names:
+            context[f"sig_{name}"] = view[name]
+        return context
 
     def _record(
         self, *, trade_id, contract, entry_day, exit_day, entry_price, exit_price,

@@ -192,6 +192,16 @@ class TestGuards:
         with pytest.raises(StartupError, match="时间类了结条件"):
             ExitRule(hold_days=None, dte_floor=None, take_profit=1.0, stop_loss=0.5)
 
+    def test_rejects_dte_floor_below_execution_lag(self, market, chain, signals, config):
+        """剩余到期下限小于 lag+1 时，了结意图会落空、仓位被静默拖到到期。"""
+        strategy = Strategy(
+            entry=EntryRule("all", always_enter),
+            select=SelectionRule(target_delta=0.30),
+            exit=ExitRule(hold_days=10, take_profit=1.0, stop_loss=0.5, dte_floor=1),
+        )
+        with pytest.raises(StartupError, match="剩余到期下限"):
+            TradeTableEngine(market, chain, signals, config).run(strategy)
+
     def test_quantity_must_be_positive(self):
         with pytest.raises(StartupError):
             Strategy(

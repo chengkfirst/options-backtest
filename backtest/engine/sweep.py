@@ -61,6 +61,14 @@ def _apply(strategy: Strategy, params: Mapping[str, Any]) -> Strategy:
     select_changes = {k: v for k, v in params.items() if SWEEPABLE[k] == "select"}
     exit_changes = {k: v for k, v in params.items() if SWEEPABLE[k] == "exit"}
     new_select: SelectionRule = strategy.select
+    if select_changes and callable(new_select):
+        # 选约写成函数之后，"扫 target_dte"就没有意义了——那个数字在函数里，
+        # 不在配置里。默默跳过会让人以为扫了，所以直接拒绝。
+        raise StartupError(
+            f"选约是自定义函数，扫不了 {sorted(select_changes)}——这些参数在你的函数里，"
+            "不在配置里。要扫选约参数，先换回声明式的 SelectionRule；"
+            "或者把要扫的量做成函数的参数，自己在外层循环。"
+        )
     if select_changes:
         if "target_dte" in select_changes:
             dte = select_changes["target_dte"]

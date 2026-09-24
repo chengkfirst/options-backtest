@@ -1,0 +1,231 @@
+:root{
+  --ground:#FAF9F6; --panel:#FFFFFF; --sunk:#F1EFEA;
+  --line:#DFDCD4; --line-soft:#ECE9E2;
+  --ink:#1A1D24; --ink-2:#5A5F6B; --ink-3:#8B8F99;
+  --accent:#3F62A0; --accent-soft:#E6ECF7;
+  --gain:#2F7A62; --gain-soft:#E1EFE9;
+  --loss:#9C4A34; --loss-soft:#F6E5DF;
+  --warn:#8A6A1F; --warn-soft:#F7EFD9;
+  --radius:3px;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --sans:"IBM Plex Sans","PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
+  --display:"Archivo","IBM Plex Sans","PingFang SC",system-ui,sans-serif;
+}
+:root:not([data-theme="light"]){ @media (prefers-color-scheme:dark){
+  --ground:#11151C; --panel:#171C25; --sunk:#0C1015;
+  --line:#2A313D; --line-soft:#212833;
+  --ink:#E8E6E1; --ink-2:#9AA0AC; --ink-3:#6B7280;
+  --accent:#7B9BD8; --accent-soft:#1B2436;
+  --gain:#5FB396; --gain-soft:#152620;
+  --loss:#CE7D62; --loss-soft:#2A1A15;
+  --warn:#C9A84E; --warn-soft:#241E10;
+}}
+:root[data-theme="dark"]{
+  --ground:#11151C; --panel:#171C25; --sunk:#0C1015;
+  --line:#2A313D; --line-soft:#212833;
+  --ink:#E8E6E1; --ink-2:#9AA0AC; --ink-3:#6B7280;
+  --accent:#7B9BD8; --accent-soft:#1B2436;
+  --gain:#5FB396; --gain-soft:#152620;
+  --loss:#CE7D62; --loss-soft:#2A1A15;
+  --warn:#C9A84E; --warn-soft:#241E10;
+}
+
+*{box-sizing:border-box}
+
+/* hidden 必须真的隐藏。
+ * 浏览器默认的 [hidden]{display:none} 优先级低于任何类型选择器，所以
+ * section{display:flex} 会把它盖掉——元素明明标了 hidden 却照样显示。
+ * 这类错误不报任何错，只是界面不对，属于静默失败。 */
+[hidden]{display:none!important}
+body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1200px;margin:0 auto;padding:28px 24px 72px;display:flex;flex-direction:column;gap:22px}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
+button,select,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+header{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end;justify-content:space-between;
+  padding-bottom:16px;border-bottom:1px solid var(--line)}
+.title-block{display:flex;flex-direction:column;gap:5px;min-width:250px}
+h1{font-size:23px;font-weight:700;letter-spacing:-.015em}
+.sub{color:var(--ink-2);font-size:12.5px;margin:0}
+.sub code{font-family:var(--mono);font-size:11.5px;background:var(--sunk);padding:1px 5px;border-radius:2px}
+.loader{display:flex;align-items:center;gap:10px}
+.drop{border:1px dashed var(--line);border-radius:var(--radius);padding:9px 14px;font-size:12.5px;
+  color:var(--ink-2);cursor:pointer;background:var(--panel);transition:border-color .15s,color .15s;white-space:nowrap}
+.drop:hover,.drop.over{border-color:var(--accent);color:var(--accent);border-style:solid}
+.drop strong{color:var(--ink);font-weight:600}
+.reset{background:none;border:none;color:var(--ink-3);font-size:12px;cursor:pointer;text-decoration:underline;
+  text-underline-offset:3px;padding:4px}
+.reset:hover{color:var(--ink)}
+
+.banner{display:flex;gap:11px;align-items:flex-start;background:var(--warn-soft);
+  border-left:3px solid var(--warn);padding:11px 15px;font-size:12.5px;border-radius:0 2px 2px 0}
+.banner b{font-weight:600}
+.banner span{color:var(--ink-2)}
+
+/* 问题带 */
+.issues{background:var(--loss-soft);border-left:3px solid var(--loss);padding:11px 16px;
+  font-size:12.5px;border-radius:0 2px 2px 0;color:var(--ink)}
+.issues b{font-weight:600;display:block;margin-bottom:4px}
+.issues ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px;color:var(--ink-2)}
+
+.strip{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--panel);overflow:hidden;margin:0}
+.stat{flex:1 1 128px;padding:12px 16px;border-right:1px solid var(--line-soft);display:flex;flex-direction:column;gap:2px}
+.stat:last-child{border-right:none}
+.stat dt{font-family:var(--display);font-size:10.5px;font-weight:600;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--ink-3)}
+.stat dd{margin:0;font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.stat .note{font-size:11.5px;color:var(--ink-3)}
+
+.controls{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;padding:14px 16px;
+  background:var(--sunk);border:1px solid var(--line-soft);border-radius:var(--radius)}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-family:var(--display);font-size:10.5px;font-weight:600;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--ink-3)}
+.field select,.field input{background:var(--panel);border:1px solid var(--line);border-radius:2px;
+  padding:6px 9px;font-size:13px;min-width:130px}
+.spacer{flex:1}
+
+section{display:flex;flex-direction:column;gap:11px}
+.sec-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+h2{font-size:15px;font-weight:600;letter-spacing:-.005em}
+.sec-head p{margin:0;font-size:12.5px;color:var(--ink-2)}
+
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:8px 13px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line-soft)}
+th{font-family:var(--display);font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-3);background:var(--sunk);position:sticky;top:0;z-index:1}
+th:first-child,td:first-child{text-align:left}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--sunk)}
+td.n,.n{font-variant-numeric:tabular-nums}
+.pos{color:var(--gain)} .neg{color:var(--loss)}
+.barcell{position:relative;min-width:140px}
+.bar{position:absolute;top:50%;transform:translateY(-50%);height:15px;border-radius:1px;opacity:.5}
+.bar.p{background:var(--gain)} .bar.n{background:var(--loss)}
+.axis{position:absolute;top:0;bottom:0;width:1px;background:var(--line)}
+.mini{display:inline-block;height:4px;background:var(--accent);border-radius:2px;opacity:.45;vertical-align:middle}
+
+.grid-tab td{text-align:center;font-variant-numeric:tabular-nums}
+.grid-tab td:first-child{text-align:left;font-weight:500}
+.cell{display:block;padding:3px 0;border-radius:2px}
+.cell small{display:block;font-size:10.5px;color:var(--ink-3);font-weight:400}
+
+.chart{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);padding:14px 16px 10px}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:880px){.two{grid-template-columns:1fr}}
+
+/* AI 总结 */
+.ai{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);overflow:hidden}
+.ai-head{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line-soft);
+  background:var(--sunk);flex-wrap:wrap}
+.ai-head h2{flex:0 0 auto}
+.ai-head p{margin:0;font-size:12.5px;color:var(--ink-2);flex:1;min-width:200px}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:2px;padding:7px 15px;font-size:13px;
+  font-weight:500;cursor:pointer}
+.btn:hover{filter:brightness(1.08)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.ghost{background:none;color:var(--ink-2);border:1px solid var(--line)}
+.ai-body{padding:15px 18px;font-size:13.5px;line-height:1.72;white-space:pre-wrap;min-height:20px;color:var(--ink)}
+.ai-body:empty{display:none}
+.ai-body em{color:var(--ink-3);font-style:normal}
+
+/* A/B 对比 */
+.ab{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);
+  border-radius:var(--radius);overflow:hidden;background:var(--panel)}
+@media(max-width:700px){.ab{grid-template-columns:1fr}}
+.side{padding:14px 18px;display:flex;flex-direction:column;gap:8px}
+.side:first-child{border-right:1px solid var(--line-soft)}
+.side h3{font-size:12.5px;font-weight:600;color:var(--ink-2);letter-spacing:.02em}
+.side .big{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.015em}
+.side dl{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;margin:0;font-size:12.5px}
+.side dt{color:var(--ink-3)} .side dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+.verdict{padding:11px 18px;border-top:1px solid var(--line-soft);background:var(--sunk);
+  font-size:12.5px;grid-column:1/-1;color:var(--ink-2)}
+
+.empty{padding:26px;text-align:center;color:var(--ink-3);font-size:13px}
+footer{border-top:1px solid var(--line);padding-top:16px;font-size:12px;color:var(--ink-3);
+  display:flex;flex-direction:column;gap:6px}
+footer code{font-family:var(--mono);font-size:11.5px}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* ── 信号参考面板 ───────────────────────────────────────────
+   取代原先"把信号名平铺成一排"的做法。按类别分组，每行自带含义与单位，
+   因为一个只有名字的列表等于让使用者去猜口径，而猜错不会报错。      */
+.ref { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.ref > summary {
+  cursor: pointer; font-size: 12px; color: var(--ink-3);
+  list-style: none; display: flex; align-items: center; gap: 6px;
+}
+.ref > summary::-webkit-details-marker { display: none; }
+.ref > summary::before { content: "▸"; font-size: 10px; transition: transform .15s; }
+.ref[open] > summary::before { transform: rotate(90deg); }
+.ref-n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.ref-search {
+  width: 100%; margin: 8px 0 6px; padding: 5px 8px; font-size: 12px;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink);
+}
+.sig-ref { display: flex; flex-direction: column; gap: 9px; max-height: 300px; overflow-y: auto; }
+.sig-fam {
+  font-size: 10.5px; letter-spacing: .08em; color: var(--ink-3);
+  text-transform: uppercase; margin-bottom: 3px;
+}
+.sig {
+  display: grid; grid-template-columns: 5.6em 1fr auto auto; gap: 8px; align-items: baseline;
+  width: 100%; padding: 4px 6px; text-align: left; cursor: pointer;
+  background: none; border: 0; border-radius: 4px; color: var(--ink-2); font-size: 11.5px;
+}
+.sig:hover { background: var(--sunk); }
+.sig code { font-size: 11.5px; color: var(--ink); }
+.sig-what { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sig-unit { color: var(--ink-3); font-size: 10.5px; }
+.sig-warn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--warn-soft); color: var(--warn); font-size: 9.5px; font-weight: 700;
+}
+
+/* ── 四层结构 ─────────────────────────────────────────────
+   取代原先七个平等的 fieldset。七个平等的框是按"组件表"排的，不是按交易里
+   发生的顺序排的，于是看不出 ④止损 和 ⑥仓位 其实是同一个数的两面。      */
+.layer { margin: 16px 0 0; }
+.layer-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 0 0 6px; border-bottom: 1px solid var(--line);
+}
+.layer-n {
+  font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--ink);
+}
+.layer-what { font-size: 10.5px; color: var(--ink-3); }
+.layer.on .layer-n { color: var(--accent); }
+.layer.on .layer-head { border-bottom-color: var(--accent); }
+.layer > .grp { margin-top: 8px; }
+.mode-why {
+  margin: 8px 0; padding: 7px 9px; border-radius: var(--radius);
+  background: var(--sunk); color: var(--ink-3);
+}
+.coupling {
+  border-left: 2px solid var(--warn); padding-left: 8px; color: var(--ink-2);
+}
+
+/* ── 本次运行的诊断 ─────────────────────────────────────── */
+.diag-body { display: flex; flex-direction: column; gap: 4px; }
+.diag { border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--panel); }
+.diag > summary {
+  cursor: pointer; padding: 7px 10px; font-size: 12px; color: var(--ink-2);
+  display: flex; align-items: baseline; gap: 8px; list-style: none;
+}
+.diag > summary::-webkit-details-marker { display: none; }
+.diag-n {
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink);
+  font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right;
+}
+.diag-span { margin-left: auto; font-size: 10.5px; color: var(--ink-3); }
+.diag ul { margin: 0; padding: 0 10px 9px 10px; list-style: none; }
+.diag li {
+  display: flex; gap: 8px; padding: 3px 0; font-size: 11px; color: var(--ink-3);
+  border-top: 1px solid var(--line-soft);
+}

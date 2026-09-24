@@ -25,7 +25,7 @@ import pandas as pd
 from backtest.config import BacktestConfig
 from backtest.data.chain import UNAVAILABLE, empty_chain, validate_chain
 from backtest.data.market import MarketData
-from backtest.data.synthetic.pricing import bs_price, greeks, has_early_exercise_value
+from backtest.pricing import bs_price, greeks, has_early_exercise_value
 from backtest.types import CHAIN_COLUMNS, ContractId, QuoteSource, Right
 
 

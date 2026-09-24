@@ -1,111 +1,283 @@
-# 期权回测系统 · 阶段 1
+# 期权回测平台
 
-帮你把七个策略组件的细节**定下来**的研究平台。全貌与后续阶段见 [`ROADMAP.md`](ROADMAP.md)。
+研究美股期权策略（QQQ / SPY，中频，几天到几个月）的工具。两个用途：
 
-本阶段交付**地基 + 成交表引擎**：能对 `setup/regime`、`entry`、`take profit`、`stop loss`
-四个组件做参数扫描与分组研究。
+1. **把策略细节定下来** —— 七个组件各自该怎么设
+2. **定型之后长期验证它** —— 优化、证伪、多方验证
 
-## 安装
+> 想知道「现在做到哪了、还差什么」→ **[需求.md](需求.md)**（54 条验收标准，逐条标了状态）
+> 想知道「系统长什么样、东西怎么流动」→ **[ROADMAP.md](ROADMAP.md)**
+
+---
+
+## 装
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-## 跑一次回测
+## 用法一：网页（推荐从这里开始）
+
+```bash
+python app/server.py
+```
+
+打开 http://localhost:8765。只监听本机，不对外。
+
+左边栏按**交易里发生的顺序**分四层，不是七个平等的参数框：
+
+| 层 | 管什么 |
+|---|---|
+| **决定之前** | ① regime —— 今天该不该做、用哪一档 |
+| **一笔交易的决定** | ② 时点 · ②b 选什么 · ③④ 了结点 · ⑥ 多大 |
+| **持仓期间** | ⑤ headwind —— 论据部分失效时怎么办 |
+| **组合层** | ⑦ hedge —— 不想承担的风险怎么剥离 |
+
+## 用法二：Python / Jupyter
 
 ```python
 from backtest import run
 
-result = run(
-    symbol="QQQ",
-    start="2015-01-01", end="2024-12-31",
-    entry="sma_20 > sma_50",                                   # 表达式或可调用对象
-    select={"right": "call", "dte": 30, "delta": 0.30},        # 选约
-    exit={"hold_days": 10, "take_profit": 1.0,                 # 四条件先达者了结
-          "stop_loss": 0.5, "dte_floor": 5},
-)
+r = run(symbol="QQQ", start="2020-01-01", end="2024-12-31",
+        entry="close < sma_20 * 0.98",
+        exit={"hold_days": 20, "take_profit": 0.8, "stop_loss": 0.4, "dte_floor": 7},
+        engine="event_driven",
+        sizing={"method": "risk_pct", "risk_pct": 0.02})
 
-result.summary()              # 打印一页结论
-result.trades                 # 交易明细 DataFrame
-result.export("out/run1")     # 落盘：trades / pnl / events / manifest
+r.summary()          # 一页结论
+r.trades             # 交易明细（含每笔的 greeks、IV、以及入场/出场时刻的全部信号）
+r.equity_metrics()   # 收益、回撤、夏普、资金占用
 ```
 
-可用信号：`close` `sma_20` `sma_50` `sma_200` `ema_20` `rsi_14` `atr_14` `mom_20`
-`rv_20` `bb_width_20`。入场表达式只允许比较、`and/or/not` 与四则运算；名字打错在
-**启动时**就报错。
+---
 
-## 怎么读结果
+# 核心：一笔交易是**一个决定**
+
+参数化的写法把策略拆成互不相干的常数：止盈 `1.0`、止损 `0.5`、仓位 `1 张`。
+但真实交易里这些是联动的 —— 回撤深的时候你会**同时**买得更久、下注更大、止损放宽。
+
+最典型的是 **④ 止损和 ⑥ 仓位**：
+
+```
+仓位规模 = 风险预算 ÷ 止损距离
+```
+
+三个量定了两个，第三个就定了。做成两个独立输入框，等于让你填一组自相矛盾的数——
+而且系统不会报错，因为它根本不知道这两个数有关系。
+
+## 所以：交易计划
 
 ```python
-result.stats()            # 笔数、胜率、盈亏比、平均持有
-result.by_exit_reason()   # 按了结原因分组
-result.distribution()     # 分位数、尾部、偏度峰度
-result.costs()            # 佣金 / 监管费 / 滑点分项，扣费前后对照
-result.concurrency        # 每日同时持仓数
-result.events             # 运行事件：选约失败、不可成交、顺延、被动到期
-result.manifest()         # 配置 + 数据来源 + 依赖版本（可复现的凭据）
+from backtest import run
+from backtest.engine.plan import Plan
+
+def plan(ctx):
+    rsi = ctx.signal("rsi_14", default=50.0)
+    if rsi > 45:
+        return None                              # ② 时点：不够超卖，今天不做
+
+    deep = rsi < 35
+    c = ctx.calls[(ctx.calls.spread < 0.10) & ctx.calls.delta.notna()]
+    c = c[c.dte.between(45, 75)] if deep else c[c.dte.between(21, 45)]
+    if c.empty:
+        return None
+
+    return Plan(
+        contract    = c.iloc[(c.delta - (0.50 if deep else 0.30)).abs().argmin()],  # ②b
+        risk_pct    = 0.030 if deep else 0.015,   # ⑥ 多大
+        stop_loss   = 0.60  if deep else 0.35,    # ④ 论据失效点
+        take_profit = 1.00  if deep else 0.60,    # ③ 兑现点
+        max_hold    = 40    if deep else 15,
+        tag         = "深超卖" if deep else "浅超卖",
+    )
+
+r = run(symbol="QQQ", start="2022-01-01", end="2023-12-31",
+        plan=plan, exit={"hold_days": 20, "dte_floor": 7}, engine="event_driven")
+
+r.trades.groupby("tag").agg(笔数=("net_pnl","size"), 平均张数=("quantity","mean"))
 ```
 
-单笔盈亏**分布**比均值重要得多。期权买方是低胜率、正偏、厚尾：胜率 30% 却赚钱，
-或胜率 60% 却亏钱，都很正常。报告会在中位数与均值符号相反时显式警告——那意味着
-平均收益由少数极值驱动，不可外推。
+`tag` 会存进每笔明细。**分类口径来自你下单时的真实判断**，不是事后按结果硬分的——
+后者会把结论分析成自己想要的样子。
 
-## 三条必须知道的边界
+### `ctx` 里有什么
 
-**一、合成期权链不能用来调期权侧参数。**
+```
+ctx.chain / ctx.calls / ctx.puts   当日可选合约（DataFrame，一行一张）
+ctx.equity  ctx.cash  ctx.positions  ctx.drawdown    组合状态
+ctx.spot  ctx.day
+ctx.signal("名字", default=...)    取信号；缺失且没给默认值会**报错**，不会悄悄给 0
+```
 
-当前没有真实期权历史数据，链是用标的真实价格 + Black-Scholes 生成的。它没有波动率
-偏斜、没有真实的 IV 动态、没有随流动性变化的价差。在它上面调止盈止损，调出来的是
-"该合成模型下的最优解"，与真实市场**没有可靠关系**——不是"有偏差可修正"，是"无关"。
+链上每行有：`iv delta gamma vega theta` · `bid ask mid spread` · `dte`（日历日）·
+`sessions_left`（交易日）· `moneyness`（正数一律=虚值）· `is_call` / `is_put`。
 
-能研究的：`regime`、`entry` 的信号部分（基于标的真实价格）。
-不能研究的：选约、止盈、止损、headwind、对冲。这些等真实数据接入（路线图阶段 6）。
+**链已剔除 T+1 执行不了的合约**，按希腊字母随便挑都不会挑到开不了的。
 
-**二、成交表引擎没有组合权益曲线。**
+---
 
-各笔交易独立计算，不考虑资金约束与并发上限。所以**没有最大回撤、没有夏普**——那些
-需要权益曲线，要等事件驱动引擎（阶段 4）。它回答的是"这个想法有没有 edge"，不是
-"这个策略能不能跑"。报告会给出峰值同时持仓数与所需资金，让资金缺口一眼可见。
+# 止盈止损不必是固定比例
 
-**三、执行延迟一个交易日。**
+在入场那刻把止损定成"亏 50%"，隐含假设是这笔交易的对错开仓时就知道了、而且不会变。
+跟踪止盈、按论据失效、分批建仓 —— 都要**每天重算**。
 
-T 日收盘产生意图，T+1 日收盘成交。入场如此，了结也如此。用 T 日收盘价同时做决策和
-成交是最常见的前视来源，这里在架构上排除。副作用是：止损触发后次日可能反弹，因此
-少量"止损"交易最终是盈利的——这是真实成本，不是 bug。
+```python
+from backtest.engine.review import Close, Reduce, Add
 
-## 开发
+def review(ctx, pos):
+    # ③ 跟踪止盈：从最高点回吐三分之一就走
+    if pos.mfe_so_far > 0.4 and pos.ratio < pos.mfe_so_far * 0.67:
+        return Close("回吐已得利润的三分之一", kind="take_profit")
+
+    # ④ 论据失效——往往比固定止损更早触发
+    if ctx.signal("close") < ctx.signal("sma_50"):
+        return Close("跌破 50 日线，当初看多的理由没了", kind="stop_loss")
+
+    # ⑤ 中间地带：不是非黑即白
+    if pos.days_held > 10 and pos.ratio < 0:
+        return Reduce(0.5, "十天没动静，先减一半")
+
+    return None      # 继续持有
+
+run(..., review=review, engine="event_driven")
+```
+
+`pos` 里有 `mfe_so_far` / `mae_so_far`（**截至今天**，不是事后回看）、`ratio`、
+`days_held`、`dte`、`iv`、`delta`、`tag`。
+
+两条边界：
+
+- **静态规则仍是安全网。** 时间类了结（`hold_days` / `dte_floor`）不允许被复查绕过，
+  否则一个写错的复查函数会把仓位悄悄拖到到期。
+- **减仓不产生新的交易记录。** 展期三次的头寸按持仓统计会变成四笔，胜率与持有期全失真。
+
+---
+
+# 接你自己的数据
+
+**合成期权链是测试夹具，不是数据源。** 它的 IV 是常数、没有偏斜、没有期限结构，
+所以**期权侧的结论（选什么 delta、止盈设多少）在它上面不成立**。标的侧的结论
+（何时进场）可信。
+
+三步，全程有工具：
+
+```python
+from backtest.data.adapters import describe_schema, check_file
+
+describe_schema()           # 1. 要哪些列、每列什么含义、缺了会怎样
+check_file("你的路径")       # 2. 跑回测**之前**先体检：致命 / 警告 两档
+```
+
+```python
+run(..., chain="file:你的路径")                        # 3a. 列名标准
+run(..., chain={"kind": "file", "path": "你的路径",     # 3b. 列名对不上
+                "column_map": {"trade_date": "asof"}})
+```
+
+接受 `.parquet` / `.csv` / 装着它们的目录。缺的可选列会自动补齐（IV 按中价反解、
+greeks 按 Black-Scholes 推）**并标记来源**——供应商给的 delta 和推出来的 delta
+不是一回事。
+
+换源之后那条"期权侧不可信"的警告会**自动消失**，它由 `source` 字段判定，不是手工开关。
+上层（选约、引擎、研究）零改动。
+
+---
+
+# 两个引擎
+
+| | 成交表 | 事件驱动 |
+|---|---|---|
+| 怎么跑 | 各笔独立，向量化 | 逐日推进，有组合状态 |
+| 快慢 | 秒级 | 分钟级 |
+| 答什么 | 这个想法**有没有 edge** | 这个策略**能不能跑** |
+| 笔数 | **上限**（不受资金约束） | 实际做得到的 |
+| 权益曲线 / 回撤 / 夏普 | 没有 | 有 |
+| 交易计划 / 逐日复查 / 非固定仓位 | **拒绝**（会说明原因） | 支持 |
+
+同一配置在**无资金约束时两条引擎必须产出逐行一致的交易明细**——这是互相校验的基础，
+有测试守着。
+
+---
+
+# 怎么读结果
+
+```python
+r.stats()            # 笔数、胜率、盈亏比、平均持有
+r.distribution()     # 分位数、尾部、偏度峰度
+r.by_exit_reason()   # 按了结原因分组
+r.costs()            # 佣金 / 监管费 / 滑点分项，扣费前后对照
+r.attribution()      # 盈亏归因：delta / gamma / vega / theta + 残差
+r.greeks()           # 每日组合希腊字母
+r.stress()           # 压力网格（**超出二阶展开适用范围时拒绝给数**）
+r.scenarios()        # 历史情景重放
+r.excursion()        # MFE / MAE 分布，带**截断检测**
+r.equity_metrics()   # 收益、回撤、夏普、资金占用
+r.events             # 运行事件：选约失败、不可成交、顺延、候选被丢弃
+r.manifest()         # 配置 + 数据来源 + 依赖版本（可复现的凭据）
+```
+
+单笔盈亏**分布**比均值重要得多。期权买方是低胜率、正偏、厚尾：胜率 30% 却赚钱、
+或胜率 60% 却亏钱，都很正常。中位数与均值符号相反时报告会显式警告——
+那意味着平均收益由少数极值驱动，不可外推。
+
+---
+
+# 三条必须知道的边界
+
+**一、合成链不能调期权侧参数。** 见上面「接你自己的数据」。
+
+**二、成交表引擎没有权益曲线。** 它给的笔数是上限，不是实际做得到的。
+要回撤和夏普就用 `engine="event_driven"`。
+
+**三、执行延迟一个交易日。** T 日收盘产生意图，T+1 收盘成交，入场了结都一样。
+用 T 日收盘价同时做决策和成交是最常见的前视来源，这里在架构上排除。
+副作用：止损触发后次日可能反弹，所以少量"止损"交易最终是盈利的——这是真实成本，不是 bug。
+
+---
+
+# 开发
 
 ```bash
-pytest                              # 全部测试
+pytest                              # 全部测试（293 个）
 python -m tools.check_deps          # 依赖方向检查
 python -m tools.baseline check      # 回归基线比对
 python -m tools.baseline update     # 显式更新基线（会打印前后差异）
 ```
 
-三道防线各自拦不同的东西：
+三道防线各拦不同的东西：
 
 | 防线 | 拦什么 |
-| --- | --- |
+|---|---|
 | 截断重算属性测试 | 前视偏差——把数据截到 t 重算，日期 t 的信号必须逐位一致 |
-| 依赖方向检查 | 模块反向依赖；以及定价泄漏到合成链之外 |
+| 依赖方向检查 | 模块反向依赖；定价泄漏到数据层之外；**未登记的模块直接失败** |
 | 回归基线 | 代码改动带来的非预期结果变化 |
 
 ## 目录
 
 ```
 backtest/
-  config.py      基准配置（design.md 的默认值）
-  maybe.py       可缺失值——禁止裸 None / NaN / 0 表示缺失
-  types.py       ContractId、TradeRecord、了结原因取值集合
-  data/          行情（两套价格）、链、利率、分红、日历、缓存
-    synthetic/   合成链与它内部的 Black-Scholes 工具
-  signals/       指标、信号接口、无前视
-  selection/     选约规则与筛选过程
-  costs/         取价、费用、滑点、可成交性
-  engine/        成交表引擎
-  report/        交易统计、分布、成本分项
+  components.py    ← 七个组件各自在交易里干什么、怎么互相牵制（**概念底座**）
+  maybe.py         可缺失值——禁止裸 None / NaN / 0 表示缺失
+  types.py         ContractId、TradeRecord、了结原因
+  pricing.py       Black-Scholes、希腊字母、IV 反解（市场模型，不属于合成链）
+  data/
+    adapters.py      接你自己的数据：schema、体检、列名映射
+    chain_registry.py 数据源注册表，换源只改一个参数
+    synthetic/       合成链生成器（测试夹具）
+    multi_asset.py   跨市场面板（VIX/VXN/期限结构/美债/信用代理）
+  signals/         指标与信号（每个都登记了含义、单位、坑）
+  selection/       选约：声明式规则 或 你自己写的函数
+  costs/           取价、费用、滑点、可成交性
+  portfolio/       账本、现金、实物交割、守恒校验
+  risk/            归因、组合希腊字母、压力、VaR、敞口限额、熔断
+  engine/
+    plan.py          交易计划：一个函数同时决定买什么、买多少、怎么了结
+    review.py        逐日复查：动态止盈止损、分批加减仓、headwind
+    trade_table.py / event_driven.py
+  research/        MFE/MAE、regime 分层、仓位对照
+app/               本地网页界面（server.py + static/）
+tools/             依赖检查、回归基线
 ```
 
-依赖严格单向：`report ← engine ← {selection, costs, signals} ← data`。
-定价被关在 `data/synthetic/` 内部——上层消费链上的字段，不关心那些数字是市场观测
-还是模型生成，这样接入真实数据时上层零改动。
+`research/` 是你的本地研究记录（运行历史、交易明细、笔记），**不进版本库**——
+那是你的资产不是代码，而且 SQLite 二进制没法合并。要备份就单独拷贝这个目录。

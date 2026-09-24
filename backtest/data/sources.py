@@ -73,7 +73,12 @@ def fetch_ohlcv(symbol: str, start: date, end: date) -> pd.DataFrame:
 
 
 def fetch_dividends(symbol: str) -> pd.Series:
-    """除息事件（日期 → 每股金额）。"""
+    """除息事件（日期 → 每股金额）。
+
+    取不到时返回空序列，但**把原因写在序列的 ``attrs`` 上**——调用方据此记录事件。
+    直接吞掉异常会让"这只标的不分红"和"分红接口挂了"变得无法区分，而两者对定价
+    的影响完全不同。
+    """
 
     def _fetch() -> pd.DataFrame:
         series = _yf().Ticker(symbol).dividends
@@ -81,8 +86,10 @@ def fetch_dividends(symbol: str) -> pd.Series:
 
     try:
         frame = _with_retry(_fetch, f"{symbol} 分红")
-    except DataQualityError:
-        return pd.Series(dtype=float, name="amount")
+    except DataQualityError as exc:
+        empty = pd.Series(dtype=float, name="amount")
+        empty.attrs["unavailable_reason"] = str(exc)
+        return empty
     frame.index = pd.to_datetime(frame.index).tz_localize(None)
     return frame["amount"]
 

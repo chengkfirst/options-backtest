@@ -20,6 +20,44 @@ from backtest.errors import StartupError
 from backtest.maybe import Maybe
 from backtest.signals import indicators
 
+@dataclass(frozen=True, slots=True)
+class SignalMeta:
+    """一个信号的自述：它量的是什么、窗口多长、单位是什么、读的时候要注意什么。
+
+    有元信息和没有，差别不在"界面好看一点"。没有的时候界面只能把名字按字母表倒出来，
+    使用者得自己去猜 ``rv_20`` 是什么口径年化的、``mom_20`` 是比率还是差值。
+    猜错了不会报错，只会得到一个讲不通的结论。
+    """
+
+    family: str        # 归类：价格 / 趋势 / 动量 / 波动
+    measures: str      # 量的是什么
+    unit: str          # 单位或取值范围
+    window: int | None # 回看窗口（交易日），无窗口的为 None
+    caveat: str = ""   # 读的时候容易弄错的地方
+
+
+#: 每个信号的自述。**新增信号必须同时在这里登记**，否则 ``describe()`` 会直接报错——
+#: 一个没人说得清含义的信号，比没有这个信号更糟。
+SIGNAL_META: dict[str, SignalMeta] = {
+    "close":       SignalMeta("价格", "复权收盘价", "美元", None,
+                              "复权价，不是当天实际成交价；对齐期权合约请用实际价"),
+    "sma_20":      SignalMeta("趋势", "20 日简单均线", "美元", 20),
+    "sma_50":      SignalMeta("趋势", "50 日简单均线", "美元", 50),
+    "sma_200":     SignalMeta("趋势", "200 日简单均线", "美元", 200,
+                              "区间前 200 个交易日内不可用，不是 0"),
+    "ema_20":      SignalMeta("趋势", "20 日指数均线", "美元", 20),
+    "rsi_14":      SignalMeta("动量", "相对强弱，超买超卖", "0–100", 14,
+                              "70/30 是惯例阈值，不是统计结论"),
+    "mom_20":      SignalMeta("动量", "20 日累计收益率", "比率（0.05 = 涨 5%）", 20,
+                              "是比率不是差值"),
+    "atr_14":      SignalMeta("波动", "14 日平均真实波幅", "美元", 14,
+                              "绝对金额，跨标的比较前要先除以价格"),
+    "rv_20":       SignalMeta("波动", "20 日已实现波动率", "年化比率（0.20 = 20%）", 20,
+                              "按**交易日 252** 年化；与按日历日年化的 IV 直接相减不可解释"),
+    "bb_width_20": SignalMeta("波动", "布林带宽度，衡量波动收敛/扩张", "比率", 20),
+}
+
+
 #: 默认注册的信号。每个是 ``bars -> Series``，只吃复权价。
 DEFAULT_SIGNALS: dict[str, Callable[[UnderlyingBars], pd.Series]] = {
     "close": lambda b: b.adjusted("close"),
@@ -35,6 +73,31 @@ DEFAULT_SIGNALS: dict[str, Callable[[UnderlyingBars], pd.Series]] = {
     "rv_20": lambda b: indicators.realized_vol(b.adjusted("close"), 20),
     "bb_width_20": lambda b: indicators.bollinger(b.adjusted("close"), 20)["width"],
 }
+
+
+def describe_signals(names: "tuple[str, ...] | None" = None) -> pd.DataFrame:
+    """所有信号的自述表，按类别排。界面和 notebook 用的是同一份。
+
+    自定义信号没有登记元信息时，如实标成"自定义（未登记说明）"而不是留空——
+    留空看起来像是系统没查到，标出来才说明是使用者自己没写。
+    """
+    names = names or tuple(DEFAULT_SIGNALS)
+    rows = []
+    for name in names:
+        m = SIGNAL_META.get(name)
+        rows.append({
+            "信号": name,
+            "类别": m.family if m else "自定义",
+            "量的是什么": m.measures if m else "自定义（未登记说明）",
+            "单位": m.unit if m else "—",
+            "回看窗口": m.window if m else None,
+            "注意": m.caveat if m else "",
+        })
+    order = {"价格": 0, "趋势": 1, "动量": 2, "波动": 3, "自定义": 9}
+    frame = pd.DataFrame(rows)
+    return (frame.assign(_o=frame["类别"].map(lambda c: order.get(c, 9)))
+                 .sort_values(["_o", "回看窗口", "信号"], na_position="first")
+                 .drop(columns="_o").reset_index(drop=True))
 
 
 @dataclass(frozen=True, slots=True)

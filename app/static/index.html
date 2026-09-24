@@ -1,0 +1,333 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>期权回测台</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="bench.css">
+
+<div class="bench">
+
+<!-- ══ 左：参数，按七个组件组织 ══ -->
+<aside class="panel">
+  <div class="panel-head">
+    <h1>期权回测台</h1>
+    <p class="mode" id="mode">连接中…</p>
+  </div>
+
+  <form id="form" class="panel-body">
+
+    <fieldset class="grp">
+      <legend>引擎</legend>
+      <p class="hint" id="engineLock" hidden>交易计划模式下锁定为事件驱动——
+        计划里每笔有自己的出场规则，成交表引擎表达不了。</p>
+      <label class="full">
+        <select name="engine" id="engine">
+          <option value="trade_table">成交表 — 快，扫参数用</option>
+          <option value="event_driven" selected>事件驱动 — 有组合状态</option>
+        </select>
+      </label>
+      <label id="concurrentWrap">并发持仓上限
+        <input type="number" name="max_concurrent" value="5" min="1" max="50"></label>
+      <p class="hint" id="engineHint"></p>
+    </fieldset>
+
+    <fieldset class="grp">
+      <legend>标的与区间</legend>
+      <div class="row">
+        <label>标的<select name="symbol" id="symbol"></select></label>
+      </div>
+      <div class="row">
+        <label>起<input type="date" name="start" value="2020-01-01"></label>
+        <label>止<input type="date" name="end" value="2024-12-31"></label>
+      </div>
+      <p class="hint" id="spanHint"></p>
+    </fieldset>
+
+    <!-- 四层结构。不是七个平等的框——那是按"组件表"排的，不是按交易里发生的
+         顺序排的。写清楚每个组件在交易里干什么之后，联动关系是自己冒出来的：
+         ④止损距离 × 风险预算 = ⑥规模（同一个数的两面）；②入场理由决定③④的位置；
+         ①只调制不下单；⑤是④的连续版；⑦根本不在单笔这一层。 -->
+
+    <div class="layer" data-layer="1">
+      <div class="layer-head"><span class="layer-n">决定之前</span>
+        <span class="layer-what">① regime — 今天该不该做，用哪一档</span></div>
+      <fieldset class="grp comp" data-state="partial">
+        <p class="gap">规则型分类（VIX / 期限结构 / 趋势）后端已有，<b>还没接成调制器</b>。
+          现在请在下面的计划里自己判断。</p>
+      </fieldset>
+    </div>
+
+    <div class="layer on" data-layer="2">
+      <div class="layer-head"><span class="layer-n">一笔交易的决定</span>
+        <span class="layer-what">② 时点 · ②b 选什么 · ③④ 了结点 · ⑥ 多大</span></div>
+
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab on" data-strat="plan" role="tab">交易计划</button>
+        <button type="button" class="tab" data-strat="params" role="tab">参数模式</button>
+      </div>
+
+      <div data-strat-pane="plan">
+        <fieldset class="grp comp" data-state="ready">
+          <textarea name="plan_code" id="planCode" spellcheck="false" rows="18" class="code"></textarea>
+          <p class="hint">
+            一个函数同时决定<b>买什么、买多少、怎么了结</b>——因为在真实交易里这是一个判断。
+            返回 <code>None</code> 就是今天不做。
+            <button type="button" class="link" id="planHelp">ctx 里有什么</button>
+          </p>
+          <pre class="help" id="planHelpBody" hidden></pre>
+          <p class="hint"><code>tag</code> 会存进每笔明细，事后直接按它分类对比——
+            分类口径来自你下单时的真实判断，不是事后按结果硬分的。</p>
+        </fieldset>
+      </div>
+
+      <div data-strat-pane="params" hidden>
+        <p class="hint mode-why">参数模式把一个判断拆成互不相干的常数，表达不了联动。
+          它只为一件事存在：<b>扫参数</b>（计划式扫不了）。</p>
+
+        <fieldset class="grp comp" data-state="ready">
+          <legend><b>②</b> Entry　入场</legend>
+          <div class="tabs" role="tablist">
+            <button type="button" class="tab on" data-mode="code" role="tab">写代码</button>
+            <button type="button" class="tab" data-mode="expr" role="tab">单行表达式</button>
+          </div>
+          <div data-pane="code">
+            <textarea name="entry_code" id="entryCode" spellcheck="false" rows="10" class="code"></textarea>
+            <p class="hint">定义 <code>entry(view)</code>，返回 <code>True</code> 就入场。缺失信号一律不入场。
+              <button type="button" class="link" id="codeHelp">能用什么</button></p>
+            <pre class="help" id="codeHelpBody" hidden></pre>
+          </div>
+          <div data-pane="expr" hidden>
+            <input type="text" name="entry" id="entry" value="close < sma_20 * 0.98" spellcheck="false" class="mono">
+            <p class="hint">只支持比较、<code>and/or/not</code> 与四则运算。</p>
+          </div>
+        </fieldset>
+
+        <fieldset class="grp comp" data-state="ready">
+          <legend><b>②b</b> 选合约</legend>
+          <div class="row">
+            <label>类型<select name="right"><option value="call">看涨 call</option><option value="put">看跌 put</option></select></label>
+            <label>剩余天数 DTE<input type="number" name="dte" value="30" min="3" max="200"></label>
+          </div>
+          <div class="row">
+            <label>按<select name="strike_mode" id="strikeMode">
+              <option value="delta">目标 delta</option><option value="moneyness">价值状态</option></select></label>
+            <label id="deltaWrap">delta<input type="number" name="delta" value="0.30" step="0.05" min="0.05" max="0.95"></label>
+            <label id="moneyWrap" hidden>虚值比例<input type="number" name="moneyness" value="0.05" step="0.01" min="-0.5" max="0.5"></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="grp comp" data-state="ready">
+          <legend><b>③④⑥</b> 了结与仓位</legend>
+          <div class="row">
+            <label>止盈<input type="number" name="take_profit" value="1.0" step="0.25" min="0"><span class="unit">×</span></label>
+            <label>止损<input type="number" name="stop_loss" value="0.5" step="0.1" min="0" max="1"><span class="unit">×</span></label>
+          </div>
+          <div class="row">
+            <label>最多持有<input type="number" name="hold_days" value="10" min="1" max="120"><span class="unit">交易日</span></label>
+            <label>剩余到期下限<input type="number" name="dte_floor" value="5" min="2" max="60"><span class="unit">交易日</span></label>
+          </div>
+          <p class="hint">四条同时生效，<b>最早触发的赢</b>。止盈 1.0 = 赚 100%。</p>
+        </fieldset>
+
+        <fieldset class="grp comp" data-state="ready">
+          <legend><b>⑥</b> Positioning　仓位</legend>
+          <label class="full">怎么定规模
+            <select name="sizing_method" id="sizingMethod">
+              <option value="risk_pct">每笔风险占权益的固定比例</option>
+              <option value="fixed">固定张数</option>
+              <option value="fixed_notional">每笔固定金额</option>
+              <option value="vol_target">波动率目标（标的波动大时少买）</option>
+              <option value="kelly">分数 Kelly</option>
+            </select></label>
+          <div class="row" data-sz="risk_pct">
+            <label>每笔风险<input type="number" name="risk_pct" value="0.02" step="0.005" min="0.001" max="1"><span class="unit">× 权益</span></label>
+          </div>
+          <div class="row" data-sz="fixed" hidden>
+            <label>张数<input type="number" name="quantity" value="1" min="1" max="50"></label>
+          </div>
+          <div class="row" data-sz="fixed_notional" hidden>
+            <label>每笔投入<input type="number" name="notional" value="5000" step="1000" min="100"><span class="unit">美元</span></label>
+          </div>
+          <div class="row" data-sz="vol_target" hidden>
+            <label>目标年化波动<input type="number" name="target_vol" value="0.20" step="0.05" min="0.01" max="2"></label>
+            <label>基准风险<input type="number" name="risk_pct_vt" value="0.02" step="0.005" min="0.001" max="1"></label>
+          </div>
+          <div class="row" data-sz="kelly" hidden>
+            <label>用几分之一 Kelly<input type="number" name="kelly_fraction" value="0.25" step="0.05" min="0.01" max="1"></label>
+          </div>
+          <p class="hint" id="sizingHint"></p>
+          <p class="hint coupling"><b>止损距离 × 风险预算 = 规模。</b>这三个里定了两个，
+            第三个就定了。参数模式让你把止损和规模分开填，所以它们会互相打架——
+            这正是交易计划模式存在的理由。</p>
+        </fieldset>
+      </div>
+
+      <fieldset class="grp comp" data-state="ready">
+        <legend><b>②c</b> 自定义信号<span class="opt">选填</span></legend>
+        <details>
+          <summary>内置的不够用时，自己加</summary>
+          <textarea name="signals_code" id="signalsCode" spellcheck="false" rows="7" class="code"></textarea>
+          <p class="hint">定义 <code>SIGNALS</code> 字典。一律用 <code>adjusted</code>（复权价）。</p>
+        </details>
+      </fieldset>
+
+      <details class="ref">
+        <summary>信号参考<span class="ref-n" id="sigCount"></span></summary>
+        <input type="search" id="sigSearch" placeholder="搜信号名或含义…" class="ref-search">
+        <div id="sigRef" class="sig-ref"></div>
+        <p class="hint">点一下插到光标处。带 <span class="sig-warn">!</span> 的把鼠标停上去看注意事项。</p>
+      </details>
+    </div>
+
+    <div class="layer" data-layer="3">
+      <div class="layer-head"><span class="layer-n">持仓期间</span>
+        <span class="layer-what">⑤ headwind — 论据部分失效时怎么办</span></div>
+      <fieldset class="grp comp" data-state="missing">
+        <p class="gap"><b>还没有。</b>现在仓位只能一次性了结，没有减仓和展期。
+          止损是非黑即白的，而 headwind 是中间地带——这是四层里唯一全空的一层。</p>
+      </fieldset>
+    </div>
+
+    <div class="layer" data-layer="4">
+      <div class="layer-head"><span class="layer-n">组合层</span>
+        <span class="layer-what">⑦ hedge — 不想承担的风险怎么剥离</span></div>
+      <fieldset class="grp comp" data-state="partial">
+        <p class="gap">敞口限额、回撤熔断、压力测试、剔除对冲对照后端已有，<b>界面还没接</b>。
+          多腿（价差、iron condor）没做。</p>
+      </fieldset>
+    </div>
+
+  </form>
+
+  <div class="panel-foot">
+    <button class="run" id="run">跑回测</button>
+    <p class="hint" id="runHint">十年区间约 40 秒，缩短区间会快很多。</p>
+  </div>
+</aside>
+
+<!-- ══ 右：结果 ══ -->
+<main class="stage">
+
+  <div class="issues" id="issues" hidden></div>
+
+  <!-- 运行历史：对比才是研究的主体，所以它在最上面 -->
+  <section class="runs" id="runsSec" hidden>
+    <div class="runs-head">
+      <h2>运行记录</h2>
+      <p>点一行切换查看。钉一个当基准后，其余行显示相对它的变化。</p>
+    </div>
+    <div class="scroll"><table id="runs"></table></div>
+  </section>
+
+  <div class="placeholder" id="placeholder">
+    <h2>还没跑过</h2>
+    <p>左边写好交易计划，点「跑回测」。</p>
+    <p class="hint" id="gapList" hidden></p>
+  </div>
+
+  <div id="result" hidden>
+    <div class="banner" id="banner" hidden></div>
+    <section id="diagSec" hidden>
+      <h3 class="sec-h">这次跑的时候发生了什么<span class="sec-why">点开看具体原因</span></h3>
+      <div id="diagBody" class="diag-body"></div>
+    </section>
+    <dl class="strip" id="strip"></dl>
+
+    <div class="ai">
+      <div class="ai-head">
+        <h2>AI 读一遍</h2>
+        <p>把这次的统计交给 Claude，让它指出值得追的线索和不能信的地方。</p>
+        <button class="btn" id="ask">让 Claude 读</button>
+        <button class="btn ghost" id="stop" hidden>停止</button>
+      </div>
+      <div class="ai-body" id="aiOut"></div>
+    </div>
+
+    <section id="equitySec" hidden>
+      <div class="sec-head"><h2>权益曲线</h2><p id="equityNote"></p></div>
+      <div class="chart"><svg id="equity" viewBox="0 0 1080 280" role="img" aria-label="权益曲线"></svg></div>
+      <dl class="strip" id="equityStrip"></dl>
+    </section>
+
+    <section id="attrSec" hidden>
+      <div class="sec-head"><h2>盈亏归因</h2>
+        <p>钱从哪来：标的方向（delta）、波动（gamma）、隐含波动率（vega）、时间（theta）。
+           残差大说明一阶近似失效，那几笔的归因不可信。</p></div>
+      <div class="chart"><svg id="attr" viewBox="0 0 520 200" role="img" aria-label="盈亏归因"></svg></div>
+    </section>
+
+    <section id="scenSec" hidden>
+      <div class="sec-head"><h2>历史情景</h2>
+        <p>真实历史区间的表现。不含任何展开近似，比压力测试可信。</p></div>
+      <div class="scroll"><table id="scen"></table></div>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>累计盈亏</h2><p id="curveNote"></p></div>
+      <div class="chart"><svg id="curve" viewBox="0 0 1080 260" role="img" aria-label="累计盈亏曲线"></svg></div>
+    </section>
+
+    <div class="two">
+      <section>
+        <div class="sec-head"><h2>单笔盈亏分布</h2></div>
+        <div class="chart"><svg id="hist" viewBox="0 0 520 250" role="img" aria-label="单笔盈亏分布"></svg></div>
+      </section>
+      <section>
+        <div class="sec-head"><h2>按年份</h2></div>
+        <div class="chart"><svg id="years" viewBox="0 0 520 220" role="img" aria-label="逐年盈亏"></svg></div>
+      </section>
+    </div>
+
+    <section>
+      <div class="sec-head"><h2>稳健性</h2>
+        <p>去掉最赚的几笔还成立吗。翻转说明结论靠极值撑着。</p></div>
+      <div class="scroll"><table id="robust"></table></div>
+    </section>
+
+    <details class="more">
+      <summary>按条件切开看</summary>
+      <div class="more-body">
+        <div class="controls">
+          <div class="field"><label for="dim">分组维度</label><select id="dim"></select></div>
+          <div class="field"><label for="bins">分几组</label>
+            <select id="bins"><option>3</option><option selected>4</option><option>5</option><option>6</option></select></div>
+          <div class="field"><label for="dim2">交叉维度</label><select id="dim2"></select></div>
+          <div class="field"><label for="reason">了结原因</label><select id="reason"></select></div>
+        </div>
+        <section>
+          <div class="sec-head"><h2>分组对比</h2><p id="dimNote"></p></div>
+          <div class="scroll"><table id="buckets"></table></div>
+        </section>
+        <div class="two">
+          <section>
+            <div class="sec-head"><h2>该维度与盈亏</h2><p id="scatNote"></p></div>
+            <div class="chart"><svg id="scatter" viewBox="0 0 520 250" role="img" aria-label="维度与盈亏散点"></svg></div>
+          </section>
+          <section>
+            <div class="sec-head"><h2>高低两半</h2><p>按中位数切开。</p></div>
+            <div class="ab" id="ab"></div>
+          </section>
+        </div>
+        <section id="crossSec" hidden>
+          <div class="sec-head"><h2>交叉分组</h2>
+            <p>格内为平均每笔。少于 15 笔的格子已淡化——那里的极值通常是噪音。</p></div>
+          <div class="scroll"><table class="grid-tab" id="cross"></table></div>
+        </section>
+      </div>
+    </details>
+
+    <details class="more">
+      <summary>逐笔明细</summary>
+      <div class="more-body">
+        <p class="hint" id="detailNote"></p>
+        <div class="scroll" style="max-height:440px;overflow-y:auto"><table id="detail"></table></div>
+      </div>
+    </details>
+  </div>
+</main>
+</div>
+
+<script src="core.js"></script>
+<script src="charts.js"></script>
+<script src="bench.js"></script>

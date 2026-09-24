@@ -30,7 +30,7 @@ def test_detects_pricing_leak(tmp_path, monkeypatch):
     package = tmp_path / "backtest"
     (package / "engine").mkdir(parents=True)
     (package / "engine" / "leak.py").write_text(
-        "from backtest.data.synthetic.pricing import bs_price\n", encoding="utf-8"
+        "from backtest.pricing import bs_price\n", encoding="utf-8"
     )
     monkeypatch.setattr(deps, "ROOT", tmp_path)
     problems = deps.check()

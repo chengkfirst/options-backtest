@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -21,6 +22,7 @@ import pandas as pd
 from backtest.config import BacktestConfig
 from backtest.data.calendar import TradingCalendar
 from backtest.data.chain import relative_spread
+from backtest.errors import StartupError
 from backtest.maybe import Maybe
 from backtest.types import ContractId, Right, require
 
@@ -51,6 +53,65 @@ class SelectionRule:
             require(0 < abs(self.target_delta) < 1, f"target_delta 须在 0 与 1 之间：{self.target_delta}")
 
 
+#: 选约函数拿到的链，除 ``CHAIN_COLUMNS`` 外还有这几列。都是算好的——同样的推导
+#: 每次自己写一遍，迟早有一次符号弄反。
+DERIVED_COLUMNS: tuple[str, ...] = (
+    "dte", "sessions_left", "mid", "spread", "moneyness", "is_call", "is_put",
+)
+
+#: 自定义选约：拿当日链与**决策日**的信号视图，返回选中的那一行（或 None 表示不开仓）。
+#:
+#: 为什么链是执行日的、视图却是决策日的——见 ``enrich_chain`` 的说明。
+ContractChooser = Callable[[pd.DataFrame, object], object]
+
+
+def enrich_chain(
+    chain: pd.DataFrame,
+    config: BacktestConfig,
+    calendar: TradingCalendar,
+    asof: date,
+) -> pd.DataFrame:
+    """把当日链整理成"可以直接按 greek 和 iv 挑"的样子。
+
+    做两件事：
+
+    1. **加派生列**。``dte`` 按日历日（30DTE 就是 30 个日历日，与市场惯例一致），
+       ``sessions_left`` 按交易日（可执行性用的是这个口径，两者不可混用）；
+       ``mid``、``spread``（相对买卖价差）；``moneyness`` **正数一律表示虚值**，
+       看涨看跌同号，不用每次重新想方向。
+
+    2. **先剔除执行不了的合约**。T 日决策、T+1 成交，届时仍可交易的才留下。
+       在这里剔掉而不是事后校验，是为了让"按 greek 和 iv 随便挑"**由构造保证安全**：
+       挑不到开不了的，就不需要记得去检查。
+
+    **关于前视**：这张链是**执行日**的，传给选约函数的信号视图却是**决策日**的。
+    这不是笔误。真实过程是——T 日收盘你根据当时看到的东西决定"买一张什么样的"，
+    单子在 T+1 收盘成交，具体是哪张由规则在成交时点解析。所以规则可以用 T 的信息，
+    解析可以用 T+1 的链；但规则本身不许看 T+1 的行情，否则就是拿成交日的涨跌
+    反过来挑行权价。
+    """
+    if chain.empty:
+        return chain
+
+    out = chain.copy()
+    expiry = out["expiry"].map(_as_date)
+    out["dte"] = [(e - asof).days for e in expiry]
+    out["sessions_left"] = [calendar.sessions_between(asof, e) for e in expiry]
+    out["mid"] = (out["bid"] + out["ask"]) / 2.0
+    out["spread"] = relative_spread(out["bid"], out["ask"])
+
+    spot = out["underlying_price"].astype(float)
+    # ``right`` 列的取值是 "C" / "P"（与合约代码一致）。但写 chain.right == "call"
+    # 是最自然的直觉，而那会静默匹配到 0 行。所以直接给布尔列，让人不必记这件事。
+    is_call = out["right"] == Right.CALL.value
+    out["is_call"] = is_call
+    out["is_put"] = ~is_call
+    # 看涨：行权价越高越虚值。看跌：行权价越低越虚值。统一成"正数 = 虚值"。
+    out["moneyness"] = np.where(is_call, out["strike"] / spot - 1.0, 1.0 - out["strike"] / spot)
+
+    return out.loc[out["sessions_left"] >= config.min_days_to_expiry].reset_index(drop=True)
+
+
 @dataclass(frozen=True, slots=True)
 class SelectionResult:
     """选中的合约 + 完整筛选过程。"""
@@ -73,12 +134,23 @@ class SelectionResult:
 
 def select_contract(
     chain: pd.DataFrame,
-    rule: SelectionRule,
+    rule: "SelectionRule | ContractChooser",
     config: BacktestConfig,
     calendar: TradingCalendar,
     asof: date,
+    view: object = None,
 ) -> SelectionResult:
-    """从某日的链中选出一张合约。"""
+    """从某日的链中选出一张合约。
+
+    ``rule`` 两种形态：
+
+    - ``SelectionRule``——声明式，"约 30 天、delta 约 0.30"。快，可以扫参数，
+      但表达不了"按当时情况调整"。
+    - **函数**——``f(chain, view)``，拿整张链自己筛，返回一行或 ``None``。
+      链已加好派生列并剔除不可执行的合约，见 ``enrich_chain``。
+    """
+    if callable(rule):
+        return _choose_by_function(chain, rule, config, calendar, asof, view)
     trace: list[tuple[str, int]] = [("链上合约", len(chain))]
     skipped: list[str] = []
 
@@ -115,6 +187,103 @@ def select_contract(
         strike=float(row["strike"]),
     )
     return SelectionResult(Maybe.some(contract), row.to_dict(), tuple(trace), tuple(skipped))
+
+
+def _choose_by_function(
+    chain: pd.DataFrame,
+    chooser: "ContractChooser",
+    config: BacktestConfig,
+    calendar: TradingCalendar,
+    asof: date,
+    view: object,
+) -> SelectionResult:
+    """执行用户写的选约函数，并把返回值校验成一张确实存在、确实开得了的合约。
+
+    校验是必须的。用户函数返回什么都有可能——空的 DataFrame、自己拼的行、
+    一个不在链上的行权价。这些如果不查，回测会拿着一张不存在的合约照常跑完，
+    最后给出一个完全可信的假结果。
+    """
+    trace: list[tuple[str, int]] = [("链上合约", len(chain))]
+    pool = enrich_chain(chain, config, calendar, asof)
+    trace.append(("可执行（T+1 仍可交易）", len(pool)))
+    if pool.empty:
+        return SelectionResult(Maybe.missing("当日没有可执行的合约"), None, tuple(trace))
+
+    try:
+        picked = chooser(pool, view)
+    except Exception as exc:  # noqa: BLE001
+        # 不吞。用户函数里的错必须带着是哪天、错在哪一起抛出来，否则调试无从下手。
+        raise StartupError(
+            f"选约函数在 {asof} 抛出异常：{type(exc).__name__}: {exc}"
+        ) from exc
+
+    if picked is None:
+        # 返回 None 可能是"今天确实不想开"，也可能是筛选条件写错了一直筛空。
+        # 两者从结果上分不出来，所以把当日**实际**能选的样貌一并报出——
+        # 写错 right 取值、delta 全是缺失这类问题，看一眼事件就知道了。
+        return SelectionResult(
+            Maybe.missing(f"选约函数返回 None（当日不开仓）｜当日可选：{_profile(pool)}"),
+            None, tuple(trace),
+        )
+
+    row = _as_single_row(picked, asof)
+    if row is None:
+        return SelectionResult(Maybe.missing("选约函数返回了空结果"), None, tuple(trace))
+
+    key = (str(row["symbol"]), _as_date(row["expiry"]), str(row["right"]), float(row["strike"]))
+    match = pool.loc[
+        (pool["symbol"].astype(str) == key[0])
+        & (pool["expiry"].map(_as_date) == key[1])
+        & (pool["right"].astype(str) == key[2])
+        & (pool["strike"].astype(float) == key[3])
+    ]
+    if match.empty:
+        raise StartupError(
+            f"选约函数在 {asof} 返回的合约不在当日可执行的链上：{key}。"
+            "请从传进去的 chain 里挑一行返回，不要自己拼。"
+        )
+
+    row = match.iloc[0]
+    trace.append(("函数选中", 1))
+    contract = ContractId(
+        symbol=str(row["symbol"]),
+        expiry=_as_date(row["expiry"]),
+        right=Right(row["right"]),
+        strike=float(row["strike"]),
+    )
+    return SelectionResult(Maybe.some(contract), row.to_dict(), tuple(trace))
+
+
+def _profile(pool: pd.DataFrame) -> str:
+    """当日可选合约的一句话画像。用于让"选不出来"这件事自己解释自己。"""
+    def rng(col: str, fmt: str = "{:.2f}") -> str:
+        v = pool[col].dropna()
+        if v.empty:
+            return f"{col}=全缺失"
+        return f"{col} {fmt.format(v.min())}–{fmt.format(v.max())}"
+
+    rights = "/".join(sorted(pool["right"].astype(str).unique()))
+    return (f"{len(pool)} 张，right 取值 {rights}，"
+            f"{rng('dte', '{:.0f}')}，{rng('delta')}，{rng('iv')}，{rng('spread')}")
+
+
+def _as_single_row(picked, asof: date):
+    """把选约函数的返回值收敛成一行。接受 Series、单行 DataFrame、以及空结果。"""
+    if isinstance(picked, pd.DataFrame):
+        if picked.empty:
+            return None
+        if len(picked) > 1:
+            raise StartupError(
+                f"选约函数在 {asof} 返回了 {len(picked)} 行。一次只能选一张合约——"
+                "需要多腿请等多腿支持，现在自己挑一行返回。"
+            )
+        return picked.iloc[0]
+    if isinstance(picked, pd.Series):
+        return picked
+    raise StartupError(
+        f"选约函数在 {asof} 返回了 {type(picked).__name__}，"
+        "应当返回 chain 里的一行（Series）或 None。"
+    )
 
 
 def _as_date(value) -> date:

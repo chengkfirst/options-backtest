@@ -1,8 +1,11 @@
 """依赖方向检查。
 
-模块之间只允许自下而上依赖，且**定价被关在合成链内部**：`selection` 与 `engine`
-不得直接导入 `data.synthetic.pricing`——上层消费的是链上的报价与希腊字母字段，
-不关心那些数字是市场观测还是模型生成。这条约束保证接入真实数据时上层零改动。
+模块之间只允许自下而上依赖，且**定价不得越过数据层**：`selection`、`engine`、
+`research` 不得直接导入 `backtest.pricing`——上层消费的是链上的报价与希腊字母字段，
+不关心那些数字是市场观测、供应商给的、还是模型推的。这条约束保证换数据源时上层零改动。
+
+定价本身是**市场模型**，不是合成链的私产：合成链用它造价格，文件源用它在供应商
+不给 greeks 时补推。所以它在 `backtest.pricing`（第 0 层），允许数据层的各个实现使用。
 
 单独成文而不是只写在文档里，是因为文档拦不住 import。
 """
@@ -22,16 +25,25 @@ PACKAGE = "backtest"
 #: 顶层。把它摆在顶层会让 ``engine`` 复用它的统计函数变成"反向依赖"，那是分层定错，
 #: 不是代码有问题。真正要守住的约束由 ``REPORT_FORBIDDEN`` 单独表达。
 LAYERS: dict[str, int] = {
-    "maybe": 0, "errors": 0, "events": 0, "types": 0, "config": 0,
+    "maybe": 0, "errors": 0, "events": 0, "types": 0, "config": 0, "pricing": 0,
+    #: components 是概念底座：七个组件各自在交易里干什么、它们怎么互相牵制。
+    #: 它**不依赖任何东西**（只有文字与数据），所以在最底层；界面、文档、研究
+    #: 工具都从它读，这样"缺口清单"不会在两处各写一份然后走样。
+    "components": 0,
     "data": 1, "report": 1,
     "signals": 2, "selection": 2, "costs": 2,
+    "portfolio": 2, "risk": 2,
     "engine": 3,
-    "api": 4, "__init__": 4,
+    #: research 会**调用引擎跑回测**（比如仓位方法对照要把同一策略跑很多遍），
+    #: 所以它在引擎之上。risk 反过来被引擎导入（逐日希腊字母聚合），在引擎之下。
+    "research": 4,
+    "api": 5, "__init__": 5,
 }
 
-#: 只有 `data.synthetic` 内部可以导入定价工具。
-PRICING_MODULE = "backtest.data.synthetic.pricing"
-PRICING_ALLOWED_PREFIX = "backtest.data.synthetic"
+#: 只有数据层的实现可以导入定价工具——合成链造价格、文件源补 greeks 都在那一层。
+#: 再往上（选约、引擎、研究）一律禁止：它们只许读链上的字段。
+PRICING_MODULE = "backtest.pricing"
+PRICING_ALLOWED_PREFIX = "backtest.data"
 
 #: `report` 只读交易明细，不应依赖引擎或数据层。
 REPORT_FORBIDDEN = {"data", "engine", "signals", "selection", "costs"}
@@ -56,7 +68,22 @@ def _imports(path: Path) -> set[str]:
 
 
 def check() -> list[str]:
+    """返回问题清单。空表示通过。
+
+    **未在 LAYERS 登记的模块一律判为失败。** 早先的版本对不认识的模块直接跳过，
+    结果新增的 portfolio 模块整个逃过了检查——防线自己有静默失败，比没有防线更糟。
+    """
     problems: list[str] = []
+    tops = {
+        p.relative_to(ROOT / PACKAGE).parts[0].removesuffix(".py")
+        for p in (ROOT / PACKAGE).rglob("*.py")
+        if p.name != "__init__.py" or p.parent != ROOT / PACKAGE
+    }
+    for top in sorted(tops - set(LAYERS) - {"__pycache__"}):
+        problems.append(
+            f"模块 {PACKAGE}.{top} 没有在 LAYERS 里登记层级——它的依赖方向没有被检查。"
+            f"请在 tools/check_deps.py 的 LAYERS 中为它指定层级。"
+        )
     for path in sorted((ROOT / PACKAGE).rglob("*.py")):
         rel = path.relative_to(ROOT).with_suffix("")
         module = ".".join(rel.parts)

@@ -27,9 +27,9 @@ import pandas as pd
 
 from backtest.config import BacktestConfig, CostConfig, SyntheticChainConfig
 from backtest.data.market import VOL_PROXY_BY_SYMBOL, MarketData
-from backtest.data.synthetic.generator import SyntheticChainSource
+from backtest.data.chain_registry import build_chain_source
 from backtest.engine.expression import parse_condition
-from backtest.engine.strategy import EntryRule, ExitRule, Strategy
+from backtest.engine.strategy import EntryRule, ExitRule, Sizing, Strategy
 from backtest.engine.sweep import SweepResult, sweep as _sweep
 from backtest.engine.trade_table import TradeTableEngine, TradeTableResult
 from backtest.errors import StartupError
@@ -43,7 +43,31 @@ def _as_date(value: str | date) -> date:
     return value if isinstance(value, date) else date.fromisoformat(str(value))
 
 
-def _selection_from(spec: Mapping[str, Any] | SelectionRule) -> SelectionRule:
+def _sizing_from(spec, quantity: int) -> Sizing:
+    """把 ``sizing=`` 收敛成 :class:`Sizing`。
+
+    没给就用固定张数——**但这只是默认值，不是推荐做法**。固定张数会让每笔的风险
+    占比随权益漂移：权益翻倍之后，同样 1 张只占一半的风险；权益腰斩之后又变成两倍。
+    真正想控制风险的话用 ``risk_pct``。
+    """
+    if spec is None:
+        return Sizing(method="fixed", contracts=quantity)
+    if isinstance(spec, Sizing):
+        return spec
+    opts = dict(spec)
+    method = str(opts.pop("method", "fixed"))
+    opts.setdefault("contracts", quantity)
+    return Sizing(method=method, **{k: v for k, v in opts.items() if v is not None})
+
+
+def _selection_from(spec):
+    """把 ``select=`` 参数收敛成引擎认识的东西。
+
+    三种写法：声明式字典、``SelectionRule``、或一个 ``f(chain, view)`` 函数。
+    函数原样透传——它的校验在 ``select_contract`` 里做，那里才看得到当日的链。
+    """
+    if callable(spec) and not isinstance(spec, SelectionRule):
+        return spec
     if isinstance(spec, SelectionRule):
         return spec
     spec = dict(spec)
@@ -76,20 +100,53 @@ def _exit_from(spec: Mapping[str, Any] | ExitRule) -> ExitRule:
 
 def run(
     *,
+    engine: str = "trade_table",
+    max_concurrent: int | None = None,
     symbol: str = "QQQ",
     start: str | date = "2015-01-01",
     end: str | date = "2024-12-31",
     entry: str | Callable = "sma_20 > sma_50",
+    plan: Callable | None = None,
+    review: Callable | None = None,
     select: Mapping[str, Any] | SelectionRule | None = None,
     exit: Mapping[str, Any] | ExitRule | None = None,  # noqa: A002 - 与策略术语一致
     quantity: int = 1,
+    sizing: "Mapping[str, Any] | Sizing | None" = None,
     capital: float = 100_000.0,
     costs: CostConfig | None = None,
+    chain: "str | object | None" = None,
     synthetic: SyntheticChainConfig | None = None,
     name: str = "unnamed",
     refresh: bool = False,
+    signals: Mapping[str, Callable] | None = None,
 ) -> "Result":
-    """跑一次成交表回测。"""
+    """跑一次成交表回测。
+
+    ``plan`` 是**计划式策略**：一个函数同时决定买什么、买多少、怎么了结。七个组件
+    在真实交易里是联动的（回撤深就买得更久、下注更大、止损放宽），参数化写法表达
+    不了这种联动。给了 ``plan`` 就绕过 ``entry``/``select``，只能配 ``engine="event_driven"``。
+    见 ``backtest.engine.plan``。
+
+    ``chain`` 指定期权数据源。默认 ``None`` 用合成链（**测试夹具，不是数据源**）。
+    换成你自己的数据：``chain="file:/路径/到/你的数据"``，或直接传一个实现了
+    ``ChainSource`` 协议的对象。详见 ``backtest.data.adapters``。
+
+    ``signals`` 注册自定义信号：``{"名字": lambda bars: 一个 Series}``。
+    注册后即可在 ``entry`` 表达式里按名字使用。``bars.adjusted("close")`` 取复权价
+    （信号一律用复权价，否则除息日会出现虚假跳空）。
+
+    ``engine`` 选引擎：
+
+    ``"trade_table"``（默认）
+        各笔独立计算，快两个数量级，适合扫参数。**没有权益曲线，因此没有回撤和夏普。**
+    ``"event_driven"``
+        逐日推进，有组合状态。慢，但给出权益曲线、回撤、资金约束与并发上限。
+        ``max_concurrent`` 只对它有效。
+
+    同一配置下两条引擎在无约束时产出相同的交易明细——这是互相校验的基础。
+    """
+    if engine not in ("trade_table", "event_driven"):
+        raise StartupError(f"未知引擎 {engine!r}，可选 trade_table / event_driven")
     proxy = VOL_PROXY_BY_SYMBOL.get(symbol)
     if proxy is None:
         raise StartupError(
@@ -106,24 +163,39 @@ def run(
     )
 
     market = MarketData(config, refresh=refresh)
-    signals = SignalSet.from_bars(market.bars)
-    chain = SyntheticChainSource(market, config)
+    signal_set = SignalSet.from_bars(market.bars, extra=signals)
+    chain_source = build_chain_source(chain, market, config)
 
     if isinstance(entry, str):
-        condition, requires = parse_condition(entry, signals.names)
+        condition, requires = parse_condition(entry, signal_set.names)
         entry_rule = EntryRule(entry, condition, requires)
     else:
         entry_rule = EntryRule(getattr(entry, "__name__", "custom"), entry, ())
 
     strategy = Strategy(
+        plan=plan,
+        review=review,
+        sizing=_sizing_from(sizing, quantity),
         entry=entry_rule,
         select=_selection_from(select or {}),
         exit=_exit_from(exit or {}),
         quantity=quantity,
         name=name,
     )
-    outcome = TradeTableEngine(market, chain, signals, config).run(strategy)
-    return Result(outcome, market, chain, signals)
+    if engine == "event_driven":
+        from backtest.engine.event_driven import EventDrivenEngine
+
+        outcome = EventDrivenEngine(
+            market, chain_source, signal_set, config, max_concurrent=max_concurrent
+        ).run(strategy)
+    else:
+        if max_concurrent is not None:
+            raise StartupError(
+                "成交表引擎各笔独立计算、互不知晓，撑不起并发上限。"
+                "要用 max_concurrent 请改 engine=\"event_driven\"。"
+            )
+        outcome = TradeTableEngine(market, chain_source, signal_set, config).run(strategy)
+    return Result(outcome, market, chain_source, signal_set)
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +341,85 @@ class Result:
         if printout:
             print(text)
         return text
+
+    # ---- 风险与研究 ----
+    def attribution(self):
+        """盈亏归因：delta / gamma / vega / theta / 残差。"""
+        from backtest.risk.attribution import attribute
+
+        return attribute(self.trades)
+
+    def attribution_by(self, column: str, bins: int = 4):
+        from backtest.risk.attribution import attribute_by
+
+        return attribute_by(self.trades, column, bins)
+
+    def greeks(self):
+        """逐日组合层希腊字母。只有事件驱动引擎有。"""
+        frame = getattr(self.raw, "greeks_frame", None)
+        if frame is None:
+            raise AttributeError(
+                "成交表引擎没有组合状态，算不出逐日希腊字母。"
+                "请用 engine=\"event_driven\" 重跑。"
+            )
+        return frame
+
+    def stress(self, *, day=None, days_forward: int = 5):
+        """某一日的压力网格。默认取持仓最多的那天。"""
+        from backtest.risk.stress import stress_grid
+
+        daily = getattr(self.raw, "greeks", ())
+        if not daily:
+            raise AttributeError("需要 engine=\"event_driven\" 才有逐日希腊字母")
+        pick = (max(daily, key=lambda g: g.n_positions) if day is None
+                else next((g for g in daily if g.day == day), None))
+        if pick is None:
+            raise KeyError(f"{day} 不在回测区间内")
+        return stress_grid(pick, days_forward=days_forward)
+
+    def scenarios(self, windows=None):
+        """历史情景重放。不含任何展开近似，比压力测试更可信。"""
+        from backtest.risk.stress import KNOWN_SCENARIOS, scenario_replay
+
+        equity = getattr(self.raw, "equity", None)
+        if equity is None:
+            raise AttributeError("需要 engine=\"event_driven\" 才有权益曲线")
+        return scenario_replay(equity, windows or KNOWN_SCENARIOS)
+
+    def excursion(self):
+        """MFE / MAE 研究：止盈止损该设在哪。会检测分布是否被现有规则截断。"""
+        from backtest.research.excursion import study
+
+        return study(self.trades, self.raw.strategy.exit)
+
+    def equity_metrics(self) -> dict:
+        """依赖权益曲线的指标。成交表引擎给不出，会明确报错。"""
+        import numpy as np
+
+        equity = getattr(self.raw, "equity", None)
+        if equity is None:
+            raise AttributeError(
+                "成交表引擎没有权益曲线，因此没有回撤和夏普。"
+                "请用 engine=\"event_driven\" 重跑。"
+            )
+        curve = equity["equity_mid"]
+        liq = equity["equity_liq"]
+        returns = curve.pct_change().dropna()
+        years = max(len(curve) / 252.0, 1e-9)
+        drawdown = curve / curve.cummax() - 1
+        vol = float(returns.std() * np.sqrt(252)) if len(returns) > 1 else float("nan")
+        annual = float((curve.iloc[-1] / curve.iloc[0]) ** (1 / years) - 1)
+        return {
+            "总收益": float(curve.iloc[-1] / curve.iloc[0] - 1),
+            "年化": annual,
+            "年化波动": vol,
+            "夏普": annual / vol if vol else float("nan"),
+            "最大回撤": float(drawdown.min()),
+            "最大回撤(清算价)": float((liq / liq.cummax() - 1).min()),
+            "平均资金占用": float((equity["deployed"] / curve).mean()),
+            "峰值持仓": int(equity["positions"].max()),
+            "偏度": float(returns.skew()), "峰度": float(returns.kurtosis()),
+        }
 
     # ---- 扫描 ----
     def sweep(self, grid: Mapping[str, Any]) -> SweepResult:

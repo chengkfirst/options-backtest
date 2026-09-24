@@ -204,6 +204,15 @@ class TradeRecord:
     exit_context: Mapping[str, Maybe[float]]
     quote_gaps: int = 0
     deferred_days: int = 0
+    #: 持有期内的最大有利/最大不利偏移（相对入场价的比例）。
+    #: 只有事件驱动引擎采得到——成交表不逐日推进。成交表产出的记录里是 NaN，
+    #: 下游据此报错而不是当成 0。
+    mfe: float = float("nan")
+    mae: float = float("nan")
+    #: 下单时打的分组标签与备注（来自 Plan）。**分类口径来自当时的真实判断**，
+    #: 不是事后按结果硬分的——后者会把结论分析成自己想要的样子。
+    tag: str = ""
+    note: str = ""
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:
@@ -242,6 +251,10 @@ TRADE_COLUMNS: tuple[str, ...] = (
     "source",
     "quote_gaps",
     "deferred_days",
+    "mfe",
+    "mae",
+    "tag",
+    "note",
 )
 
 

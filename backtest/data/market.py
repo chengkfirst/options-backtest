@@ -143,8 +143,13 @@ class MarketData:
             key, lambda: fetch_dividends(symbol).to_frame("amount"), refresh=refresh
         )
         if frame.empty:
+            reason = frame.attrs.get("unavailable_reason")
             self.events.record(
-                EventKind.DIVIDEND_UNAVAILABLE, self.config.start, f"{symbol} 无分红数据，按零分红处理"
+                EventKind.DIVIDEND_UNAVAILABLE,
+                self.config.start,
+                f"{symbol} 分红数据获取失败（{reason}），按零分红处理"
+                if reason
+                else f"{symbol} 在该区间无分红记录，按零分红处理",
             )
             return pd.Series(dtype=float)
         series = frame["amount"].astype(float)

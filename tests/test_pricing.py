@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from backtest.data.synthetic.pricing import (
+from backtest.pricing import (
     bs_price,
     greeks,
     has_early_exercise_value,
