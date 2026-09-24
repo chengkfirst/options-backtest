@@ -55,10 +55,7 @@ class TestEngineIntegration:
         assert len(plain.trades) == len(reduced.trades)
 
     def test_partial_close_pnl_is_not_lost(self):
-        """**这个测试是这个模块存在的理由。**
-
-        最终记录按剩余张数算，天然漏掉先减掉的那几张。漏了不报错，只是盈亏少一块。
-        """
+        """最终记录按剩余张数算，天然漏掉先减掉的那几张——不报错，盈亏少一块。"""
         def review(ctx, pos):
             return Reduce(0.5, "减半") if (pos.days_held == 5 and pos.quantity >= 2) else None
 

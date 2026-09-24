@@ -95,11 +95,8 @@ function fillDefaults(){
 }
 
 /* ── 信号参考 ──────────────────────────────────────────
-   以前这里是把信号名按字母表平铺成一排 code 标签，外加六个玩具策略预设
-   （"sma_20 > sma_50" 之类）。两样都删了：
-   - 一排名字没有信息量，使用者还是得去猜 rv_20 是按什么口径年化的
-   - 教科书预设会暗示这是推荐用法，而它们不是任何人真会用的东西
-   换成按类别分组、带含义与单位、可搜索、点一下插入光标处的参考面板。      */
+   按类别分组，带含义与单位，可搜索，点一下插入光标处。
+   只列名字没有信息量——使用者仍需去猜 rv_20 按什么口径年化。            */
 function renderSignalRef(){
   const docs = META.signal_docs || [];
   if(!docs.length){ $("sigRef").innerHTML = ""; return; }
@@ -145,10 +142,8 @@ function insertSignal(name){
 }
 
 /* ── 七个组件的表单：从后端那份定义生成 ─────────────────────
-   以前这里是 191 行手写 HTML、8 层嵌套，而 backtest/components.py 里
-   已经定义了同一批东西。两处定义必然走样——改了组件含义忘了改界面，
-   或者界面上挂着一条早就不成立的说明，看起来还很权威。
-   现在只有一处定义，界面照着画。                                    */
+   组件是什么、要填什么，唯一定义在 backtest/components.py。
+   界面照着画，不手写——两处定义必然走样。                            */
 const STATUS_MARK = { done: "", partial: "部分", missing: "未做" };
 
 function renderComponents(){

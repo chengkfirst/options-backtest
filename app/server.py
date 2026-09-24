@@ -548,14 +548,11 @@ class Handler(SimpleHTTPRequestHandler):
     def _serve_index(self):
         """发首页时给每个 js/css 加上按文件修改时间的版本号。
 
-        为什么要做这件事：浏览器会按启发式规则缓存 js/css。改完界面刷新看到的还是
-        旧代码，而且**不报错**——新 HTML 配旧 JS，报出来的是"某个元素是 null"或
-        "某函数未定义"，看起来像代码写错了，实际只是没加载新文件。实测踩过一次，
-        排查花了十几个来回。
+        浏览器会按启发式规则缓存 js/css，于是新 HTML 配上旧 JS，报出来的是
+        "某个元素是 null" 或 "某函数未定义"——症状指向代码，原因却是没加载新文件。
 
-        加 Cache-Control 只对以后生效，救不了已经缓存的；改文件名要手工维护。
-        按 mtime 生成 ``?v=`` 是唯一自动且彻底的做法：文件一改，URL 就变，
-        浏览器必然重新取。
+        Cache-Control 只对以后生效，救不了已缓存的；改文件名要手工维护。
+        按 mtime 生成 ``?v=``：文件一改 URL 就变，浏览器必然重新取。
         """
         index = STATIC / "index.html"
         if not index.exists():
@@ -584,10 +581,8 @@ class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         """静态文件一律要求浏览器回源校验。
 
-        不加这条的话，Chrome 会按启发式规则缓存 js/css，改完界面刷新还是旧代码——
-        而且**没有任何报错**，只是行为对不上，极难察觉（实测踩过：新 HTML 配旧 JS，
-        报出来的是"某函数未定义"，看起来像代码写错了）。
-        本地研究工具不在乎这点带宽，正确性优先。
+        不加这条，Chrome 会按启发式规则缓存 js/css，改完刷新仍是旧代码，
+        且不报任何错。本地工具不在乎这点带宽，正确性优先。
         """
         if not self.path.startswith("/api/"):
             self.send_header("Cache-Control", "no-cache")
@@ -661,8 +656,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         """API 路径上的 HEAD 走同一套路由。
 
-        否则 HEAD /api/meta 会被当成找不到的静态文件返回 404——路径明明存在，
-        却报不存在，是一种会误导排查的假信号。
+        否则 HEAD /api/meta 会被当成静态文件返回 404：路径存在却报不存在。
         """
         if self.path.startswith("/api/"):
             self._head_only = True
@@ -828,7 +822,7 @@ class Handler(SimpleHTTPRequestHandler):
             # allow_nan=False 是关键。默认会输出 NaN / Infinity 字面量——Python 自己
             # 读得回来，但 **JSON 标准不允许**，浏览器 JSON.parse 直接失败。
             # 表现是：服务端 200、日志干净，前端只说"返回的不是 JSON"，无从查起。
-            # 实测踩过：零交易时夏普是 NaN，整个响应就废了。
+            # 典型触发：零交易时夏普是 NaN，整个响应随之报废。
             # 所以先把非有限数换成 null（"算不出来"本来就该是 null），
             # 再用 allow_nan=False 兜底——万一还有漏网的，宁可响亮报错也不要发出非法 JSON。
             body = json.dumps(_finite(obj), ensure_ascii=False, allow_nan=False).encode("utf-8")

@@ -257,8 +257,7 @@ footer code{font-family:var(--mono);font-size:11.5px}
 .setup-note { margin: 0 0 12px; min-height: 1em; }
 
 /* 标的只有四个字母，不该和日期抢宽度——三等分会把它挤成 "QQ"。
-   注意必须挑出"标的"那一个，用 :first-child 会把第二行的「引擎」一起压窄
-   （踩过：引擎变成了"事件驱"）。 */
+   必须挑出"标的"那一个：:first-child 会把第二行的「引擎」一起压窄。 */
 .setup-bar .sb.narrow { flex: 0 0 5.5em; }
 .setup-bar .sb.grow   { flex: 3; }
 
@@ -294,7 +293,7 @@ textarea.code {
 .field > label { font-size: 10.5px; color: var(--ink-3); display: flex; gap: 4px;
                  align-items: baseline; }
 /* bench.css 里有全局的 .unit{position:absolute;opacity:0}（旧版藏单位的做法）。
-   只覆盖 opacity 会让单位变可见但仍是绝对定位，飘到页面别处——踩过。
+   只覆盖 opacity 会让单位可见但仍是绝对定位，飘到页面别处。
    position 必须一起还原。 */
 .field .unit { position: static; opacity: .7; color: var(--ink-3); font-size: 10px; }
 .field input, .field select {

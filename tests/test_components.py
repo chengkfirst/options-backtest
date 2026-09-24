@@ -20,7 +20,7 @@ from backtest.components import (
 
 class TestDefinition:
     def test_every_component_says_what_it_decides(self):
-        """role 是这份定义存在的理由——没有它，组件就只是个名字。"""
+        """没有 role，组件就只是一个名字。"""
         for c in COMPONENTS:
             assert len(c.role) > 10, f"{c.name} 没写清在交易里决定什么"
             assert c.output, f"{c.name} 没写输出什么"

@@ -77,7 +77,7 @@ class TestGrid:
         assert g["delta_if_move"].loc["0%", "30天"] > g["delta_now"].loc["0%", "30天"]
 
     def test_deep_otm_short_dated_exposure_collapses(self):
-        """**这张表存在的理由**：短期深虚值，论点兑现后暴露反而缩。"""
+        """短期深虚值：论点兑现后暴露反而收缩。"""
         g = tradeoff_grid(chain(), spot=SPOT, move=0.03)
         short_deep = g["delta_if_move"].loc["10%", "14天"]
         long_deep = g["delta_if_move"].loc["10%", "90天"]

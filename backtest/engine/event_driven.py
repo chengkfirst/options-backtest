@@ -74,9 +74,8 @@ class Intent:
     created: date
     execute_on: date
     trade_id: int
-    #: 开仓还是平仓。**必须是显式字段**——以前是靠 ``reason == "entry"`` 判断的，
-    #: 拿一个给人看的说明文本当控制流开关，任何人改一下措辞就会把开仓当成平仓
-    #: 执行（实测踩过：计划式把 reason 设成备注，于是每笔入场都走了平仓分支）。
+    #: 开仓还是平仓。**必须是显式字段**：用给人看的说明文本当控制流开关，
+    #: 改一下措辞就会把开仓当成平仓执行。
     kind: str = "entry"               # "entry" | "exit"
     reason: str = ""                  # 为什么下这一单，纯给人看
     exit_reasons: tuple[ExitReason, ...] = ()

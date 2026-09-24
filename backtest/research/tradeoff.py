@@ -139,7 +139,7 @@ def _spread_out(available: list[int], wanted: Sequence[int], n: int = 6) -> list
     if not available:
         return []
     # 链上本来就没几个到期日时全留下。按惯用档挑会把"没人最接近它"的那些丢掉
-    # （9/16/30/58 天会丢掉 9 天），链稀疏时等于白白少给信息。
+    # （9/16/30/58 天会丢掉 9 天），链稀疏时信息量白损失一截。
     if len(available) <= n:
         return available
     picked: list[int] = []
