@@ -58,6 +58,25 @@ SIGNAL_META: dict[str, SignalMeta] = {
 }
 
 
+#: **IV 水平信号**。它们要的是波动率代理序列（QQQ→VXN，SPY→VIX），不是复权价，
+#: 所以单独一组、单独注册。
+#:
+#: 为什么这组重要：期权是买波动率，不只是买方向。**同一个方向判断，在 IV 高位
+#: 和低位该做的事完全不同**——IV rank 90 的时候买 call 是在用贵价买时间。
+#: 只看 delta 和 DTE 选合约，等于对这件事视而不见。
+#:
+#: 代理是**真实市场数据**，所以即使期权链是合成的，这组信号依然成立。
+VOL_SIGNALS: dict[str, Callable[[pd.Series, UnderlyingBars], pd.Series]] = {
+    "iv": lambda v, b: v,
+    "iv_rank_252": lambda v, b: indicators.rank_in_window(v, 252),
+    "iv_pct_252": lambda v, b: indicators.percentile_in_window(v, 252),
+    "iv_rank_63": lambda v, b: indicators.rank_in_window(v, 63),
+    # 波动率风险溢价：隐含减已实现。正值表示期权比标的实际波动贵——
+    # 卖方的饭碗，买方的成本。
+    "iv_rv_spread": lambda v, b: v - indicators.realized_vol(b.adjusted("close"), 20),
+}
+
+
 #: 默认注册的信号。每个是 ``bars -> Series``，只吃复权价。
 DEFAULT_SIGNALS: dict[str, Callable[[UnderlyingBars], pd.Series]] = {
     "close": lambda b: b.adjusted("close"),
@@ -134,10 +153,23 @@ class SignalSet:
         cls,
         bars: UnderlyingBars,
         extra: Mapping[str, Callable[[UnderlyingBars], pd.Series]] | None = None,
+        vol_proxy: pd.Series | None = None,
     ) -> "SignalSet":
+        """算全部信号。
+
+        ``vol_proxy`` 给了才会有 IV 水平那组信号。**拿不到就不注册**，而不是
+        填 0 或 NaN 混进去——一个恒为 0 的 iv_rank 会让"低 IV 才买"这个条件
+        天天成立，而且不报任何错。
+        """
         definitions = dict(DEFAULT_SIGNALS)
         definitions.update(extra or {})
         columns = {name: fn(bars).astype(float) for name, fn in definitions.items()}
+
+        if vol_proxy is not None and not vol_proxy.empty:
+            aligned = vol_proxy.reindex(bars.frame.index).ffill()
+            for name, fn in VOL_SIGNALS.items():
+                columns[name] = fn(aligned, bars).astype(float)
+
         frame = pd.DataFrame(columns, index=bars.frame.index)
         return cls(frame)
 

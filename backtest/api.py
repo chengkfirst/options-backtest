@@ -72,8 +72,16 @@ def _selection_from(spec):
         return spec
     spec = dict(spec)
     right = spec.pop("right", "call")
-    dte = spec.pop("dte", 30)
-    window = tuple(spec.pop("dte_window", (max(1, dte - 9), dte + 15)))
+    # 界面给的是区间（dte_lo/hi、delta_lo/hi）；也接受老的点式写法（dte + delta）。
+    lo, hi = spec.pop("dte_lo", None), spec.pop("dte_hi", None)
+    if lo is not None and hi is not None:
+        window = (int(lo), int(hi))
+        dte = spec.pop("dte", (int(lo) + int(hi)) // 2)
+    else:
+        dte = spec.pop("dte", 30)
+        window = tuple(spec.pop("dte_window", (max(1, dte - 9), dte + 15)))
+    dlo, dhi = spec.pop("delta_lo", None), spec.pop("delta_hi", None)
+    ilo, ihi = spec.pop("iv_lo", None), spec.pop("iv_hi", None)
     return SelectionRule(
         right=Right.CALL if str(right).lower().startswith("c") else Right.PUT,
         target_dte=dte,
@@ -82,6 +90,8 @@ def _selection_from(spec):
         moneyness=spec.pop("moneyness", None),
         min_volume=spec.pop("min_volume", None),
         min_open_interest=spec.pop("min_open_interest", None),
+        delta_band=(float(dlo), float(dhi)) if dlo is not None and dhi is not None else None,
+        iv_band=(float(ilo), float(ihi)) if ilo is not None and ihi is not None else None,
         max_relative_spread=spec.pop("max_spread", None),
     )
 
@@ -163,7 +173,7 @@ def run(
     )
 
     market = MarketData(config, refresh=refresh)
-    signal_set = SignalSet.from_bars(market.bars, extra=signals)
+    signal_set = SignalSet.from_bars(market.bars, extra=signals, vol_proxy=market.vol_proxy)
     chain_source = build_chain_source(chain, market, config)
 
     if isinstance(entry, str):

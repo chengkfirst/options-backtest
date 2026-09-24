@@ -134,8 +134,10 @@ class TestDescribe:
         sig = set(inspect.signature(run).parameters)
         # 这些由前端组装后换个名字送进去，不直接对应 run 的参数
         indirect = {
-            "entry_mode", "entry_code", "review_code", "strike_mode", "moneyness", "delta", "dte",
-            "right", "take_profit", "stop_loss", "hold_days", "dte_floor",
+            "entry_mode", "entry_code", "review_code", "delta", "right",
+            "dte_lo", "dte_hi", "delta_lo", "delta_hi", "iv_lo", "iv_hi",
+            "max_spread", "min_open_interest",
+            "take_profit", "stop_loss", "hold_days", "dte_floor",
             "sizing_method", "risk_pct", "notional", "target_vol", "kelly_fraction",
         }
         for c in COMPONENTS:

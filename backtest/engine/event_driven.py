@@ -476,6 +476,10 @@ class EventDrivenEngine:
         if not selection.ok:
             self.events.record(EventKind.SELECTION_FAILED, target, selection.describe())
             return None
+        # 选中了，但有被跳过的约束或退化的排序——这些不该只留在 trace 里，
+        # 使用者看不到就等于没提示。
+        for why in selection.skipped_filters:
+            self.events.record(EventKind.CANDIDATE_DROPPED, target, f"选约提示：{why}")
         contract = selection.contract.unwrap()
         if not strategy.allow_stacking and (
             ledger.position(contract) is not None or self._already_queued(queue, contract)

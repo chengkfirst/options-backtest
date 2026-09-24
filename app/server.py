@@ -89,9 +89,21 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
         "end": payload.get("end", "2024-12-31"),
         "entry": payload.get("entry", "sma_20 > sma_50"),
         "quantity": int(payload.get("quantity", 1)),
+        # 选约按「可行域 + 排序目标」组装。只传真给了的字段——留空表示不限，
+        # 而不是替使用者编一个默认区间。
         "select": {
-            "right": payload.get("right", "call"),
-            "dte": int(payload.get("dte", 30)),
+            k: v for k, v in {
+                "right": payload.get("right", "call"),
+                "dte_lo": _opt_int(payload.get("dte_lo")),
+                "dte_hi": _opt_int(payload.get("dte_hi")),
+                "delta_lo": _opt_float(payload.get("delta_lo")),
+                "delta_hi": _opt_float(payload.get("delta_hi")),
+                "iv_lo": _opt_float(payload.get("iv_lo")),
+                "iv_hi": _opt_float(payload.get("iv_hi")),
+                "max_spread": _opt_float(payload.get("max_spread")),
+                "min_open_interest": _opt_int(payload.get("min_open_interest")),
+                "delta": _opt_float(payload.get("delta")),
+            }.items() if v is not None
         },
         "exit": {
             "hold_days": _opt_int(payload.get("hold_days")),
@@ -101,11 +113,6 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
         },
         "name": payload.get("name") or "run",
     }
-    if payload.get("strike_mode") == "moneyness":
-        kwargs["select"]["moneyness"] = float(payload.get("moneyness", 0.05))
-    else:
-        kwargs["select"]["delta"] = float(payload.get("delta", 0.30))
-
     if payload.get("signals_code", "").strip():
         kwargs["signals"] = compile_signals(payload["signals_code"])
     if isinstance(payload.get("sizing"), dict):
@@ -662,8 +669,9 @@ class Handler(SimpleHTTPRequestHandler):
             "gaps": _describe_gaps(),
             "defaults": {
                 "symbol": "QQQ", "start": "2020-01-01", "end": "2024-12-31",
-                "entry": "sma_20 > sma_50", "right": "call", "dte": 30,
-                "strike_mode": "delta", "delta": 0.30, "moneyness": 0.05,
+                "entry": "sma_20 > sma_50", "right": "call",
+                "dte_lo": 21, "dte_hi": 45, "delta_lo": 0.25, "delta_hi": 0.45,
+                "max_spread": 0.08, "delta": 0.35,
                 "hold_days": 10, "take_profit": 1.0, "stop_loss": 0.5,
                 "dte_floor": 5, "quantity": 1,
                 "sizing_method": "risk_pct", "risk_pct": 0.02, "notional": 5000,

@@ -88,3 +88,28 @@ def realized_vol(series: pd.Series, window: int = 20) -> pd.Series:
 def _check_window(window: int) -> None:
     if window < 1:
         raise ValueError(f"窗口须为正整数，当前 {window}")
+
+
+def rank_in_window(series: pd.Series, window: int) -> pd.Series:
+    """当前值在过去 ``window`` 天的**区间**里的位置，0–1。
+
+    这就是交易台上说的 "IV rank"：``(今天 − 区间最低) / (区间最高 − 区间最低)``。
+    它回答的是"相对自己的历史，现在贵还是便宜"——绝对的 IV 数字没有可比性，
+    20% 对某些标的是高位，对另一些是低位。
+    """
+    lo = series.rolling(window, min_periods=window // 2).min()
+    hi = series.rolling(window, min_periods=window // 2).max()
+    span = hi - lo
+    return ((series - lo) / span.where(span > 0)).astype(float)
+
+
+def percentile_in_window(series: pd.Series, window: int) -> pd.Series:
+    """当前值在过去 ``window`` 天里的**分位**，0–1。
+
+    与 ``rank_in_window`` 的区别常被忽略：IV rank 只看区间两端，一次极端尖峰
+    就会把它长期压低；IV percentile 看的是"有多少天比今天低"，对尖峰不敏感。
+    两个一起看才知道是真便宜还是被一次意外拉低了。
+    """
+    return series.rolling(window, min_periods=window // 2).apply(
+        lambda w: (w[:-1] < w[-1]).mean(), raw=True
+    ).astype(float)

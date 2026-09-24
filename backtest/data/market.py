@@ -212,6 +212,15 @@ class MarketData:
             return 0.0
         return float(cash / (spot * years))
 
+    @property
+    def vol_proxy(self) -> pd.Series:
+        """波动率代理的完整序列（QQQ→VXN，SPY→VIX）。
+
+        **这是真实市场数据**，不是合成的。所以基于它的 IV 水平判断（IV rank、
+        IV−RV 价差）即使在合成期权链上也成立——合成的是期权价格，不是这个。
+        """
+        return self._vol_proxy
+
     def volatility(self, day: date) -> Maybe[float]:
         """该日的波动率代理；不可得时回退该标的自身的已实现波动率。"""
         ts = pd.Timestamp(day)

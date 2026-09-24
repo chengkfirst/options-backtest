@@ -41,6 +41,17 @@ class SelectionRule:
     min_open_interest: float | None = None
     max_relative_spread: float | None = None
 
+    # ── 可行域：硬约束，不满足就不考虑 ──────────────────────
+    #
+    # 专业做法不是"选一个点"，是"划一个可行域，然后在里面按目标排序"。
+    # 盯死 delta=0.30 有两个问题：链上未必有那一张（于是选到一张离得很远的），
+    # 以及**只在那一个点成立的结论是噪音**——实盘参数不可能刚好落在那里。
+    #: delta 的可接受区间（绝对值）。给了它，``target_delta`` 退化为排序用的目标。
+    delta_band: tuple[float, float] | None = None
+    #: 该合约自身 IV 的可接受区间。买方想要低、卖方想要高。
+    iv_band: tuple[float, float] | None = None
+
+
     def __post_init__(self) -> None:
         lo, hi = self.dte_window
         require(0 < lo <= hi, f"dte_window 非法：{self.dte_window}")
@@ -51,6 +62,10 @@ class SelectionRule:
         )
         if self.target_delta is not None:
             require(0 < abs(self.target_delta) < 1, f"target_delta 须在 0 与 1 之间：{self.target_delta}")
+        for name, band in (("delta_band", self.delta_band), ("iv_band", self.iv_band)):
+            if band is not None:
+                lo, hi = band
+                require(lo < hi, f"{name} 的下界须小于上界：{band}")
 
 
 #: 选约函数拿到的链，除 ``CHAIN_COLUMNS`` 外还有这几列。都是算好的——同样的推导
@@ -169,6 +184,8 @@ def select_contract(
         )
 
     pool = _filter_liquidity(pool, rule, config, trace, skipped)
+    if not pool.empty:
+        pool = _apply_bands(pool, rule, trace, skipped)
     if pool.empty:
         return SelectionResult(
             Maybe.missing("流动性过滤后无候选"), None, tuple(trace), tuple(skipped)
@@ -349,6 +366,25 @@ def _filter_liquidity(
     spread = relative_spread(pool["bid"], pool["ask"])
     pool = pool.loc[spread.notna() & (spread <= cap)]
     trace.append(("价差上限", len(pool)))
+    return pool
+
+
+def _apply_bands(pool: pd.DataFrame, rule: SelectionRule, trace, skipped):
+    """可行域过滤。字段不可用时**跳过该约束并标明**，不因缺字段判为不合格。"""
+    if rule.delta_band is not None:
+        lo, hi = rule.delta_band
+        if pool["delta"].isna().all():
+            skipped.append("delta 区间（数据源不提供 delta）")
+        else:
+            pool = pool.loc[pool["delta"].abs().between(lo, hi)]
+            trace.append((f"delta∈[{lo},{hi}]", len(pool)))
+    if rule.iv_band is not None:
+        lo, hi = rule.iv_band
+        if pool["iv"].isna().all():
+            skipped.append("IV 区间（数据源不提供 iv）")
+        else:
+            pool = pool.loc[pool["iv"].between(lo, hi)]
+            trace.append((f"IV∈[{lo},{hi}]", len(pool)))
     return pool
 
 
