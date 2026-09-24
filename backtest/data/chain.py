@@ -19,7 +19,7 @@ from typing import Iterable, Protocol
 import pandas as pd
 
 from backtest.errors import DataQualityError
-from backtest.types import CHAIN_COLUMNS, ContractId
+from backtest.types import CHAIN_COLUMNS, ContractId, Right
 
 #: 合成链无法提供的字段用它标记。下游据此跳过相关判断，而不是当成 0。
 UNAVAILABLE = float("nan")
@@ -72,3 +72,24 @@ def relative_spread(bid: pd.Series | float, ask: pd.Series | float):
     """相对买卖价差 = (ask - bid) / mid。报价不可用时结果为 NaN。"""
     mid = (bid + ask) / 2.0
     return (ask - bid) / mid
+
+
+def delta_after_move(
+    spot: float, strike: float, dte_days: float, iv: float, rate: float,
+    right: Right, move: float, days_forward: int = 10,
+) -> float:
+    """标的动了 ``move``、又过了 ``days_forward`` 天之后，这张合约的 delta。
+
+    **链上没有这个字段，只能重新定价**——"如果涨 3% 会怎样"不是任何数据源会提供的
+    观测值。所以它放在数据层：模型推导出来的链上量本来就在这一层产生并打标，
+    上层只管消费，不关心数字是观测还是推导。
+
+    假设 IV 不变。现实里标的反弹时 IV 通常会掉，所以**这个数偏乐观**——
+    偏的方向是确定的，用的人知道就行。
+    """
+    from backtest.pricing import greeks
+
+    later = max(dte_days - days_forward, 1) / 365.0
+    moved = spot * (1.0 + move) if right is Right.CALL else spot * (1.0 - move)
+    g = greeks(moved, strike, later, rate, iv, 0.0, right)
+    return abs(float(g["delta"]))

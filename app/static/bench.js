@@ -208,7 +208,7 @@ function fieldHtml(f){
   const wide = f.kind === "code" || f.kind === "text";
   return `<div class="field${wide ? " wide" : ""}"${f.depends ? ` data-depends="${f.depends}"` : ""}>
       <label for="${id}"${f.help ? ` title="${esc(f.help)}"` : ""}>${f.label}${
-        f.unit ? `<span class="unit">${f.unit}</span>` : ""}</label>
+        f.unit ? ` <span class="unit">${esc(f.unit)}</span>` : ""}</label>
       ${ctl}
     </div>`;
 }
@@ -344,6 +344,61 @@ async function runBacktest(){
     $("runHint").textContent = `上次用时 ${((performance.now()-t0)/1000).toFixed(1)} 秒。`;
   }
 }
+
+/* ── 选合约参考表 ──────────────────────────────────────────
+   四个量在「虚值 × 期限」这个面上的形状，就是选合约直觉的内容。
+   看不见形状只能凭记忆猜。数字来自当日真实链，不是公式贴的静态表。   */
+const TRADEOFF_GRIDS = [
+  {key:"theta_pct_day",  title:"每天烧掉权利金的",  fmt:v=>(v*100).toFixed(1)+"%",
+   why:"标的不动的成本。短期虚值是断崖", worse:"high"},
+  {key:"breakeven_move", title:"回本需要动",        fmt:v=>(v*100).toFixed(1)+"%",
+   why:"朝论点方向。比这个小的论点撑不起这张合约", worse:"high"},
+  {key:"delta_now",      title:"现在的 delta",       fmt:v=>v.toFixed(2),
+   why:"入场时的方向暴露",               worse:null},
+  {key:"delta_if_move",  title:"动 3% 十天后 delta", fmt:v=>v.toFixed(2),
+   why:"论点兑现后暴露变多少 ← 比左边重要", worse:null},
+];
+
+async function loadTradeoff(){
+  const f = $("form");
+  const url = `/api/tradeoff?symbol=${encodeURIComponent(f.symbol.value)}`
+            + `&date=${encodeURIComponent(f.end.value)}`
+            + `&right=${(f.right?.value || "call").toUpperCase()[0]}`;
+  $("tradeoffBody").innerHTML = `<p class="hint">算着…</p>`;
+  try{
+    const r = await fetch(url);
+    const d = await r.json();
+    if(d.error){ $("tradeoffBody").innerHTML = `<p class="hint">${esc(d.error)}</p>`; return; }
+    $("toWhen").textContent = `${d.day} · ${d.symbol} ${d.spot.toFixed(2)}`;
+    $("tradeoffBody").innerHTML = TRADEOFF_GRIDS.map(g =>
+      gridTable(g, d.grids[g.key])).join("");
+  }catch(e){
+    $("tradeoffBody").innerHTML = `<p class="hint">取不到：${esc(e.message)}</p>`;
+  }
+}
+
+function gridTable(meta, g){
+  if(!g || !g.rows.length) return "";
+  // 颜色只编码"越大越差"的量。delta 类不上色——大小本身没有好坏，
+  // 上了色等于在暗示一个并不存在的判断。
+  const flat = g.rows.flatMap(r => r.values).filter(v => v != null);
+  const lo = Math.min(...flat), hi = Math.max(...flat);
+  const shade = v => {
+    if(meta.worse !== "high" || v == null || hi === lo) return "";
+    const t = (v - lo) / (hi - lo);
+    return ` style="background:rgba(156,74,52,${(t*0.28).toFixed(3)})"`;
+  };
+  return `<div class="to-grid">
+    <div class="to-h">${meta.title}<span class="to-why">${meta.why}</span></div>
+    <table><thead><tr><th>虚值</th>${g.cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead>
+    <tbody>${g.rows.map(r => `<tr><th>${r.label}</th>${
+      r.values.map(v => `<td${shade(v)}>${v == null ? "—" : meta.fmt(v)}</td>`).join("")
+    }</tr>`).join("")}</tbody></table></div>`;
+}
+
+$("tradeoffRef").addEventListener("toggle", e => {
+  if(e.target.open && !$("toWhen").textContent) loadTradeoff();
+});
 
 /* ── 本次运行的诊断 ────────────────────────────────────────
    与组件缺口的区别：这些每次都不一样，而且可查。只给个次数没用——

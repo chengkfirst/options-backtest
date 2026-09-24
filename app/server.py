@@ -25,7 +25,7 @@ import sys
 import traceback
 import warnings
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -61,6 +61,63 @@ SYNTHETIC_WARNING = (
     "这次用的是合成期权链：标的价格真实，期权价格由 Black-Scholes 生成。"
     "基于标的的结论（何时进场）可信；期权侧的结论（选什么 delta、止盈设多少）不可信。"
 )
+
+
+def _tradeoff(q: dict[str, str]) -> dict[str, Any]:
+    """某一天的「虚值 × 期限」取舍面。
+
+    从**当日真实链**上算，不是贴一张公式表——真实数据接进来之后它会自动反映真实的
+    偏斜与期限结构。所以它描述的始终是"你当下真的能买到什么"。
+    """
+    from backtest.api import _as_date
+    from backtest.config import BacktestConfig, ContractSpec, CostConfig, SyntheticChainConfig
+    from backtest.data.chain_registry import build_chain_source
+    from backtest.data.market import MarketData, VOL_PROXY_BY_SYMBOL
+    from backtest.research.tradeoff import tradeoff_grid
+    from backtest.selection.rules import enrich_chain
+
+    from datetime import timedelta
+
+    symbol = q.get("symbol", "QQQ")
+    asof = _as_date(q.get("date") or "2024-12-31")
+    # 配置区间必须**跨过**查询日往后延：合成链只在区间内生成到期日，
+    # 把结束日设成查询日的话，那天前面一个到期日都没有，链是空的。
+    start = asof - timedelta(days=400)
+    end = asof + timedelta(days=200)
+    cfg = BacktestConfig(
+        symbol=symbol, start=start, end=end, notional_capital=100_000.0,
+        contract=ContractSpec(symbol=symbol, vol_proxy=VOL_PROXY_BY_SYMBOL[symbol]),
+        costs=CostConfig(), synthetic=SyntheticChainConfig(),
+    )
+    market = MarketData(cfg)
+    sessions = [d for d in market.calendar.sessions if start <= d <= asof]
+    if not sessions:
+        raise ValueError(f"{start} 到 {asof} 之间没有交易日")
+    day = sessions[-1]          # 不晚于查询日的最后一个交易日
+    spot = market.spot(day)
+    if not spot.is_present:
+        raise ValueError(f"{day} 没有标的价格：{spot.reason}")
+
+    chain = build_chain_source(None, market, cfg)
+    enriched = enrich_chain(chain.snapshot(day), cfg, market.calendar, day)
+    grids = tradeoff_grid(enriched, spot=spot.unwrap(), right=q.get("right", "C"))
+
+    def as_rows(frame):
+        if frame.empty:
+            return {"cols": [], "rows": []}
+        return {
+            "cols": list(frame.columns),
+            "rows": [{"label": str(i), "values": [None if v != v else float(v)
+                                                  for v in frame.loc[i]]}
+                     for i in frame.index],
+        }
+
+    return {
+        "day": str(day), "symbol": symbol, "spot": spot.unwrap(),
+        "right": q.get("right", "C"),
+        "synthetic": True,
+        "grids": {k: as_rows(v) for k, v in grids.items()},
+    }
 
 
 def _describe_gaps() -> list[str]:
@@ -561,6 +618,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self._serve_index()
         if url.path == "/api/health":
             return self._json({"ok": True, **STORE.overview()})
+        if url.path == "/api/tradeoff":
+            try:
+                return self._json(_tradeoff(q))
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": f"{type(exc).__name__}: {exc}",
+                                   "detail": traceback.format_exc()}, 400)
         if url.path == "/api/meta":
             return self._json(self._meta())
         if url.path == "/api/runs":

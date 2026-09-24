@@ -50,6 +50,13 @@
          以前这里是 191 行手写 HTML、8 层嵌套，和 components.py 各说各的。 -->
     <div id="comps"></div>
 
+    <details class="ref" id="tradeoffRef">
+      <summary>选合约参考表<span class="ref-n" id="toWhen"></span></summary>
+      <p class="hint">按<b>虚值 × 期限</b>摊开。数字来自<b>当日真实链</b>，不是公式贴的表——
+        换成你的数据后会自动反映真实偏斜。</p>
+      <div id="tradeoffBody" class="to-body"></div>
+    </details>
+
     <details class="ref">
       <summary>自定义信号<span class="ref-n">选填</span></summary>
       <textarea name="signals_code" id="signalsCode" spellcheck="false" rows="7" class="code"
