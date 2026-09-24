@@ -267,3 +267,35 @@ textarea.code {
   width: 100%; box-sizing: border-box; white-space: pre; overflow-x: auto;
   tab-size: 4; line-height: 1.5; resize: vertical;
 }
+
+
+/* ── 生成出来的组件表单 ──────────────────────────────────
+   专业工具是数据密、文字稀。推理在文档和代码注释里，界面只给控件和取值。
+   改之前：26 个控件配 41 段说明、1240 字——说明比控件还多。 */
+.layer { margin: 14px 0 0; }
+.layer-head { padding: 0 0 5px; border-bottom: 1px solid var(--line); }
+.layer-n { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; color: var(--ink-3);
+           text-transform: uppercase; cursor: help; }
+.comp { padding: 8px 0 4px; border-bottom: 1px solid var(--line-soft); }
+.comp:last-child { border-bottom: 0; }
+.comp-h { margin: 0 0 5px; font-size: 12px; font-weight: 600; color: var(--ink);
+          display: flex; align-items: baseline; gap: 6px; cursor: help; }
+.comp-badge { font-size: 9.5px; font-weight: 400; padding: 0 4px; border-radius: 2px;
+              background: var(--sunk); color: var(--ink-3); }
+.comp-badge.missing { background: var(--warn-soft); color: var(--warn); }
+.comp-note { margin: 0; font-size: 11px; color: var(--ink-3); }
+.comp-note code { font-size: 10.5px; }
+.comp.by-plan { opacity: .55; }
+.comp.by-plan:hover { opacity: 1; }
+
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.field.wide { grid-column: 1 / -1; }
+.field > label { font-size: 10.5px; color: var(--ink-3); display: flex; gap: 4px;
+                 align-items: baseline; }
+.field .unit { color: var(--ink-3); opacity: .7; }
+.field input, .field select {
+  width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); color: var(--ink); font-variant-numeric: tabular-nums;
+}

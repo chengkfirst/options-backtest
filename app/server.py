@@ -125,6 +125,12 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                 "表达不了'这一笔用这套出场规则'——而那正是计划式的要点。"
             )
         kwargs["plan"] = compile_plan(code)
+    if payload.get("review_code", "").strip():
+        kwargs["review"] = compile_review(payload["review_code"])
+        if kwargs["engine"] != "event_driven":
+            raise ValueError("逐日复查只能用事件驱动引擎：成交表向量化算出场，没有「逐日」这个环节。")
+    if payload.get("strategy_mode") == "plan":
+        pass
     elif payload.get("entry_mode") == "code":
         code = payload.get("entry_code", "").strip()
         if not code:
@@ -311,6 +317,29 @@ def compile_plan(code: str):
     if fn is None or not callable(fn):
         raise ValueError(
             "计划代码里必须定义一个名为 plan 的函数。\n\n" + PLAN_HELP
+        )
+    return fn
+
+
+def compile_review(code: str):
+    """把用户写的逐日复查函数编出来。``Close`` / ``Reduce`` / ``Add`` 直接给到命名空间。"""
+    from backtest.engine.review import Add, Close, Reduce
+
+    namespace: dict[str, Any] = {"Close": Close, "Reduce": Reduce, "Add": Add}
+    try:
+        exec(compile(code, "<你写的逐日复查>", "exec"), namespace)
+    except SyntaxError as exc:
+        raise ValueError(f"复查代码语法错误，第 {exc.lineno} 行：{exc.msg}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"复查代码执行出错：{type(exc).__name__}: {exc}") from exc
+    fn = namespace.get("review")
+    if fn is None or not callable(fn):
+        raise ValueError(
+            "复查代码里必须定义一个名为 review 的函数：\n\n"
+            "def review(ctx, pos):\n"
+            "    if pos.mfe_so_far > 0.4 and pos.ratio < pos.mfe_so_far * 0.67:\n"
+            "        return Close('回吐三分之一', kind='take_profit')\n"
+            "    return None"
         )
     return fn
 
@@ -616,6 +645,7 @@ class Handler(SimpleHTTPRequestHandler):
     # ---- 辅助 ----
     def _meta(self) -> dict[str, Any]:
         from backtest.data.market import VOL_PROXY_BY_SYMBOL
+        from backtest.components import COUPLINGS, as_form_spec
         from backtest.signals.registry import DEFAULT_SIGNALS, describe_signals
 
         return {
@@ -624,6 +654,11 @@ class Handler(SimpleHTTPRequestHandler):
             # 名字之外还要含义、单位、窗口、坑。只给名字的话，界面只能把它们
             # 按字母表倒成一排，使用者得自己猜 rv_20 是按什么口径年化的。
             "signal_docs": describe_signals().fillna("").to_dict("records"),
+            # 界面的表单从这份定义生成。组件是什么、要填什么，只有这一处说法。
+            "form": as_form_spec(),
+            "couplings": [
+                {"a": a, "b": b, "why": why} for a, b, why in COUPLINGS
+            ],
             "gaps": _describe_gaps(),
             "defaults": {
                 "symbol": "QQQ", "start": "2020-01-01", "end": "2024-12-31",
@@ -635,8 +670,10 @@ class Handler(SimpleHTTPRequestHandler):
                 "target_vol": 0.20, "risk_pct_vt": 0.02, "kelly_fraction": 0.25,
                 "engine": "event_driven",
                 "max_concurrent": 5,
-                "strategy_mode": "plan",
-                "entry_mode": "code",
+                "strategy_mode": "params",
+                # 默认落在表达式而不是代码：代码框占掉一屏，会把后面的组件挤出视野。
+                # 要写代码的人自己切一下，比每个人一打开就看不到全貌好。
+                "entry_mode": "expr",
                 "plan_code": (
                     "def plan(ctx):\n"
                     "    \"\"\"一个函数同时决定买什么、买多少、怎么了结。\n"
@@ -680,6 +717,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "        return rsi.unwrap() < 25\n"
                     "    return rsi.unwrap() < 35\n"
                 ),
+                "review_code": "",
                 "signals_code": (
                     "# 自定义信号：名字 -> 函数(bars) -> Series\n"
                     "# 一律用 adjusted（复权价），否则除息日会出现虚假跳空\n"

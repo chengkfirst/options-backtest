@@ -72,15 +72,26 @@ async function loadMeta(){
   $("sigCount").textContent = `${(META.signal_docs || []).length} 个`;
   $("sigSearch").addEventListener("input", renderSignalRef);
   renderSignalRef();
-  $("planCode").value    = META.defaults.plan_code;
+  $("planCode").value = META.defaults.plan_code;
   $("planHelpBody").textContent = META.plan_help;
-  $("entryCode").value   = META.defaults.entry_code;
   $("signalsCode").value = META.defaults.signals_code;
-  $("codeHelpBody").textContent = META.code_help;
-  $("gapList").textContent = META.gaps.join("\n");
-  updateModeHint();
-  updateSizing();
+  switchMode();                     // 生成七个组件的表单
+  fillDefaults();
   updateSpanHint();
+}
+
+/* 后端给的默认值填进生成出来的控件里。代码类字段（entry_code / review_code）
+   的模板也在这里灌——它们的默认内容在后端，不在 HTML 里。 */
+function fillDefaults(){
+  const d = META.defaults || {};
+  for(const [k, v] of Object.entries(d)){
+    const el = $("f_" + k);
+    if(el && v != null && el.value === "") el.value = v;
+    else if(el && el.tagName !== "TEXTAREA" && v != null) el.value = v;
+  }
+  if($("f_entry_code") && !$("f_entry_code").value) $("f_entry_code").value = d.entry_code || "";
+  if($("f_review_code") && !$("f_review_code").value) $("f_review_code").value = d.review_code || "";
+  bindFields();
 }
 
 /* ── 信号参考 ──────────────────────────────────────────
@@ -121,13 +132,125 @@ function renderSignalRef(){
 
 /* 插到当前正在编辑的那个框的光标处，而不是覆盖整行——覆盖会丢掉已经写好的条件。 */
 function insertSignal(name){
-  const codeMode = !$("entryCode").closest("[data-pane]").hidden;
-  const el = codeMode ? $("entryCode") : $("entry");
+  // 插到「当前正在编辑的那个框」里。表单是生成的，所以按焦点找，
+  // 而不是按固定 id——后者在组件改动后会指向一个已经不存在的元素。
+  const el = document.activeElement?.matches?.("textarea, input[type=text]")
+    ? document.activeElement
+    : ($("f_entry_code") || $("planCode") || $("f_entry"));
+  if(!el) return;
   const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
   el.value = el.value.slice(0, a) + name + el.value.slice(b);
   el.focus();
   el.selectionStart = el.selectionEnd = a + name.length;
 }
+
+/* ── 七个组件的表单：从后端那份定义生成 ─────────────────────
+   以前这里是 191 行手写 HTML、8 层嵌套，而 backtest/components.py 里
+   已经定义了同一批东西。两处定义必然走样——改了组件含义忘了改界面，
+   或者界面上挂着一条早就不成立的说明，看起来还很权威。
+   现在只有一处定义，界面照着画。                                    */
+const STATUS_MARK = { done: "", partial: "部分", missing: "未做" };
+
+function renderComponents(){
+  const planMode = strategyMode() === "plan";
+  $("comps").innerHTML = (META.form || []).map(L => `
+    <section class="layer">
+      <header class="layer-head">
+        <span class="layer-n" title="${esc(L.what)}">${L.layer}</span>
+      </header>
+      ${L.components.map(c => compBlock(c, planMode)).join("")}
+    </section>`).join("");
+  bindFields();
+}
+
+function compBlock(c, planMode){
+  // 界面只给控件和取值。"这个组件在交易里干什么"、"为什么止损和仓位会打架"
+  // 这类推理属于文档和代码注释——每次打开都念一遍，读两遍就开始跳过，
+  // 而且把真正要看的数字挤走了。需要时鼠标悬停看 title。
+  const taken = planMode && c.in_plan;
+  const body = taken
+    ? `<p class="comp-note">→ <code>${c.in_plan}</code></p>`
+    : c.inputs.length
+      ? `<div class="fields">${c.inputs.map(fieldHtml).join("")}</div>`
+      : `<p class="comp-note">${esc(shortGap(c))}</p>`;
+  const badge = STATUS_MARK[c.status]
+    ? `<span class="comp-badge ${c.status}">${STATUS_MARK[c.status]}</span>` : "";
+  return `<article class="comp ${taken ? "by-plan" : ""}" data-comp="${c.key}">
+      <h4 class="comp-h" title="${esc(c.role)}">${c.name}${badge}</h4>
+      ${body}
+    </article>`;
+}
+
+/* 没有控件的组件要说一句为什么——但一句就够，不是一段。
+   完整的"缺什么、怎么找"在 需求.md 与 components.py 里。 */
+function shortGap(c){
+  const g = (c.gap || "").replace(/\*\*/g, "");
+  const first = g.split(/[；;。]/)[0] || "暂无可配置项";
+  return first.length > 26 ? first.slice(0, 26) + "…" : first;
+}
+
+function fieldHtml(f){
+  const id = "f_" + f.name;
+  const common = `id="${id}" name="${f.name}"` + (f.help ? ` title="${esc(f.help)}"` : "");
+  let ctl;
+  if(f.kind === "select"){
+    ctl = `<select ${common}>${f.options.map(([v, t]) =>
+      `<option value="${v}"${v === f.default ? " selected" : ""}>${t}</option>`).join("")}</select>`;
+  }else if(f.kind === "code"){
+    ctl = `<textarea ${common} rows="6" spellcheck="false" class="code"></textarea>`;
+  }else if(f.kind === "text"){
+    ctl = `<input type="text" ${common} value="${f.default ?? ""}" spellcheck="false" class="mono">`;
+  }else{
+    const step = f.kind === "int" ? 1 : (f.kind === "ratio" ? 0.05 : 100);
+    ctl = `<input type="number" ${common} value="${f.default ?? ""}" step="${step}"`
+        + (f.lo != null ? ` min="${f.lo}"` : "") + (f.hi != null ? ` max="${f.hi}"` : "") + `>`;
+  }
+  const wide = f.kind === "code" || f.kind === "text";
+  return `<div class="field${wide ? " wide" : ""}"${f.depends ? ` data-depends="${f.depends}"` : ""}>
+      <label for="${id}"${f.help ? ` title="${esc(f.help)}"` : ""}>${f.label}${
+        f.unit ? `<span class="unit">${f.unit}</span>` : ""}</label>
+      ${ctl}
+    </div>`;
+}
+
+/* depends：只显示当前取值下用得上的字段。全显示的话，后端分不清
+   "没填"和"填了但这个方法用不上"。 */
+function bindFields(){
+  const apply = () => {
+    document.querySelectorAll("[data-depends]").forEach(el => {
+      const [name, want] = el.dataset.depends.split("=");
+      const src = $("f_" + name);
+      el.hidden = !src || String(src.value) !== want;
+    });
+  };
+  $("comps").querySelectorAll("select").forEach(sel =>
+    sel.addEventListener("change", apply));
+  apply();
+}
+
+function strategyMode(){
+  return document.querySelector("[data-strat].on")?.dataset.strat || "params";
+}
+
+function switchMode(){
+  const planMode = strategyMode() === "plan";
+  $("planWrap").hidden = !planMode;
+  $("engineLock").hidden = !planMode;
+  $("engine").disabled = planMode;
+  if(planMode && $("engine").value !== "event_driven"){
+    $("engine").value = "event_driven";
+    $("engine").dispatchEvent(new Event("change"));
+  }
+  renderComponents();
+}
+document.querySelectorAll("[data-strat]").forEach(tab =>
+  tab.addEventListener("click", () => {
+    document.querySelectorAll("[data-strat]").forEach(t => t.classList.toggle("on", t === tab));
+    switchMode();
+  }));
+
+const esc = t => String(t).replace(/</g, "&lt;");
+const mark = t => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>");
 
 /* ── 表单 ── */
 function updateSpanHint(){
@@ -157,45 +280,8 @@ function updateEngineHint(){
 }
 updateEngineHint();
 
-$("strikeMode").addEventListener("change", e => {
-  const byDelta = e.target.value === "delta";
-  $("deltaWrap").hidden = !byDelta;
-  $("moneyWrap").hidden = byDelta;
-});
-document.querySelectorAll("[data-strat]").forEach(tab =>
-  tab.addEventListener("click", () => {
-    document.querySelectorAll("[data-strat]").forEach(t => t.classList.toggle("on", t === tab));
-    document.querySelectorAll("[data-strat-pane]").forEach(p =>
-      p.hidden = p.dataset.stratPane !== tab.dataset.strat);
-    updateModeHint();
-  }));
 
-document.querySelectorAll("[data-mode]").forEach(tab =>
-  tab.addEventListener("click", () => {
-    document.querySelectorAll("[data-mode]").forEach(t => t.classList.toggle("on", t === tab));
-    document.querySelectorAll("[data-pane]").forEach(p =>
-      p.hidden = p.dataset.pane !== tab.dataset.mode);
-  }));
-$("codeHelp").addEventListener("click", () => {
-  const b = $("codeHelpBody"); b.hidden = !b.hidden;
-});
-/* ── ⑥ 仓位 ──────────────────────────────────────────────
-   以前这里只有一个"每次张数"输入框，而且摆在"标的与区间"里——位置和语义都错了。
-   固定张数是所有方法里最差的一个：权益翻倍之后同样 1 张只占一半风险，
-   权益腰斩之后又变成两倍。它作为默认值只是因为最好懂，不是因为它对。   */
-const SIZING_WHY = {
-  risk_pct: "每笔亏光时正好亏掉权益的这个比例。买方最大损失就是权利金，所以这个数是确定的。",
-  fixed: "最好懂，也最差：随着权益变化，每笔的风险占比会漂移，而你不会察觉。",
-  fixed_notional: "投入固定，但风险不固定——便宜的合约会买到很多张。回测里容易爆仓。",
-  vol_target: "标的波动大时少买。它控的是组合波动，不是单笔亏损。",
-  kelly: "参数用回测期内已了结的交易估——实盘当下你不知道未来的胜率，所以结果偏乐观，只能当上界看。",
-};
-function updateSizing(){
-  const m = $("sizingMethod").value;
-  document.querySelectorAll("[data-sz]").forEach(el => { el.hidden = el.dataset.sz !== m; });
-  $("sizingHint").textContent = SIZING_WHY[m] || "";
-}
-$("sizingMethod").addEventListener("change", updateSizing);
+
 
 $("planHelp").addEventListener("click", () => {
   const b = $("planHelpBody"); b.hidden = !b.hidden;
@@ -203,46 +289,24 @@ $("planHelp").addEventListener("click", () => {
 
 /* 计划模式只能配事件驱动。与其让人点了跑回测才吃一个错误，不如当场说清楚，
    并且自动把引擎切过去——这不是"帮你做决定"，是这两个选项本来就绑死的。 */
-function updateModeHint(){
-  const planMode = document.querySelector("[data-strat].on")?.dataset.strat === "plan";
-  // 组件本身**不隐藏**，只切换它显示哪一面。藏起来等于把使用者的组件地图弄丢了
-  // ——实测就是这样：默认视图下七个组件有五个根本看不见。
-  document.querySelectorAll("[data-comp]").forEach(fs => {
-    fs.querySelector(".comp-plan").hidden   = !planMode;
-    fs.querySelector(".comp-params").hidden = planMode;
-    fs.classList.toggle("by-plan", planMode);
-  });
-  document.querySelectorAll('[data-strat-pane="params"]').forEach(el => { el.hidden = planMode; });
-  if(planMode && $("engine").value !== "event_driven"){
-    $("engine").value = "event_driven";
-    $("engine").dispatchEvent(new Event("change"));
-    notice("交易计划只能用事件驱动引擎，已替你切过去。");
-  }
-  $("engine").disabled = planMode;
-  $("engineLock").hidden = !planMode;
-  // 计划模式下仓位由计划自己给（risk_pct / notional / contracts），
-  // 再摆一套参数框出来只会让人不知道哪个生效。
-  updateSizing();
-}
 
 function formPayload(){
   const f = $("form"), o = {};
   for(const el of f.elements) if(el.name) o[el.name] = el.value;
-  // 两层 tab：外层选策略模式（计划 / 参数），内层选入场写法（代码 / 表达式）。
-  // 以前只有一个 .tab.on，现在必须分别取——取错会把计划当参数发出去，
-  // 而后端收到的是一份"看起来完整"的参数，不会报错，只会跑出另一个策略的结果。
-  o.strategy_mode = document.querySelector("[data-strat].on")?.dataset.strat || "params";
-  // 只发当前方法真正用到的参数。全发的话后端分不清"没填"和"填了但不用这个方法"。
+  o.strategy_mode = strategyMode();
+  // 入场：代码框有内容就按代码走，否则按表达式
+  // entry_mode 现在是表单里的真字段（二选一），不再靠"代码框空不空"来猜。
+  // 仓位：只发当前方法用得上的参数。全发的话后端分不清"没填"和"用不上"
   const m = o.sizing_method || "risk_pct";
   o.sizing = { method: m, ...(
     m === "risk_pct"       ? { risk_pct: +o.risk_pct } :
     m === "fixed"          ? { contracts: +o.quantity } :
     m === "fixed_notional" ? { notional: +o.notional } :
-    m === "vol_target"     ? { target_vol: +o.target_vol, risk_pct: +o.risk_pct_vt } :
+    m === "vol_target"     ? { target_vol: +o.target_vol, risk_pct: 0.02 } :
                              { kelly_fraction: +o.kelly_fraction }) };
-  o.entry_mode    = document.querySelector("[data-mode].on")?.dataset.mode  || "code";
   return o;
 }
+
 
 /* ── 跑 ── */
 $("run").addEventListener("click", runBacktest);

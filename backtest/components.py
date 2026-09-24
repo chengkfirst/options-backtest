@@ -37,7 +37,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 Layer = Literal["决定之前", "一笔的决定", "持仓期间", "组合层"]
 Status = Literal["done", "partial", "missing"]
@@ -56,6 +56,29 @@ Origin = Literal["configured", "discovered"]
 
 
 @dataclass(frozen=True, slots=True)
+class Field:
+    """一个组件要录入的一个字段。
+
+    **界面从这里生成，不手写 HTML。** 手写的话，这份定义和界面会各说各的：
+    改了组件的含义却忘了改界面，或者反过来。实测踩过——界面上挂着一条早就
+    不成立的说明，看起来还很权威。
+    """
+
+    name: str                       # 表单字段名，要与后端 payload 对得上
+    label: str
+    kind: str                       # number / ratio / int / select / text / code
+    default: Any = None
+    unit: str = ""
+    help: str = ""
+    options: tuple[tuple[str, str], ...] = ()     # select：(值, 显示文字)
+    #: 仅当另一字段取某值时才显示，写成 "字段名=值"。
+    depends: str = ""
+    #: 取值范围，用于校验与 number 控件。
+    lo: float | None = None
+    hi: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Component:
     key: str
     name: str
@@ -71,6 +94,11 @@ class Component:
     gap: str = ""
     #: ``origin`` 为 discovered 时：**怎么找**。没有这个，组件就只能靠拍脑袋。
     how_to_find: str = ""
+    #: 这个组件要录入什么。界面按它生成表单。空元组表示这个组件当前无法配置。
+    inputs: tuple[Field, ...] = ()
+    #: 这个组件在「交易计划」模式下由计划函数的哪一部分决定。
+    #: 有值就说明它和别的组件是联动的，分开填会打架。
+    in_plan: str = ""
 
 
 COMPONENTS: tuple[Component, ...] = (
@@ -98,12 +126,38 @@ COMPONENTS: tuple[Component, ...] = (
         role="决定时点——就是今天，不是上周也不是下周。",
         output="做 / 不做",
         status="done",
+        in_plan="return None 之前的那段判断",
+        inputs=(
+            # 同一件事两种填法，二选一。两个框同时摆出来的话，使用者不知道
+            # 哪个生效，而后端只能猜——猜错就是跑了另一个策略。
+            Field("entry_mode", "怎么写", "select", "expr", options=(
+                ("expr", "表达式"), ("code", "代码"))),
+            Field("entry", "入场条件", "text", "close < sma_20 * 0.98",
+                  depends="entry_mode=expr",
+                  help="只支持比较、and/or/not 与四则运算"),
+            Field("entry_code", "entry(view)", "code", "",
+                  depends="entry_mode=code",
+                  help="返回 True 就入场。缺失信号一律不入场"),
+        ),
     ),
     Component(
         "select", "②b 选合约", "一笔的决定",
         role="把「我看多」落成「具体哪一张」。方向之外还决定了这笔的希腊字母暴露。",
         output="一张合约",
         status="done",
+        in_plan="Plan(contract=…)",
+        inputs=(
+            Field("right", "类型", "select", "call",
+                  options=(("call", "看涨 call"), ("put", "看跌 put"))),
+            Field("dte", "目标剩余天数", "int", 30, unit="日历日", lo=3, hi=200,
+                  help="按日历日算，与市场惯例一致"),
+            Field("strike_mode", "怎么定行权价", "select", "delta",
+                  options=(("delta", "按目标 delta"), ("moneyness", "按价值状态"))),
+            Field("delta", "目标 delta", "ratio", 0.30, lo=0.05, hi=0.95,
+                  depends="strike_mode=delta"),
+            Field("moneyness", "虚值比例", "ratio", 0.05, lo=-0.5, hi=0.5,
+                  depends="strike_mode=moneyness", help="正数为虚值"),
+        ),
     ),
     Component(
         "take_profit", "③ take profit", "一笔的决定",
@@ -111,6 +165,11 @@ COMPONENTS: tuple[Component, ...] = (
              "你为什么进，决定了什么算「这事发生了」。",
         output="兑现点",
         status="partial",
+        in_plan="Plan(take_profit=…)",
+        inputs=(
+            Field("take_profit", "止盈", "ratio", 1.0, unit="×", lo=0,
+                  help="相对入场价。1.0 = 赚 100% 就走"),
+        ),
         gap="逻辑完整，但数值在合成链上不可信；MFE 分布可用于定档",
     ),
     Component(
@@ -119,6 +178,14 @@ COMPONENTS: tuple[Component, ...] = (
              "这个区别决定了它该放在哪里。",
         output="论据失效点",
         status="partial",
+        in_plan="Plan(stop_loss=…)",
+        inputs=(
+            Field("stop_loss", "止损", "ratio", 0.5, unit="×", lo=0, hi=1,
+                  help="相对入场价。0.5 = 亏 50% 就走。买方最大损失就是权利金"),
+            Field("hold_days", "最多持有", "int", 10, unit="交易日", lo=1, hi=120),
+            Field("dte_floor", "剩余到期下限", "int", 5, unit="交易日", lo=2, hi=60,
+                  help="到这个剩余期限强制了结，避免被拖到到期"),
+        ),
         gap="逻辑完整，但数值在合成链上不可信；MAE 分布可用于定档，注意截断",
     ),
     Component(
@@ -127,6 +194,12 @@ COMPONENTS: tuple[Component, ...] = (
              "减仓、展期、对冲掉某一段风险。",
         output="减仓 / 展期 / 维持",
         status="partial",
+        inputs=(
+            Field("review_code", "逐日复查", "code", "",
+                  help="定义 review(ctx, pos)。每天对每个持仓问一遍，返回 "
+                       "Close / Reduce / Add 或 None。跟踪止盈、论据失效、"
+                       "分批减仓都写在这里。"),
+        ),
         origin="discovered",
         gap="机制有了（逐日复查可以减仓 / 动态平仓），但**怎么找**还没有——"
             "哪些信号代表论据开始失效，得从轨迹数据里研究出来；展期未实现",
@@ -150,6 +223,29 @@ COMPONENTS: tuple[Component, ...] = (
              "风险预算 ÷ 止损距离 = 规模。",
         output="张数",
         status="partial",
+        in_plan="Plan(risk_pct / notional / contracts)",
+        inputs=(
+            Field("sizing_method", "怎么定规模", "select", "risk_pct", options=(
+                ("risk_pct", "每笔风险占权益固定比例"),
+                ("fixed", "固定张数"),
+                ("fixed_notional", "每笔固定金额"),
+                ("vol_target", "波动率目标"),
+                ("kelly", "分数 Kelly"),
+            )),
+            Field("risk_pct", "每笔风险", "ratio", 0.02, unit="× 权益", lo=0.001, hi=1,
+                  depends="sizing_method=risk_pct",
+                  help="每笔亏光时正好亏掉权益的这个比例"),
+            Field("quantity", "张数", "int", 1, lo=1, hi=50, depends="sizing_method=fixed",
+                  help="最好懂也最差：权益变化后风险占比会漂移，而你不会察觉"),
+            Field("notional", "每笔投入", "number", 5000, unit="美元", lo=100,
+                  depends="sizing_method=fixed_notional",
+                  help="投入固定但风险不固定——便宜的合约会买到很多张"),
+            Field("target_vol", "目标年化波动", "ratio", 0.20, lo=0.01, hi=2,
+                  depends="sizing_method=vol_target", help="控的是组合波动，不是单笔亏损"),
+            Field("kelly_fraction", "用几分之一 Kelly", "ratio", 0.25, lo=0.01, hi=1,
+                  depends="sizing_method=kelly",
+                  help="参数用回测期内已了结的交易估——实盘当下你不知道未来胜率，只能当上界看"),
+        ),
         gap="计划式下可按 risk_pct / notional 定；参数模式仍是独立的固定张数，会与止损打架",
     ),
     Component(
@@ -185,6 +281,29 @@ LAYERS: tuple[tuple[Layer, str], ...] = (
     ("持仓期间", "逐日复查：论据还成立吗？不成立到什么程度？"),
     ("组合层", "跨头寸的限额与对冲。"),
 )
+
+
+def as_form_spec() -> list[dict]:
+    """界面要的那份定义：四层、每层的组件、每个组件的录入字段。
+
+    **界面从这里生成，不手写。** 这样"这个组件是干什么的"只有一处定义，
+    改了自然同步；手写的话两边一定会走样。
+    """
+    from dataclasses import asdict
+
+    out = []
+    for layer, what in LAYERS:
+        out.append({
+            "layer": layer,
+            "what": what,
+            "components": [{
+                "key": c.key, "name": c.name, "role": c.role, "output": c.output,
+                "status": c.status, "origin": c.origin, "gap": c.gap,
+                "how_to_find": c.how_to_find, "in_plan": c.in_plan,
+                "inputs": [asdict(f) for f in c.inputs],
+            } for c in by_layer(layer)],
+        })
+    return out
 
 
 def by_layer(layer: Layer) -> tuple[Component, ...]:

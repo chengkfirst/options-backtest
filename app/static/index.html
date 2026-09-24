@@ -17,10 +17,7 @@
 
   <form id="form" class="panel-body">
 
-    <!-- 跑什么：标的、区间、引擎压成一条。
-         这三样是配置样板，不是策略。原先它们占满整个第一屏，把七个组件全挤到
-         屏幕外——页面该以策略开头，不是以配置开头。
-         引擎在计划模式下还是锁住的，更不该摆在最显眼的位置。 -->
+    <!-- 跑什么：标的、区间、引擎。配置样板，压成两行，不和策略抢位置。 -->
     <div class="setup-bar">
       <label class="sb narrow">标的<select name="symbol" id="symbol"></select></label>
       <label class="sb">起<input type="date" name="start" value="2020-01-01"></label>
@@ -34,177 +31,41 @@
       <label class="sb narrow" id="concurrentWrap">并发上限<input type="number" name="max_concurrent" value="5" min="1" max="50"></label>
     </div>
     <p class="hint setup-note"><span id="spanHint"></span>
-      <span id="engineLock" hidden>引擎已锁定为事件驱动——计划里每笔有自己的出场规则，成交表表达不了。</span></p>
-    <details class="ref"><summary>两个引擎的区别</summary>
-      <p class="hint" id="engineHint"></p></details>
+      <span id="engineLock" hidden>计划模式下引擎锁定为事件驱动。</span></p>
 
-    <!-- 四层结构。不是七个平等的框——那是按"组件表"排的，不是按交易里发生的
-         顺序排的。写清楚每个组件在交易里干什么之后，联动关系是自己冒出来的：
-         ④止损距离 × 风险预算 = ⑥规模（同一个数的两面）；②入场理由决定③④的位置；
-         ①只调制不下单；⑤是④的连续版；⑦根本不在单笔这一层。 -->
-
-    <div class="layer" data-layer="1">
-      <div class="layer-head"><span class="layer-n">决定之前</span>
-        <span class="layer-what">① regime — 今天该不该做，用哪一档</span></div>
-      <fieldset class="grp comp" data-state="partial">
-        <p class="gap">规则型分类（VIX / 期限结构 / 趋势）后端已有，<b>还没接成调制器</b>。
-          现在请在下面的计划里自己判断。</p>
-      </fieldset>
+    <!-- 策略怎么写：逐个规则填，还是一个函数一起定。 -->
+    <div class="tabs mode-tabs" role="tablist">
+      <button type="button" class="tab on" data-strat="params" role="tab">逐个规则</button>
+      <button type="button" class="tab" data-strat="plan" role="tab">一个计划函数</button>
     </div>
 
-    <div class="layer on" data-layer="2">
-      <div class="layer-head"><span class="layer-n">一笔交易的决定</span>
-        <span class="layer-what">② 时点 · ②b 选什么 · ③④ 了结点 · ⑥ 多大</span></div>
-
-      <div class="tabs" role="tablist">
-        <button type="button" class="tab on" data-strat="plan" role="tab">交易计划</button>
-        <button type="button" class="tab" data-strat="params" role="tab">参数模式</button>
-      </div>
-
-      <div data-strat-pane="plan">
-        <fieldset class="grp comp" data-state="ready">
-          <textarea name="plan_code" id="planCode" spellcheck="false" rows="18" class="code"></textarea>
-          <p class="hint">
-            一个函数同时决定<b>买什么、买多少、怎么了结</b>——因为在真实交易里这是一个判断。
-            返回 <code>None</code> 就是今天不做。
-            <button type="button" class="link" id="planHelp">ctx 里有什么</button>
-          </p>
-          <pre class="help" id="planHelpBody" hidden></pre>
-          <p class="hint"><code>tag</code> 会存进每笔明细，事后直接按它分类对比——
-            分类口径来自你下单时的真实判断，不是事后按结果硬分的。</p>
-        </fieldset>
-      </div>
-
-      <!-- 参数模式的说明。组件本身不藏——见下面每个 fieldset 的双态设计。 -->
-      <p class="hint mode-why" data-strat-pane="params" hidden>参数模式把一个判断拆成互不相干的常数，
-        表达不了联动。它只为一件事存在：<b>扫参数</b>（计划式扫不了）。</p>
-
-      <!-- 七个组件**任何模式下都在**。计划模式下它们不消失，只是换成"由计划决定"，
-           因为这是使用者的地图——藏起来等于把地图弄丢了。 -->
-
-      <fieldset class="grp comp" data-comp="entry" data-state="done">
-        <legend><b>②</b> Entry　入场<span class="comp-role">决定时点</span></legend>
-        <div class="comp-plan">由计划里的 <code>return None</code> 决定</div>
-        <div class="comp-params" hidden>
-          <div class="tabs" role="tablist">
-            <button type="button" class="tab on" data-mode="code" role="tab">写代码</button>
-            <button type="button" class="tab" data-mode="expr" role="tab">单行表达式</button>
-          </div>
-          <div data-pane="code">
-            <textarea name="entry_code" id="entryCode" spellcheck="false" rows="10" class="code"></textarea>
-            <p class="hint">定义 <code>entry(view)</code>，返回 <code>True</code> 就入场。缺失信号一律不入场。
-              <button type="button" class="link" id="codeHelp">能用什么</button></p>
-            <pre class="help" id="codeHelpBody" hidden></pre>
-          </div>
-          <div data-pane="expr" hidden>
-            <input type="text" name="entry" id="entry" value="close < sma_20 * 0.98" spellcheck="false" class="mono">
-            <p class="hint">只支持比较、<code>and/or/not</code> 与四则运算。</p>
-          </div>
-        </div>
-      </fieldset>
-
-      <fieldset class="grp comp" data-comp="select" data-state="done">
-        <legend><b>②b</b> 选合约<span class="comp-role">落成具体哪一张</span></legend>
-        <div class="comp-plan">由计划里的 <code>Plan(contract=…)</code> 决定</div>
-        <div class="comp-params" hidden>
-          <div class="row">
-            <label>类型<select name="right"><option value="call">看涨 call</option><option value="put">看跌 put</option></select></label>
-            <label>剩余天数 DTE<input type="number" name="dte" value="30" min="3" max="200"></label>
-          </div>
-          <div class="row">
-            <label>按<select name="strike_mode" id="strikeMode">
-              <option value="delta">目标 delta</option><option value="moneyness">价值状态</option></select></label>
-            <label id="deltaWrap">delta<input type="number" name="delta" value="0.30" step="0.05" min="0.05" max="0.95"></label>
-            <label id="moneyWrap" hidden>虚值比例<input type="number" name="moneyness" value="0.05" step="0.01" min="-0.5" max="0.5"></label>
-          </div>
-        </div>
-      </fieldset>
-
-      <fieldset class="grp comp" data-comp="exits" data-state="partial">
-        <legend><b>③④</b> 止盈 ／ 止损<span class="comp-role">兑现点 · 论据失效点</span></legend>
-        <div class="comp-plan">由计划里的 <code>take_profit</code> / <code>stop_loss</code> 决定；
-          想按当时情况动态调整，用下面的<b>持仓期间</b>那层</div>
-        <div class="comp-params" hidden>
-          <div class="row">
-            <label>止盈<input type="number" name="take_profit" value="1.0" step="0.25" min="0"><span class="unit">×</span></label>
-            <label>止损<input type="number" name="stop_loss" value="0.5" step="0.1" min="0" max="1"><span class="unit">×</span></label>
-          </div>
-          <div class="row">
-            <label>最多持有<input type="number" name="hold_days" value="10" min="1" max="120"><span class="unit">交易日</span></label>
-            <label>剩余到期下限<input type="number" name="dte_floor" value="5" min="2" max="60"><span class="unit">交易日</span></label>
-          </div>
-          <p class="hint">四条同时生效，<b>最早触发的赢</b>。止盈 1.0 = 赚 100%。</p>
-        </div>
-      </fieldset>
-
-      <fieldset class="grp comp" data-comp="sizing" data-state="partial">
-        <legend><b>⑥</b> Positioning　仓位<span class="comp-role">这个判断值多少钱</span></legend>
-        <div class="comp-plan">由计划里的 <code>risk_pct</code> / <code>notional</code> / <code>contracts</code> 决定</div>
-        <div class="comp-params" hidden>
-          <label class="full">怎么定规模
-            <select name="sizing_method" id="sizingMethod">
-              <option value="risk_pct">每笔风险占权益的固定比例</option>
-              <option value="fixed">固定张数</option>
-              <option value="fixed_notional">每笔固定金额</option>
-              <option value="vol_target">波动率目标（标的波动大时少买）</option>
-              <option value="kelly">分数 Kelly</option>
-            </select></label>
-          <div class="row" data-sz="risk_pct">
-            <label>每笔风险<input type="number" name="risk_pct" value="0.02" step="0.005" min="0.001" max="1"><span class="unit">× 权益</span></label>
-          </div>
-          <div class="row" data-sz="fixed" hidden>
-            <label>张数<input type="number" name="quantity" value="1" min="1" max="50"></label>
-          </div>
-          <div class="row" data-sz="fixed_notional" hidden>
-            <label>每笔投入<input type="number" name="notional" value="5000" step="1000" min="100"><span class="unit">美元</span></label>
-          </div>
-          <div class="row" data-sz="vol_target" hidden>
-            <label>目标年化波动<input type="number" name="target_vol" value="0.20" step="0.05" min="0.01" max="2"></label>
-            <label>基准风险<input type="number" name="risk_pct_vt" value="0.02" step="0.005" min="0.001" max="1"></label>
-          </div>
-          <div class="row" data-sz="kelly" hidden>
-            <label>用几分之一 Kelly<input type="number" name="kelly_fraction" value="0.25" step="0.05" min="0.01" max="1"></label>
-          </div>
-          <p class="hint" id="sizingHint"></p>
-          <p class="hint coupling"><b>止损距离 × 风险预算 = 规模。</b>三个里定了两个第三个就定了，
-            分开填必然打架——这正是交易计划模式存在的理由。</p>
-        </div>
-      </fieldset>
-
-      <fieldset class="grp comp" data-state="ready">
-        <legend><b>②c</b> 自定义信号<span class="opt">选填</span></legend>
-        <details>
-          <summary>内置的不够用时，自己加</summary>
-          <textarea name="signals_code" id="signalsCode" spellcheck="false" rows="7" class="code"></textarea>
-          <p class="hint">定义 <code>SIGNALS</code> 字典。一律用 <code>adjusted</code>（复权价）。</p>
-        </details>
-      </fieldset>
-
-      <details class="ref">
-        <summary>信号参考<span class="ref-n" id="sigCount"></span></summary>
-        <input type="search" id="sigSearch" placeholder="搜信号名或含义…" class="ref-search">
-        <div id="sigRef" class="sig-ref"></div>
-        <p class="hint">点一下插到光标处。带 <span class="sig-warn">!</span> 的把鼠标停上去看注意事项。</p>
-      </details>
+    <!-- 计划模式下才显示的那个代码框 -->
+    <div id="planWrap" hidden>
+      <textarea name="plan_code" id="planCode" spellcheck="false" rows="20" class="code"></textarea>
+      <p class="hint"><button type="button" class="link" id="planHelp">ctx 里有什么</button></p>
+      <pre class="help" id="planHelpBody" hidden></pre>
     </div>
 
-    <div class="layer" data-layer="3">
-      <div class="layer-head"><span class="layer-n">持仓期间</span>
-        <span class="layer-what">⑤ headwind — 论据部分失效时怎么办</span></div>
-      <fieldset class="grp comp" data-state="missing">
-        <p class="gap"><b>还没有。</b>现在仓位只能一次性了结，没有减仓和展期。
-          止损是非黑即白的，而 headwind 是中间地带——这是四层里唯一全空的一层。</p>
-      </fieldset>
-    </div>
+    <!-- 七个组件：**从后端那份定义生成**，不手写。
+         以前这里是 191 行手写 HTML、8 层嵌套，和 components.py 各说各的。 -->
+    <div id="comps"></div>
 
-    <div class="layer" data-layer="4">
-      <div class="layer-head"><span class="layer-n">组合层</span>
-        <span class="layer-what">⑦ hedge — 不想承担的风险怎么剥离</span></div>
-      <fieldset class="grp comp" data-state="partial">
-        <p class="gap">敞口限额、回撤熔断、压力测试、剔除对冲对照后端已有，<b>界面还没接</b>。
-          多腿（价差、iron condor）没做。</p>
-      </fieldset>
-    </div>
+    <details class="ref">
+      <summary>自定义信号<span class="ref-n">选填</span></summary>
+      <textarea name="signals_code" id="signalsCode" spellcheck="false" rows="7" class="code"
+        title="定义 SIGNALS 字典。一律用 adjusted（复权价），否则除息日会出现虚假跳空。"></textarea>
+    </details>
+
+    <details class="ref">
+      <summary>信号参考<span class="ref-n" id="sigCount"></span></summary>
+      <input type="search" id="sigSearch" placeholder="搜信号名或含义…" class="ref-search">
+      <div id="sigRef" class="sig-ref"></div>
+    </details>
+
+    <details class="ref">
+      <summary>两个引擎的区别</summary>
+      <p class="hint" id="engineHint"></p>
+    </details>
 
   </form>
 
