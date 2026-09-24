@@ -229,3 +229,41 @@ footer code{font-family:var(--mono);font-size:11.5px}
   display: flex; gap: 8px; padding: 3px 0; font-size: 11px; color: var(--ink-3);
   border-top: 1px solid var(--line-soft);
 }
+
+/* ── 组件的双态 ─────────────────────────────────────────
+   计划模式下组件不消失，只把控件换成一句"由计划决定"。
+   原先是整块藏起来，结果默认视图里七个组件五个看不见——地图丢了。 */
+.comp > legend .comp-role {
+  margin-left: 8px; font-size: 10.5px; font-weight: 400; color: var(--ink-3);
+}
+.comp-plan {
+  font-size: 11.5px; color: var(--ink-3); padding: 5px 0 2px;
+}
+.comp-plan code { font-size: 11px; color: var(--ink-2); }
+.comp.by-plan { opacity: .72; }
+.comp.by-plan:hover { opacity: 1; }
+
+/* ── 顶部配置条 ────────────────────────────────────────
+   标的/区间/引擎是配置样板，不是策略。原先它们各占一个 fieldset，
+   加起来吃掉整个第一屏，七个组件全被挤到屏幕外。 */
+.setup-bar { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 7px; }
+.sb { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; color: var(--ink-3); flex: 1; }
+.sb.grow { flex: 2; }
+.sb select, .sb input {
+  width: 100%; padding: 4px 6px; font-size: 12px; box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); color: var(--ink);
+}
+.setup-note { margin: 0 0 12px; min-height: 1em; }
+
+/* 标的只有四个字母，不该和日期抢宽度——三等分会把它挤成 "QQ"。
+   注意必须挑出"标的"那一个，用 :first-child 会把第二行的「引擎」一起压窄
+   （踩过：引擎变成了"事件驱"）。 */
+.setup-bar .sb.narrow { flex: 0 0 5.5em; }
+.setup-bar .sb.grow   { flex: 3; }
+
+/* 代码框：横向不截断。写策略时看不见行尾是硬伤。 */
+textarea.code {
+  width: 100%; box-sizing: border-box; white-space: pre; overflow-x: auto;
+  tab-size: 4; line-height: 1.5; resize: vertical;
+}

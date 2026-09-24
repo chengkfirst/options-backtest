@@ -17,32 +17,26 @@
 
   <form id="form" class="panel-body">
 
-    <fieldset class="grp">
-      <legend>引擎</legend>
-      <p class="hint" id="engineLock" hidden>交易计划模式下锁定为事件驱动——
-        计划里每笔有自己的出场规则，成交表引擎表达不了。</p>
-      <label class="full">
-        <select name="engine" id="engine">
-          <option value="trade_table">成交表 — 快，扫参数用</option>
-          <option value="event_driven" selected>事件驱动 — 有组合状态</option>
-        </select>
-      </label>
-      <label id="concurrentWrap">并发持仓上限
-        <input type="number" name="max_concurrent" value="5" min="1" max="50"></label>
-      <p class="hint" id="engineHint"></p>
-    </fieldset>
-
-    <fieldset class="grp">
-      <legend>标的与区间</legend>
-      <div class="row">
-        <label>标的<select name="symbol" id="symbol"></select></label>
-      </div>
-      <div class="row">
-        <label>起<input type="date" name="start" value="2020-01-01"></label>
-        <label>止<input type="date" name="end" value="2024-12-31"></label>
-      </div>
-      <p class="hint" id="spanHint"></p>
-    </fieldset>
+    <!-- 跑什么：标的、区间、引擎压成一条。
+         这三样是配置样板，不是策略。原先它们占满整个第一屏，把七个组件全挤到
+         屏幕外——页面该以策略开头，不是以配置开头。
+         引擎在计划模式下还是锁住的，更不该摆在最显眼的位置。 -->
+    <div class="setup-bar">
+      <label class="sb narrow">标的<select name="symbol" id="symbol"></select></label>
+      <label class="sb">起<input type="date" name="start" value="2020-01-01"></label>
+      <label class="sb">止<input type="date" name="end" value="2024-12-31"></label>
+    </div>
+    <div class="setup-bar">
+      <label class="sb grow">引擎<select name="engine" id="engine">
+        <option value="trade_table">成交表 — 快，扫参数用</option>
+        <option value="event_driven" selected>事件驱动 — 有组合状态</option>
+      </select></label>
+      <label class="sb narrow" id="concurrentWrap">并发上限<input type="number" name="max_concurrent" value="5" min="1" max="50"></label>
+    </div>
+    <p class="hint setup-note"><span id="spanHint"></span>
+      <span id="engineLock" hidden>引擎已锁定为事件驱动——计划里每笔有自己的出场规则，成交表表达不了。</span></p>
+    <details class="ref"><summary>两个引擎的区别</summary>
+      <p class="hint" id="engineHint"></p></details>
 
     <!-- 四层结构。不是七个平等的框——那是按"组件表"排的，不是按交易里发生的
          顺序排的。写清楚每个组件在交易里干什么之后，联动关系是自己冒出来的：
@@ -81,12 +75,17 @@
         </fieldset>
       </div>
 
-      <div data-strat-pane="params" hidden>
-        <p class="hint mode-why">参数模式把一个判断拆成互不相干的常数，表达不了联动。
-          它只为一件事存在：<b>扫参数</b>（计划式扫不了）。</p>
+      <!-- 参数模式的说明。组件本身不藏——见下面每个 fieldset 的双态设计。 -->
+      <p class="hint mode-why" data-strat-pane="params" hidden>参数模式把一个判断拆成互不相干的常数，
+        表达不了联动。它只为一件事存在：<b>扫参数</b>（计划式扫不了）。</p>
 
-        <fieldset class="grp comp" data-state="ready">
-          <legend><b>②</b> Entry　入场</legend>
+      <!-- 七个组件**任何模式下都在**。计划模式下它们不消失，只是换成"由计划决定"，
+           因为这是使用者的地图——藏起来等于把地图弄丢了。 -->
+
+      <fieldset class="grp comp" data-comp="entry" data-state="done">
+        <legend><b>②</b> Entry　入场<span class="comp-role">决定时点</span></legend>
+        <div class="comp-plan">由计划里的 <code>return None</code> 决定</div>
+        <div class="comp-params" hidden>
           <div class="tabs" role="tablist">
             <button type="button" class="tab on" data-mode="code" role="tab">写代码</button>
             <button type="button" class="tab" data-mode="expr" role="tab">单行表达式</button>
@@ -101,10 +100,13 @@
             <input type="text" name="entry" id="entry" value="close < sma_20 * 0.98" spellcheck="false" class="mono">
             <p class="hint">只支持比较、<code>and/or/not</code> 与四则运算。</p>
           </div>
-        </fieldset>
+        </div>
+      </fieldset>
 
-        <fieldset class="grp comp" data-state="ready">
-          <legend><b>②b</b> 选合约</legend>
+      <fieldset class="grp comp" data-comp="select" data-state="done">
+        <legend><b>②b</b> 选合约<span class="comp-role">落成具体哪一张</span></legend>
+        <div class="comp-plan">由计划里的 <code>Plan(contract=…)</code> 决定</div>
+        <div class="comp-params" hidden>
           <div class="row">
             <label>类型<select name="right"><option value="call">看涨 call</option><option value="put">看跌 put</option></select></label>
             <label>剩余天数 DTE<input type="number" name="dte" value="30" min="3" max="200"></label>
@@ -115,10 +117,14 @@
             <label id="deltaWrap">delta<input type="number" name="delta" value="0.30" step="0.05" min="0.05" max="0.95"></label>
             <label id="moneyWrap" hidden>虚值比例<input type="number" name="moneyness" value="0.05" step="0.01" min="-0.5" max="0.5"></label>
           </div>
-        </fieldset>
+        </div>
+      </fieldset>
 
-        <fieldset class="grp comp" data-state="ready">
-          <legend><b>③④⑥</b> 了结与仓位</legend>
+      <fieldset class="grp comp" data-comp="exits" data-state="partial">
+        <legend><b>③④</b> 止盈 ／ 止损<span class="comp-role">兑现点 · 论据失效点</span></legend>
+        <div class="comp-plan">由计划里的 <code>take_profit</code> / <code>stop_loss</code> 决定；
+          想按当时情况动态调整，用下面的<b>持仓期间</b>那层</div>
+        <div class="comp-params" hidden>
           <div class="row">
             <label>止盈<input type="number" name="take_profit" value="1.0" step="0.25" min="0"><span class="unit">×</span></label>
             <label>止损<input type="number" name="stop_loss" value="0.5" step="0.1" min="0" max="1"><span class="unit">×</span></label>
@@ -128,10 +134,13 @@
             <label>剩余到期下限<input type="number" name="dte_floor" value="5" min="2" max="60"><span class="unit">交易日</span></label>
           </div>
           <p class="hint">四条同时生效，<b>最早触发的赢</b>。止盈 1.0 = 赚 100%。</p>
-        </fieldset>
+        </div>
+      </fieldset>
 
-        <fieldset class="grp comp" data-state="ready">
-          <legend><b>⑥</b> Positioning　仓位</legend>
+      <fieldset class="grp comp" data-comp="sizing" data-state="partial">
+        <legend><b>⑥</b> Positioning　仓位<span class="comp-role">这个判断值多少钱</span></legend>
+        <div class="comp-plan">由计划里的 <code>risk_pct</code> / <code>notional</code> / <code>contracts</code> 决定</div>
+        <div class="comp-params" hidden>
           <label class="full">怎么定规模
             <select name="sizing_method" id="sizingMethod">
               <option value="risk_pct">每笔风险占权益的固定比例</option>
@@ -157,11 +166,10 @@
             <label>用几分之一 Kelly<input type="number" name="kelly_fraction" value="0.25" step="0.05" min="0.01" max="1"></label>
           </div>
           <p class="hint" id="sizingHint"></p>
-          <p class="hint coupling"><b>止损距离 × 风险预算 = 规模。</b>这三个里定了两个，
-            第三个就定了。参数模式让你把止损和规模分开填，所以它们会互相打架——
-            这正是交易计划模式存在的理由。</p>
-        </fieldset>
-      </div>
+          <p class="hint coupling"><b>止损距离 × 风险预算 = 规模。</b>三个里定了两个第三个就定了，
+            分开填必然打架——这正是交易计划模式存在的理由。</p>
+        </div>
+      </fieldset>
 
       <fieldset class="grp comp" data-state="ready">
         <legend><b>②c</b> 自定义信号<span class="opt">选填</span></legend>

@@ -205,6 +205,14 @@ $("planHelp").addEventListener("click", () => {
    并且自动把引擎切过去——这不是"帮你做决定"，是这两个选项本来就绑死的。 */
 function updateModeHint(){
   const planMode = document.querySelector("[data-strat].on")?.dataset.strat === "plan";
+  // 组件本身**不隐藏**，只切换它显示哪一面。藏起来等于把使用者的组件地图弄丢了
+  // ——实测就是这样：默认视图下七个组件有五个根本看不见。
+  document.querySelectorAll("[data-comp]").forEach(fs => {
+    fs.querySelector(".comp-plan").hidden   = !planMode;
+    fs.querySelector(".comp-params").hidden = planMode;
+    fs.classList.toggle("by-plan", planMode);
+  });
+  document.querySelectorAll('[data-strat-pane="params"]').forEach(el => { el.hidden = planMode; });
   if(planMode && $("engine").value !== "event_driven"){
     $("engine").value = "event_driven";
     $("engine").dispatchEvent(new Event("change"));
