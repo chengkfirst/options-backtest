@@ -120,6 +120,101 @@ def _tradeoff(q: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def _meta_payload() -> dict[str, Any]:
+    """界面要的全部静态信息。
+
+    模块级函数而非 Handler 方法：它不需要请求状态，而且前后端契约检查
+    要在不起服务的情况下拿到它。
+    """
+    from backtest.data.market import VOL_PROXY_BY_SYMBOL
+    from backtest.components import COUPLINGS, as_form_spec
+    from backtest.signals.registry import DEFAULT_SIGNALS, describe_signals
+
+    return {
+        "symbols": sorted(VOL_PROXY_BY_SYMBOL),
+        "signals": sorted(DEFAULT_SIGNALS),
+        # 名字之外还要含义、单位、窗口、坑。只给名字的话，界面只能把它们
+        # 按字母表倒成一排，使用者得自己猜 rv_20 是按什么口径年化的。
+        "signal_docs": describe_signals().fillna("").to_dict("records"),
+        # 界面的表单从这份定义生成。组件是什么、要填什么，只有这一处说法。
+        "form": as_form_spec(),
+        "couplings": [
+            {"a": a, "b": b, "why": why} for a, b, why in COUPLINGS
+        ],
+        "gaps": _describe_gaps(),
+        "defaults": {
+            "symbol": "QQQ", "start": "2020-01-01", "end": "2024-12-31",
+            "entry": "sma_20 > sma_50", "right": "call",
+            "dte_lo": 21, "dte_hi": 45, "delta_lo": 0.25, "delta_hi": 0.45,
+            "max_spread": 0.08, "delta": 0.35,
+            "hold_days": 10, "take_profit": 1.0, "stop_loss": 0.5,
+            "dte_floor": 5, "quantity": 1,
+            "sizing_method": "risk_pct", "risk_pct": 0.02, "notional": 5000,
+            "target_vol": 0.20, "risk_pct_vt": 0.02, "kelly_fraction": 0.25,
+            "engine": "event_driven",
+            "max_concurrent": 5,
+            "strategy_mode": "params",
+            # 默认落在表达式而不是代码：代码框占掉一屏，会把后面的组件挤出视野。
+            # 要写代码的人自己切一下，比每个人一打开就看不到全貌好。
+            "entry_mode": "expr",
+            "plan_code": (
+                "def plan(ctx):\n"
+                "    \"\"\"一个函数同时决定买什么、买多少、怎么了结。\n"
+                "\n"
+                "    这四件事在真实交易里是一个判断：回撤越深，买得越久、\n"
+                "    下注越大、止损越宽、目标越高。拆成四个常数就表达不了。\n"
+                "    返回 None 表示今天不做。\n"
+                "    \"\"\"\n"
+                "    rsi = ctx.signal(\"rsi_14\", default=50.0)\n"
+                "    if rsi > 45:\n"
+                "        return None                      # ② 时点：不够超卖\n"
+                "\n"
+                "    deep = rsi < 35\n"
+                "\n"
+                "    # ②b 选什么：深档买更久、更实值\n"
+                "    c = ctx.calls[(ctx.calls.spread < 0.10) & ctx.calls.delta.notna()]\n"
+                "    c = c[c.dte.between(45, 75)] if deep else c[c.dte.between(21, 45)]\n"
+                "    if c.empty:\n"
+                "        return None\n"
+                "    target = 0.50 if deep else 0.30\n"
+                "\n"
+                "    return Plan(\n"
+                "        contract    = c.iloc[(c.delta - target).abs().argmin()],\n"
+                "        risk_pct    = 0.030 if deep else 0.015,   # ⑥ 多大\n"
+                "        stop_loss   = 0.60  if deep else 0.35,    # ④ 论据失效点\n"
+                "        take_profit = 1.00  if deep else 0.60,    # ③ 兑现点\n"
+                "        max_hold    = 40    if deep else 15,\n"
+                "        tag         = \"深超卖\" if deep else \"浅超卖\",\n"
+                "        note        = f\"RSI {rsi:.0f}\",\n"
+                "    )\n"
+            ),
+            "entry_code": (
+                "def entry(view):\n"
+                "    \"\"\"返回 True 就在这天入场。缺失信号一律不入场。\"\"\"\n"
+                "    rsi = view[\"rsi_14\"]\n"
+                "    rv  = view[\"rv_20\"]\n"
+                "    if rsi.is_missing or rv.is_missing:\n"
+                "        return False\n"
+                "    # 高波动环境下要求更极端的超卖\n"
+                "    if rv.unwrap() > 0.30:\n"
+                "        return rsi.unwrap() < 25\n"
+                "    return rsi.unwrap() < 35\n"
+            ),
+            "review_code": "",
+            "signals_code": (
+                "# 自定义信号：名字 -> 函数(bars) -> Series\n"
+                "# 一律用 adjusted（复权价），否则除息日会出现虚假跳空\n"
+                "SIGNALS = {\n"
+                "    \"ma20_slope\": lambda b: b.adjusted(\"close\")\n"
+                "                       .rolling(20).mean().pct_change(5),\n"
+                "}\n"
+            ),
+        },
+        "code_help": USER_CODE_HELP,
+        "plan_help": PLAN_HELP,
+    }
+
+
 def _describe_gaps() -> list[str]:
     """七个组件里当前撑不起来的那些。
 
@@ -283,6 +378,14 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     # 本次运行的诊断。与组件缺口不同，这些每次都不一样，而且是可查的——
     # 前端可以展开看具体是哪几天、为什么被丢弃。
     record["diagnostics"] = _run_diagnostics(result)
+    # 异常扫描：规则式，不触发就是空列表——界面据此决定显示还是隐藏。
+    try:
+        from dataclasses import asdict
+
+        record["anomalies"] = [asdict(f) for f in result.anomalies()]
+    except Exception as exc:  # noqa: BLE001
+        record["anomalies"] = []
+        record["problems"].append(f"异常扫描失败：{type(exc).__name__}: {exc}")
     record["notes"] = [record["boundary"]] if record["boundary"] else []
     return record
 
@@ -708,93 +811,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     # ---- 辅助 ----
     def _meta(self) -> dict[str, Any]:
-        from backtest.data.market import VOL_PROXY_BY_SYMBOL
-        from backtest.components import COUPLINGS, as_form_spec
-        from backtest.signals.registry import DEFAULT_SIGNALS, describe_signals
-
-        return {
-            "symbols": sorted(VOL_PROXY_BY_SYMBOL),
-            "signals": sorted(DEFAULT_SIGNALS),
-            # 名字之外还要含义、单位、窗口、坑。只给名字的话，界面只能把它们
-            # 按字母表倒成一排，使用者得自己猜 rv_20 是按什么口径年化的。
-            "signal_docs": describe_signals().fillna("").to_dict("records"),
-            # 界面的表单从这份定义生成。组件是什么、要填什么，只有这一处说法。
-            "form": as_form_spec(),
-            "couplings": [
-                {"a": a, "b": b, "why": why} for a, b, why in COUPLINGS
-            ],
-            "gaps": _describe_gaps(),
-            "defaults": {
-                "symbol": "QQQ", "start": "2020-01-01", "end": "2024-12-31",
-                "entry": "sma_20 > sma_50", "right": "call",
-                "dte_lo": 21, "dte_hi": 45, "delta_lo": 0.25, "delta_hi": 0.45,
-                "max_spread": 0.08, "delta": 0.35,
-                "hold_days": 10, "take_profit": 1.0, "stop_loss": 0.5,
-                "dte_floor": 5, "quantity": 1,
-                "sizing_method": "risk_pct", "risk_pct": 0.02, "notional": 5000,
-                "target_vol": 0.20, "risk_pct_vt": 0.02, "kelly_fraction": 0.25,
-                "engine": "event_driven",
-                "max_concurrent": 5,
-                "strategy_mode": "params",
-                # 默认落在表达式而不是代码：代码框占掉一屏，会把后面的组件挤出视野。
-                # 要写代码的人自己切一下，比每个人一打开就看不到全貌好。
-                "entry_mode": "expr",
-                "plan_code": (
-                    "def plan(ctx):\n"
-                    "    \"\"\"一个函数同时决定买什么、买多少、怎么了结。\n"
-                    "\n"
-                    "    这四件事在真实交易里是一个判断：回撤越深，买得越久、\n"
-                    "    下注越大、止损越宽、目标越高。拆成四个常数就表达不了。\n"
-                    "    返回 None 表示今天不做。\n"
-                    "    \"\"\"\n"
-                    "    rsi = ctx.signal(\"rsi_14\", default=50.0)\n"
-                    "    if rsi > 45:\n"
-                    "        return None                      # ② 时点：不够超卖\n"
-                    "\n"
-                    "    deep = rsi < 35\n"
-                    "\n"
-                    "    # ②b 选什么：深档买更久、更实值\n"
-                    "    c = ctx.calls[(ctx.calls.spread < 0.10) & ctx.calls.delta.notna()]\n"
-                    "    c = c[c.dte.between(45, 75)] if deep else c[c.dte.between(21, 45)]\n"
-                    "    if c.empty:\n"
-                    "        return None\n"
-                    "    target = 0.50 if deep else 0.30\n"
-                    "\n"
-                    "    return Plan(\n"
-                    "        contract    = c.iloc[(c.delta - target).abs().argmin()],\n"
-                    "        risk_pct    = 0.030 if deep else 0.015,   # ⑥ 多大\n"
-                    "        stop_loss   = 0.60  if deep else 0.35,    # ④ 论据失效点\n"
-                    "        take_profit = 1.00  if deep else 0.60,    # ③ 兑现点\n"
-                    "        max_hold    = 40    if deep else 15,\n"
-                    "        tag         = \"深超卖\" if deep else \"浅超卖\",\n"
-                    "        note        = f\"RSI {rsi:.0f}\",\n"
-                    "    )\n"
-                ),
-                "entry_code": (
-                    "def entry(view):\n"
-                    "    \"\"\"返回 True 就在这天入场。缺失信号一律不入场。\"\"\"\n"
-                    "    rsi = view[\"rsi_14\"]\n"
-                    "    rv  = view[\"rv_20\"]\n"
-                    "    if rsi.is_missing or rv.is_missing:\n"
-                    "        return False\n"
-                    "    # 高波动环境下要求更极端的超卖\n"
-                    "    if rv.unwrap() > 0.30:\n"
-                    "        return rsi.unwrap() < 25\n"
-                    "    return rsi.unwrap() < 35\n"
-                ),
-                "review_code": "",
-                "signals_code": (
-                    "# 自定义信号：名字 -> 函数(bars) -> Series\n"
-                    "# 一律用 adjusted（复权价），否则除息日会出现虚假跳空\n"
-                    "SIGNALS = {\n"
-                    "    \"ma20_slope\": lambda b: b.adjusted(\"close\")\n"
-                    "                       .rolling(20).mean().pct_change(5),\n"
-                    "}\n"
-                ),
-            },
-            "code_help": USER_CODE_HELP,
-            "plan_help": PLAN_HELP,
-        }
+        return _meta_payload()
 
     def _run_id(self, payload) -> int:
         """从请求体里取运行 id。

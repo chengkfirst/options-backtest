@@ -314,3 +314,10 @@ textarea.code {
 .to-grid thead th { border-bottom: 1px solid var(--line); }
 .to-grid tbody th { text-align: left; color: var(--ink-2); }
 .to-grid td { padding: 2px 4px; text-align: right; color: var(--ink); }
+
+/* ── 异常扫描 ─────────────────────────────────────────── */
+.anom-body { display: flex; flex-direction: column; gap: 6px; }
+.anom { padding: 8px 10px; border-radius: var(--radius); border-left: 2px solid var(--line); background: var(--panel); }
+.anom.high { border-left-color: var(--warn); background: var(--warn-soft); }
+.anom-h { font-size: 12px; font-weight: 600; color: var(--ink); }
+.anom-d { font-size: 11px; color: var(--ink-2); margin-top: 2px; line-height: 1.5; }

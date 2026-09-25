@@ -292,13 +292,12 @@ function formPayload(){
   // 入场：代码框有内容就按代码走，否则按表达式
   // entry_mode 现在是表单里的真字段（二选一），不再靠"代码框空不空"来猜。
   // 仓位：只发当前方法用得上的参数。全发的话后端分不清"没填"和"用不上"
-  const m = o.sizing_method || "risk_pct";
+  const m = CONTRACT.sizing_methods.includes(o.sizing_method) ? o.sizing_method : "risk_pct";
   o.sizing = { method: m, ...(
     m === "risk_pct"       ? { risk_pct: +o.risk_pct } :
     m === "fixed"          ? { contracts: +o.quantity } :
     m === "fixed_notional" ? { notional: +o.notional } :
-    m === "vol_target"     ? { target_vol: +o.target_vol, risk_pct: 0.02 } :
-                             { kelly_fraction: +o.kelly_fraction }) };
+                             { target_vol: +o.target_vol, risk_pct: +o.risk_pct }) };
   return o;
 }
 
@@ -326,6 +325,7 @@ async function runBacktest(){
       notice(data.detail ? `${data.error}\n\n${data.detail}` : (data.error || `HTTP ${r.status}`));
       return;
     }
+    checkContract(data);
     RUNS.push(data);
     BASE = BASE ?? data.id;
     show(data.id);
@@ -395,6 +395,19 @@ $("tradeoffRef").addEventListener("toggle", e => {
   if(e.target.open && !$("toWhen").textContent) loadTradeoff();
 });
 
+/* ── 异常扫描 ──────────────────────────────────────────────
+   规则扫出来的，不是模型"找找看"。没触发就整块不显示——
+   硬凑的洞察是噪音，噪音会让真的警告也被跳过。                    */
+function renderAnomalies(found){
+  $("anomSec").hidden = !found.length;
+  if(!found.length) return;
+  $("anomBody").innerHTML = found.map(f => `
+    <div class="anom ${f.severity}">
+      <div class="anom-h">${esc(f.headline)}</div>
+      <div class="anom-d">${esc(f.detail)}</div>
+    </div>`).join("");
+}
+
 /* ── 本次运行的诊断 ────────────────────────────────────────
    与组件缺口的区别：这些每次都不一样，而且可查。只给个次数没用——
    "候选被丢弃 45 次"不告诉你该不该在意；要看到原因分布才知道是信号太严
@@ -420,6 +433,31 @@ function renderDiagnostics(diags){
       <ul>${d.reasons.map(r =>
         `<li><span class="diag-n">${r.n}</span>${String(r.why).replace(/</g,"&lt;")}</li>`).join("")}</ul>
     </details>`).join("");
+}
+
+/* ── 前后端契约 ─────────────────────────────────────────────
+   界面需要后端提供哪些字段，在这里**显式声明**。两边都用这份声明：
+
+   - 运行时：收到响应后核对，缺了立刻报出来，而不是让 undefined
+     一路渗进渲染函数（后端返回 id、前端读 run_id 时，RUNS.find() 会因为
+     两边都是 undefined 反而"匹配上"，表面还能用）
+   - 提交前：tools/check_wiring.py 拿真实响应核对这份声明
+
+   扫 JS 源码猜字段名是不可靠的（漏掉 RUNS[0].x 这类写法），所以用声明。 */
+const CONTRACT = {
+  run: ["id", "rows", "config", "engine", "started", "seconds",
+        "n_trades", "win_rate", "net_pnl", "boundary", "problems",
+        "diagnostics", "anomalies", "manifest", "events", "synthetic"],
+  // 只有事件驱动引擎才有，成交表下缺失是正常的
+  run_optional: ["equity", "equity_metrics", "scenarios", "attribution"],
+  meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps"],
+  sizing_methods: ["fixed", "risk_pct", "fixed_notional", "scale_by_vol"],
+};
+
+function checkContract(record){
+  const missing = CONTRACT.run.filter(k => !(k in record));
+  if(missing.length)
+    notice(`后端响应缺字段：${missing.join("、")}。界面会有地方显示不出来——这是前后端没同步。`);
 }
 
 /* ── 运行记录 ── */
@@ -478,6 +516,7 @@ function show(runId){
     b.innerHTML = `<b>这组数字的边界</b><span>${run.boundary.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")}</span>`;
   // 真出问题的才进提示条。组件缺口不进——它是静态的，位置在左边栏各层旁边。
   for(const m of (run.problems || [])) notice(m);
+  renderAnomalies(run.anomalies || []);
   renderDiagnostics(run.diagnostics || []);
   // 运行事件不再往提示条里塞一遍。它们已经在诊断面板里，而且那里有原因分布
   // 和日期范围——提示条里的"candidate_dropped：45 次"只是同一件事的劣化版本。

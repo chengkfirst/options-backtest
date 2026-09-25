@@ -432,6 +432,38 @@ class Result:
         }
 
     # ---- 扫描 ----
+    def investor_view(self) -> dict:
+        """投资人视角：这是 alpha 还是加了杠杆的 beta，水下待多久，收益集中在哪。
+
+        基准用**同期的标的收盘价**，所以 beta 回答的正是"收益里有多少只是
+        标的本身在涨"。只有事件驱动引擎有权益曲线，成交表下会说明原因。
+        """
+        from backtest.research.investor import summary
+
+        bars = self._market.bars
+        bench = bars.adjusted("close")
+        return summary(self.raw.equity, self.trades, benchmark=bench)
+
+    def cost_sensitivity(self, multiples=(1.0, 2.0, 3.0)):
+        """成本翻倍还活着吗。实盘成本高于回测是常态。"""
+        from backtest.research.investor import cost_sensitivity
+
+        return cost_sensitivity(self.trades, multiples)
+
+    def anomalies(self) -> list:
+        """扫一遍结果里真正反常的地方。什么都没触发就返回空列表。
+
+        规则式，不是让模型去"找找看"——规则可测试、不会编。
+        见 ``backtest.research.anomaly``。
+        """
+        from backtest.research.anomaly import scan
+
+        try:
+            metrics = self.equity_metrics()
+        except Exception:  # noqa: BLE001
+            metrics = None          # 成交表引擎没有权益曲线，相关规则自然跳过
+        return scan(self.trades, metrics=metrics, costs=self.costs())
+
     def sweep(self, grid: Mapping[str, Any]) -> SweepResult:
         """在同一份数据与同一策略上扫描参数网格。
 

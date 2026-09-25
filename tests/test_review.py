@@ -47,12 +47,20 @@ class TestEngineIntegration:
         return run(**self.BASE, **extra)
 
     def test_reduce_keeps_one_logical_trade(self):
-        """减仓不得让一笔变成两笔——展期三次按持仓统计会变成四笔，胜率全失真。"""
+        """减仓不得让一笔变成两笔——展期三次按持仓统计会变成四笔，胜率全失真。
+
+        判据是 **trade_id 不重复**，不是"总笔数与不减仓时相同"：仓位大小依赖权益，
+        减仓会改变权益路径，后续某些交易的张数随之变化（算出 0 张就不开仓），
+        所以两个变体的总笔数本来就会不同。
+        """
         def review(ctx, pos):
             return Reduce(0.5, "减半") if (pos.days_held == 5 and pos.quantity >= 2) else None
 
-        plain, reduced = self._run(), self._run(review=review)
-        assert len(plain.trades) == len(reduced.trades)
+        r = self._run(review=review)
+        t = r.trades
+        assert len(t) == t.trade_id.nunique(), "减仓把一笔逻辑交易拆成了多行"
+        events = r.events
+        assert events.detail.astype(str).str.contains("减仓").any(), "这次没有真的发生减仓"
 
     def test_partial_close_pnl_is_not_lost(self):
         """最终记录按剩余张数算，天然漏掉先减掉的那几张——不报错，盈亏少一块。"""

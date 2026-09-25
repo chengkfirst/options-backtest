@@ -16,6 +16,7 @@
 依赖方向                定价越过数据层；未登记的模块绕过检查
 回归基线                改动带来的非预期结果变化
 发布完整性              本地有、git 里没有——别人 clone 下来缺文件
+前后端契约              界面要的字段后端不给；界面发的值后端不认
 文档代码                README 里的示例跑不通
 组件定义                表单字段不是 run() 的参数，填了没效果也不报错
 =====================  ====================================================
@@ -39,6 +40,7 @@ GUARDS: tuple[tuple[str, list[str], bool], ...] = (
     ("依赖方向",   [sys.executable, "tools/check_deps.py"], False),
     ("发布完整性", [sys.executable, "tools/check_shipped.py"], False),
     ("组件定义",   [sys.executable, "-m", "pytest", "tests/test_components.py", "-q"], False),
+    ("前后端契约", [sys.executable, "tools/check_wiring.py"], False),
     ("回归基线",   [sys.executable, "-m", "tools.baseline", "check"], False),
     ("测试套件",   [sys.executable, "-m", "pytest", "tests", "-q"], True),
     ("文档代码",   [sys.executable, "tools/check_docs.py"], True),

@@ -226,11 +226,6 @@ class EventDrivenEngine:
         if not callable(strategy.select) and strategy.select.right is Right.CALL \
                 and getattr(strategy, "short", False):
             raise StartupError("裸卖 call 未被支持：保证金模型还没做，给出的数字会是错的")
-        if strategy.sizing.method == "kelly":
-            self.events.record(
-                EventKind.CANDIDATE_DROPPED, self.config.start,
-                "Kelly 仓位会用回测期内已了结的交易估参数——这在实盘里做不到"
-                "（你当时不知道未来的胜率），所以它的结果偏乐观，只能当上界看")
         if strategy.allow_stacking:
             # 真实账户按合约净额记仓：同一张合约买两次，在券商那里就是一个仓位，
             # 不是两笔独立持仓。账本忠实地这么做了，但引擎按 trade_id 追踪逻辑交易，
@@ -681,44 +676,39 @@ class EventDrivenEngine:
         equity = self._last_equity
 
         if sizing.method == "risk_pct":
-            budget = equity * sizing.risk_pct
+            # **规模 = 风险预算 ÷ 止损距离。** 止损设在 -50% 时，单笔真实风险只有
+            # 权利金的一半，按全损算会把仓位压小一倍。没有止损才等于全损。
+            budget = equity * sizing.risk_pct / self._loss_fraction(strategy)
         elif sizing.method == "fixed_notional":
             budget = sizing.notional
-        elif sizing.method == "vol_target":
+        elif sizing.method == "scale_by_vol":
             vol = self.market.volatility(day)
             if vol.is_missing:
                 self.events.record(EventKind.CANDIDATE_DROPPED, day,
-                                   f"vol_target 需要波动率，当日不可得：{vol.reason}")
+                                   f"scale_by_vol 需要波动率，当日不可得：{vol.reason}")
                 return 0
-            # 波动越高买越少。基准风险仍是 risk_pct，再按 目标波动/实际波动 缩放
-            budget = equity * sizing.risk_pct * (sizing.target_vol / max(vol.unwrap(), 1e-6))
-        elif sizing.method == "kelly":
-            edge = self._kelly_fraction(sizing)
-            if edge is None:
-                return 0
-            budget = equity * edge
+            # 标的波动高就少买。**这不是组合波动率目标**——那需要预测组合波动，
+            # 期权上得靠希腊字母推。名字如实反映它做的事。
+            budget = (equity * sizing.risk_pct / self._loss_fraction(strategy)
+                      * (sizing.target_vol / max(vol.unwrap(), 1e-6)))
         else:
             raise StartupError(f"未实现的仓位方法 {sizing.method}")
 
         return min(int(budget // premium), sizing.max_contracts)
 
-    def _kelly_fraction(self, sizing) -> float | None:
-        """按已了结交易的胜率与盈亏比估分数 Kelly。
+    def _loss_fraction(self, strategy) -> float:
+        """单笔最坏情况亏掉权利金的几分之几。
 
-        样本不足时返回 None（不开仓）而不是用一个粗糙的估计——Kelly 对参数极其敏感，
-        30 笔样本算出来的最优比例几乎全是噪音，而它直接决定下注大小。
+        止损 0.5 表示亏到 -50% 就走，所以真实风险是权利金的一半。没设止损时
+        才等于全损（买方最大损失就是权利金）。
+
+        这是「规模 = 风险预算 ÷ 止损距离」这条约束在代码里的落点——两者分开设，
+        算出来的仓位就和你以为的风险对不上。
         """
-        closed = [r.net_pnl for r in self._closed_pnl]
-        if len(closed) < 60:
-            return None
-        wins = [x for x in closed if x > 0]
-        losses = [-x for x in closed if x <= 0]
-        if not wins or not losses:
-            return None
-        p = len(wins) / len(closed)
-        b = (sum(wins) / len(wins)) / (sum(losses) / len(losses))
-        kelly = p - (1 - p) / b
-        return max(0.0, kelly * sizing.kelly_fraction)
+        stop = strategy.exit.stop_loss
+        if stop is None or not 0 < stop <= 1:
+            return 1.0
+        return float(stop)
 
     @staticmethod
     def _already_queued(queue, contract) -> bool:

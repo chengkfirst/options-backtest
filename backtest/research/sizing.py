@@ -26,7 +26,7 @@ DEFAULT_METHODS: dict[str, Sizing] = {
     "每笔风险 2%": Sizing(method="risk_pct", risk_pct=0.02),
     "每笔风险 5%": Sizing(method="risk_pct", risk_pct=0.05),
     "固定金额 5000": Sizing(method="fixed_notional", notional=5_000),
-    "波动率目标 20%": Sizing(method="vol_target", risk_pct=0.02, target_vol=0.20),
+    "按波动缩放": Sizing(method="scale_by_vol", risk_pct=0.02, target_vol=0.20),
 }
 
 

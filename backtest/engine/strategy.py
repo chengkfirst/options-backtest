@@ -69,26 +69,27 @@ class Sizing:
     ``"fixed"``        固定张数。最朴素，但随着权益变化，每笔的风险占比会漂移。
     ``"risk_pct"``     每笔风险占权益固定比例。**买方的默认选择**。
     ``"fixed_notional"`` 每笔投入固定金额。
-    ``"vol_target"``   按标的波动率反向缩放：波动大时少买。
-    ``"kelly"``        按历史胜率与盈亏比的分数 Kelly。需要足够样本，否则拒绝。
+    ``"scale_by_vol"`` 按标的波动率反向缩放：波动大时少买。**不是组合波动率目标**。
+
+    没有 Kelly：它要的参数（胜率、盈亏比）在几百笔期权交易上主要是估计噪音，
+    而它直接决定下注大小；二元公式也不适用于有止损的期权（损失不是全损）。
+    留一个算不准的方法只会诱导人用它。
     """
 
     method: str = "fixed"
     contracts: int = 1                 # fixed
     risk_pct: float = 0.02             # risk_pct：每笔最多亏权益的 2%
     notional: float = 5_000.0          # fixed_notional
-    target_vol: float = 0.20           # vol_target：目标年化波动
-    kelly_fraction: float = 0.25       # kelly：用几分之一 Kelly
+    target_vol: float = 0.20           # scale_by_vol：参照的年化波动
     max_contracts: int = 50            # 任何方法都不得超过
 
     def __post_init__(self) -> None:
-        allowed = {"fixed", "risk_pct", "fixed_notional", "vol_target", "kelly"}
+        allowed = {"fixed", "risk_pct", "fixed_notional", "scale_by_vol"}
         require(self.method in allowed, f"未知的仓位方法 {self.method!r}，可选 {sorted(allowed)}")
         require(self.contracts >= 1, "contracts 至少为 1")
         require(0 < self.risk_pct <= 1, "risk_pct 须在 0 与 1 之间")
         require(self.notional > 0, "notional 须为正")
         require(self.target_vol > 0, "target_vol 须为正")
-        require(0 < self.kelly_fraction <= 1, "kelly_fraction 须在 0 与 1 之间")
         require(self.max_contracts >= 1, "max_contracts 至少为 1")
 
 

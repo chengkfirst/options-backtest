@@ -142,7 +142,9 @@ COMPONENTS: tuple[Component, ...] = (
     ),
     Component(
         "select", "②b 选合约", "一笔的决定",
-        role="把「我看多」落成「具体哪一张」。方向之外还决定了这笔的希腊字母暴露。",
+        role="把「我看多」落成「具体哪一张」。方向之外还决定了这笔的希腊字母暴露。"
+             "IV 高低决定的是**该不该买权利金**，属于入场判断（用 iv_rank_252 信号），"
+             "不在这一步。",
         output="一张合约",
         status="done",
         in_plan="Plan(contract=…)",
@@ -155,15 +157,12 @@ COMPONENTS: tuple[Component, ...] = (
             Field("dte_hi", "到", "int", 45, unit="日历日", lo=3, hi=400),
             Field("delta_lo", "delta 从", "ratio", 0.25, lo=0.01, hi=0.99),
             Field("delta_hi", "到", "ratio", 0.45, lo=0.01, hi=0.99),
-            Field("iv_lo", "该合约 IV 从", "ratio", None, lo=0, hi=5,
-                  help="留空表示不限。买方想要低 IV，卖方想要高"),
-            Field("iv_hi", "到", "ratio", None, lo=0, hi=5),
             Field("max_spread", "买卖价差上限", "ratio", 0.08, lo=0.001, hi=1,
                   unit="× 中价", help="实盘里这常常是真正的绑定条件"),
             Field("min_open_interest", "未平仓下限", "int", None, lo=0,
                   help="留空表示不限。数据源不提供时会跳过并标明"),
             Field("delta", "目标 delta", "ratio", 0.35, lo=0.05, hi=0.95,
-                  help="可行域里离它最近的那张。要按当时情况判断就用交易计划"),
+                  help="可行域里离它最近的那张"),
         ),
     ),
     Component(
@@ -174,8 +173,13 @@ COMPONENTS: tuple[Component, ...] = (
         status="partial",
         in_plan="Plan(take_profit=…)",
         inputs=(
+            # 固定比例在入场那刻就定死了。跟踪止盈、按论据失效了结、按时间衰减
+            # 调整目标，都要每天重算——那是「持仓期间」那一层的 review() 钩子。
+            Field("exit_mode", "怎么定", "select", "fixed", options=(
+                ("fixed", "固定比例"), ("rule", "写规则（逐日复查）"))),
             Field("take_profit", "止盈", "ratio", 1.0, unit="×", lo=0,
-                  help="相对入场价。1.0 = 赚 100% 就走"),
+                  depends="exit_mode=fixed",
+                  help="相对入场价。1.0 = 赚 100% 才走，历史上只有约 16% 的交易能触及"),
         ),
         gap="逻辑完整，但数值在合成链上不可信；MFE 分布可用于定档",
     ),
@@ -188,8 +192,12 @@ COMPONENTS: tuple[Component, ...] = (
         in_plan="Plan(stop_loss=…)",
         inputs=(
             Field("stop_loss", "止损", "ratio", 0.5, unit="×", lo=0, hi=1,
-                  help="相对入场价。0.5 = 亏 50% 就走。买方最大损失就是权利金"),
-            Field("hold_days", "最多持有", "int", 10, unit="交易日", lo=1, hi=120),
+                  depends="exit_mode=fixed",
+                  help="相对入场价。0.5 = 亏 50% 就走"),
+            # 时间类了结是**安全网**，两种模式下都生效：写错的规则不该把仓位
+            # 拖到到期。所以它们不挂 depends。
+            Field("hold_days", "最多持有", "int", 10, unit="交易日", lo=1, hi=120,
+                  help="安全网，规则模式下同样生效"),
             Field("dte_floor", "剩余到期下限", "int", 5, unit="交易日", lo=2, hi=60,
                   help="到这个剩余期限强制了结，避免被拖到到期"),
         ),
@@ -203,9 +211,10 @@ COMPONENTS: tuple[Component, ...] = (
         status="partial",
         inputs=(
             Field("review_code", "逐日复查", "code", "",
-                  help="定义 review(ctx, pos)。每天对每个持仓问一遍，返回 "
-                       "Close / Reduce / Add 或 None。跟踪止盈、论据失效、"
-                       "分批减仓都写在这里。"),
+                  depends="exit_mode=rule",
+                  help="定义 review(ctx, pos)。③止盈 ④止损 ⑤减仓展期 都写在这里——"
+                       "它们本来就是同一个机制：每天对每个持仓问一遍。"
+                       "返回 Close / Reduce / Add 或 None。"),
         ),
         origin="discovered",
         gap="机制有了（逐日复查可以减仓 / 动态平仓），但**怎么找**还没有——"
@@ -236,22 +245,19 @@ COMPONENTS: tuple[Component, ...] = (
                 ("risk_pct", "每笔风险占权益固定比例"),
                 ("fixed", "固定张数"),
                 ("fixed_notional", "每笔固定金额"),
-                ("vol_target", "波动率目标"),
-                ("kelly", "分数 Kelly"),
+                ("scale_by_vol", "按标的波动缩放"),
             )),
             Field("risk_pct", "每笔风险", "ratio", 0.02, unit="× 权益", lo=0.001, hi=1,
                   depends="sizing_method=risk_pct",
-                  help="每笔亏光时正好亏掉权益的这个比例"),
+                  help="止损被打掉时亏掉权益的这个比例。规模 = 风险预算 ÷ 止损距离"),
             Field("quantity", "张数", "int", 1, lo=1, hi=50, depends="sizing_method=fixed",
                   help="最好懂也最差：权益变化后风险占比会漂移，而你不会察觉"),
             Field("notional", "每笔投入", "number", 5000, unit="美元", lo=100,
                   depends="sizing_method=fixed_notional",
                   help="投入固定但风险不固定——便宜的合约会买到很多张"),
-            Field("target_vol", "目标年化波动", "ratio", 0.20, lo=0.01, hi=2,
-                  depends="sizing_method=vol_target", help="控的是组合波动，不是单笔亏损"),
-            Field("kelly_fraction", "用几分之一 Kelly", "ratio", 0.25, lo=0.01, hi=1,
-                  depends="sizing_method=kelly",
-                  help="参数用回测期内已了结的交易估——实盘当下你不知道未来胜率，只能当上界看"),
+            Field("target_vol", "参照年化波动", "ratio", 0.20, lo=0.01, hi=2,
+                  depends="sizing_method=scale_by_vol",
+                  help="标的波动高于它就少买、低于它就多买"),
         ),
         gap="计划式下可按 risk_pct / notional 定；参数模式仍是独立的固定张数，会与止损打架",
     ),
