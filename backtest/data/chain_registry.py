@@ -93,7 +93,9 @@ def _synthetic(opts, market, config):
 
 def _file(opts, market, config):
     """``chain="file:/路径"`` 或
-    ``chain={"kind":"file", "path":..., "column_map":{...}, "strict":True}``。"""
+    ``chain={"kind":"file", "path":..., "column_map":{...}, "scale":{"iv":0.01}}``。
+
+    ``scale`` 换单位，最常见的是 IV 写成了百分数。"""
     from backtest.data.adapters import FileChainSource
 
     path = opts.get("path")
@@ -102,6 +104,7 @@ def _file(opts, market, config):
     return FileChainSource(
         path, market, config,
         column_map=opts.get("column_map"),
+        scale=opts.get("scale"),
         strict=bool(opts.get("strict", True)),
     )
 

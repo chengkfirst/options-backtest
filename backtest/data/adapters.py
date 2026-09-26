@@ -129,11 +129,21 @@ def _read_any(path: Path) -> pd.DataFrame:
     raise StartupError(f"不认识的文件类型 {path.suffix}：只支持 .parquet 和 .csv（或装着它们的目录）")
 
 
-def normalise(frame: pd.DataFrame, column_map: Mapping[str, str] | None = None) -> pd.DataFrame:
+def normalise(
+    frame: pd.DataFrame,
+    column_map: Mapping[str, str] | None = None,
+    scale: Mapping[str, float] | None = None,
+) -> pd.DataFrame:
     """把任意来源的表规范成标准列名与标准取值。
 
-    只做**无损**的转换：改列名、统一 right 的写法、把日期列转成日期。不做任何
-    补值——补值属于"数据质量处理"，必须先被看见再决定，不能在读入时偷偷完成。
+    只做**无损**的转换：改列名、按 ``scale`` 换单位、统一 right 的写法、
+    把日期列转成日期。不做任何补值——补值属于"数据质量处理"，必须先被看见
+    再决定，不能在读入时偷偷完成。
+
+    ``scale`` 用来换单位，最常见的是 IV 写成了百分数：``{"iv": 0.01}``。
+    **刻意要你显式写出来，而不是看到大数就自动除以 100**——自动换算会在
+    字段本身标错（比如把别的列当成了 iv）时给出一个看起来正常的错结果。
+    体检会提示你需不需要它。
     """
     out = frame.rename(columns=dict(column_map or {}))
     out.columns = [str(c).strip().lower() for c in out.columns]
@@ -148,6 +158,10 @@ def normalise(frame: pd.DataFrame, column_map: Mapping[str, str] | None = None) 
                 f"认识的写法：{sorted(set(_RIGHT_ALIASES))}"
             )
         out["right"] = mapped
+
+    for col, factor in (scale or {}).items():
+        if col in out.columns:
+            out[col] = out[col].astype(float) * float(factor)
 
     for col in ("asof", "expiry"):
         if col in out.columns:
@@ -233,10 +247,11 @@ def check_frame(frame: pd.DataFrame, *, path: str = "(内存中的表)") -> File
     )
 
 
-def check_file(path: str | Path, column_map: Mapping[str, str] | None = None) -> FileReport:
+def check_file(path: str | Path, column_map: Mapping[str, str] | None = None,
+               scale: Mapping[str, float] | None = None) -> FileReport:
     """读一个文件（或目录）并体检。这是接数据的第二步。"""
     path = Path(path)
-    frame = normalise(_read_any(path), column_map)
+    frame = normalise(_read_any(path), column_map, scale)
     return check_frame(frame, path=str(path))
 
 
@@ -279,12 +294,13 @@ class FileChainSource:
         config: BacktestConfig | None = None,
         *,
         column_map: Mapping[str, str] | None = None,
+        scale: Mapping[str, float] | None = None,
         strict: bool = True,
     ) -> None:
         self.path = Path(path)
         self.market = market
         self.config = config or market.config
-        frame = normalise(_read_any(self.path), column_map)
+        frame = normalise(_read_any(self.path), column_map, scale)
         report = check_frame(frame, path=str(self.path))
         if strict and not report.ok:
             raise DataQualityError(

@@ -64,6 +64,23 @@ class TestNormalise:
                         {"trade_date": "asof"})
         assert "asof" in out.columns
 
+    def test_scale_fixes_percent_iv(self):
+        """IV 写成百分数时，给 scale 换单位——体检的提示随之消失。"""
+        frame = make_vendor(iv=25.0)
+        assert any("百分数" in w for w in check_frame(normalise(frame)).warnings)
+        fixed = normalise(frame, scale={"iv": 0.01})
+        assert fixed["iv"].max() == pytest.approx(0.25)
+        assert not any("百分数" in w for w in check_frame(fixed).warnings)
+
+    def test_scale_is_explicit_not_automatic(self):
+        """**不自动换算。** 字段本身标错时，自动除以 100 会给出一个
+        看起来正常的错结果。"""
+        frame = make_vendor(iv=25.0)
+        assert normalise(frame)["iv"].max() == pytest.approx(25.0)
+
+    def test_scale_ignores_missing_column(self):
+        normalise(make_vendor(), scale={"不存在的列": 0.01})
+
     def test_normalise_does_not_fill(self):
         """规范化只改名与统一写法，绝不补值——补值必须先被看见。"""
         frame = make_vendor().drop(columns=["iv"])
