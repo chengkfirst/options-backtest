@@ -1,7 +1,9 @@
-"""数据层门面：一次构造，此后全是内存查询。
+"""The data layer's front door: construct once, then everything is in memory.
 
-聚合标的行情（两套价格）、交易日历、无风险利率序列、分红事件与波动率代理。
-外部请求只在构造时发生，之后回测反复查询都不再触网。
+Collects the underlying's bars (both price sets), the trading calendar, the
+risk-free rate series, dividend events and the volatility proxy. Every external
+request happens at construction; after that the backtest can query repeatedly
+without touching the network.
 """
 
 from __future__ import annotations
@@ -20,19 +22,20 @@ from backtest.errors import StartupError
 from backtest.events import EventKind, EventLog
 from backtest.maybe import Maybe
 
-#: 每个标的自身的波动率指数。纳指波动率系统性高于标普，套用同一个代理会整体低估
-#: QQQ 期权的价格。
+#: Each underlying's own volatility index. Nasdaq volatility runs systematically
+#: above the S&P's, so reusing one proxy for both understates QQQ option prices
+#: across the board.
 VOL_PROXY_BY_SYMBOL = {"QQQ": "^VXN", "SPY": "^VIX", "IWM": "^RVX", "DIA": "^VXD"}
 
-#: 三个月期国债收益率。Yahoo 以百分数给出（4.5 表示 4.5%）。
+#: The three-month Treasury yield. Yahoo gives it as a percentage (4.5 = 4.5%).
 RATE_SYMBOL = "^IRX"
 
-#: 波动率代理缺失时回退所用的已实现波动率窗口（交易日）。
+#: Realised-volatility window (trading days) used when the proxy is unavailable.
 FALLBACK_RV_WINDOW = 20
 
 
 class MarketData:
-    """回测所需的全部市场数据。"""
+    """All the market data a backtest needs."""
 
     def __init__(
         self,
@@ -46,10 +49,12 @@ class MarketData:
         vol_proxy: pd.Series | None = None,
         dividends: pd.Series | None = None,
     ) -> None:
-        """``bars`` / ``rates`` / ``vol_proxy`` / ``dividends`` 显式给出时不触网。
+        """Passing ``bars`` / ``rates`` / ``vol_proxy`` / ``dividends`` explicitly
+        means nothing touches the network.
 
-        这条路径供离线使用与测试：测试必须能在没有网络的机器上稳定跑完，否则它就
-        不是回归防线，而是又一个不确定来源。
+        This path is for offline use and for tests: a test has to pass reliably on
+        a machine with no network, or it is not a regression defence but one more
+        source of non-determinism.
         """
         self.config = config
         self.events = events or EventLog()
@@ -59,12 +64,13 @@ class MarketData:
         expected = VOL_PROXY_BY_SYMBOL.get(symbol)
         if expected is not None and config.contract.vol_proxy != expected:
             raise StartupError(
-                f"{symbol} 的波动率代理应为 {expected}，当前配置为 "
-                f"{config.contract.vol_proxy}。不同标的的隐含波动率水平存在系统性差异，"
-                f"套用别的指数会让合成链整体偏离。"
+                f"the volatility proxy for {symbol} should be {expected}, but the "
+                f"config says {config.contract.vol_proxy}. Implied volatility levels "
+                f"differ systematically between underlyings, and borrowing another "
+                f"index shifts the whole synthetic chain."
             )
 
-        # 指标需要预热，向前多取一段
+        # Indicators need a warm-up, so reach further back.
         fetch_start = config.start - timedelta(days=400)
         self._offline = bars is not None
         self._bars = bars if bars is not None else self._load_bars(symbol, fetch_start, config.end, refresh)
@@ -89,22 +95,23 @@ class MarketData:
         )
 
     def _note_truncation(self) -> None:
-        """可用区间窄于请求区间时给出提示，绝不静默返回不完整的数据。"""
+        """Say so when the available range is narrower than the one requested;
+        never return incomplete data silently."""
         first, last = self._bars.dates[0], self._bars.dates[-1]
         if first > self.config.start:
             self.events.record(
                 EventKind.RANGE_TRUNCATED,
                 first,
-                f"请求起始 {self.config.start}，实际可用自 {first}",
+                f"start requested {self.config.start}, available from {first}",
             )
         if last < self.config.end:
             self.events.record(
                 EventKind.RANGE_TRUNCATED,
                 last,
-                f"请求结束 {self.config.end}，实际可用至 {last}",
+                f"end requested {self.config.end}, available to {last}",
             )
 
-    # ---- 载入 ----
+    # ---- loading ----
     def _load_bars(self, symbol: str, start: date, end: date, refresh: bool) -> UnderlyingBars:
         key = CacheKey("ohlcv", symbol, {"start": start, "end": end, "source": "yfinance", "prices": "raw+adj"})
         raw = self._cache.get_or_load(key, lambda: fetch_ohlcv(symbol, start, end), refresh=refresh)
@@ -124,7 +131,8 @@ class MarketData:
             return self._load_series("rate", RATE_SYMBOL, start, end, refresh) / 100.0
         except Exception as exc:  # noqa: BLE001
             self.events.record(
-                EventKind.RATE_FALLBACK, start, f"利率序列不可得，全程回退常数：{exc}"
+                EventKind.RATE_FALLBACK, start,
+                f"no rate series available; falling back to the constant throughout: {exc}"
             )
             return pd.Series(dtype=float)
 
@@ -133,7 +141,9 @@ class MarketData:
             return self._load_series("volproxy", symbol, start, end, refresh) / 100.0
         except Exception as exc:  # noqa: BLE001
             self.events.record(
-                EventKind.VOL_PROXY_FALLBACK, start, f"波动率代理不可得，全程回退已实现波动率：{exc}"
+                EventKind.VOL_PROXY_FALLBACK, start,
+                f"no volatility proxy available; falling back to realised "
+                f"volatility throughout: {exc}"
             )
             return pd.Series(dtype=float)
 
@@ -147,9 +157,11 @@ class MarketData:
             self.events.record(
                 EventKind.DIVIDEND_UNAVAILABLE,
                 self.config.start,
-                f"{symbol} 分红数据获取失败（{reason}），按零分红处理"
+                f"could not fetch dividends for {symbol} ({reason}); treating as "
+                f"no dividend"
                 if reason
-                else f"{symbol} 在该区间无分红记录，按零分红处理",
+                else f"{symbol} has no dividend records in this range; treating as "
+                     f"no dividend",
             )
             return pd.Series(dtype=float)
         series = frame["amount"].astype(float)
@@ -157,11 +169,12 @@ class MarketData:
         return series
 
     def _realized_vol(self) -> pd.Series:
-        """已实现波动率，按交易日 / 252 年化——与定价的日历日口径分工明确。"""
+        """Realised volatility, annualised on trading days / 252 — a separate job
+        from pricing's calendar-day convention."""
         log_ret = np.log(self._bars.adjusted("close")).diff()
         return log_ret.rolling(FALLBACK_RV_WINDOW).std() * np.sqrt(TRADING_DAYS_PER_YEAR)
 
-    # ---- 查询 ----
+    # ---- queries ----
     @property
     def bars(self) -> UnderlyingBars:
         return self._bars
@@ -171,26 +184,30 @@ class MarketData:
         return self._expiries
 
     def sessions(self) -> tuple[date, ...]:
-        """回测区间内的交易日（不含预热段）。"""
+        """The trading days inside the backtest range (not the warm-up)."""
         return self.calendar.sessions_in(self.config.start, self.config.end)
 
     def spot(self, day: date) -> Maybe[float]:
-        """标的的**实际成交价**收盘。期权相关计算一律用它，绝不用复权价。"""
+        """The underlying's **traded** close. Everything option-related uses this
+        and never the adjusted price."""
         return self._bars.traded_close_on(day)
 
     def risk_free_rate(self, day: date) -> float:
-        """该交易日的无风险利率；序列缺该日时取最近的前值，全无则回退常数。"""
+        """The risk-free rate for this session; the most recent earlier value when
+        the series lacks the day, and the constant when there is none."""
         if self._rates.empty:
             return self.config.fallback_risk_free_rate
         ts = pd.Timestamp(day)
         prior = self._rates.loc[:ts]
         if prior.empty or pd.isna(prior.iloc[-1]):
-            self.events.record(EventKind.RATE_FALLBACK, day, "该日及之前无利率数据，回退常数")
+            self.events.record(EventKind.RATE_FALLBACK, day,
+                               "no rate data on or before this day; using the constant")
             return self.config.fallback_risk_free_rate
         return float(prior.iloc[-1])
 
     def dividends_between(self, start: date, end: date) -> float:
-        """区间内的每股分红合计（左开右闭），由实际除息事件求和。"""
+        """Total dividend per share in the range, excluding the start, summed
+        from the actual ex-dividend events."""
         if self._dividends.empty:
             return 0.0
         mask = (self._dividends.index > pd.Timestamp(start)) & (
@@ -199,10 +216,12 @@ class MarketData:
         return float(self._dividends.loc[mask].sum())
 
     def dividend_yield(self, day: date, expiry: date, spot: float) -> float:
-        """定价所需的连续分红率，由合约存续期内的实际除息事件导出。
+        """The continuous dividend yield pricing needs, derived from the actual
+        ex-dividend events over the contract's life.
 
-        用年化常数代替会抹掉除息日这个关键时点，而除息时点恰恰决定了实值看涨是否
-        存在提前行权价值。
+        A constant annual figure instead would erase the ex-dividend dates, and it
+        is exactly their timing that decides whether an in-the-money call has
+        early-exercise value.
         """
         years = self.config.time.year_fraction(day, expiry)
         if years <= 0 or spot <= 0:
@@ -214,15 +233,17 @@ class MarketData:
 
     @property
     def vol_proxy(self) -> pd.Series:
-        """波动率代理的完整序列（QQQ→VXN，SPY→VIX）。
+        """The full volatility-proxy series (QQQ -> VXN, SPY -> VIX).
 
-        **这是真实市场数据**，不是合成的。所以基于它的 IV 水平判断（IV rank、
-        IV−RV 价差）即使在合成期权链上也成立——合成的是期权价格，不是这个。
+        **This is real market data**, not synthetic. So judgements built on IV
+        levels (IV rank, the IV minus RV spread) hold even on a synthetic option
+        chain — what is synthetic is the option prices, not this.
         """
         return self._vol_proxy
 
     def volatility(self, day: date) -> Maybe[float]:
-        """该日的波动率代理；不可得时回退该标的自身的已实现波动率。"""
+        """The volatility proxy for this day; falls back to the underlying's own
+        realised volatility when unavailable."""
         ts = pd.Timestamp(day)
         if not self._vol_proxy.empty:
             prior = self._vol_proxy.loc[:ts]
@@ -230,8 +251,10 @@ class MarketData:
                 return Maybe.some(float(prior.iloc[-1]))
         prior_rv = self._rv.loc[:ts]
         if prior_rv.empty or pd.isna(prior_rv.iloc[-1]):
-            return Maybe.missing(f"{day} 波动率代理与已实现波动率均不可得")
+            return Maybe.missing(f"neither the volatility proxy nor realised "
+                                 f"volatility is available on {day}")
         self.events.record(
-            EventKind.VOL_PROXY_FALLBACK, day, "波动率代理缺该日，回退已实现波动率"
+            EventKind.VOL_PROXY_FALLBACK, day,
+            "the volatility proxy lacks this day; using realised volatility"
         )
         return Maybe.some(float(prior_rv.iloc[-1]))

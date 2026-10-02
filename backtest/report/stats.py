@@ -1,10 +1,15 @@
-"""交易层统计。
+"""Trade-level statistics.
 
-**本阶段没有权益曲线**，因此没有最大回撤、夏普、资金占用——那些依赖组合权益，
-要等事件驱动引擎（路线图阶段 4）才成立。这里只做交易层能诚实回答的事。
+**There is no equity curve at this level**, so there is no max drawdown, no
+Sharpe, no capital utilisation — those need portfolio equity and only hold for
+the event-driven engine. What is here is what the trade level can answer
+honestly.
 
-买方的收益分布低胜率、正偏、厚尾，只看均值与胜率会严重误判。所以分布是一等公民：
-分位数、尾部、偏度峰度，以及"中位数与均值符号相反"这种由极值驱动的信号。
+A buyer's return distribution is low win rate, positively skewed, fat tailed, and
+looking only at the mean and the win rate misjudges it badly. So the distribution
+is a first-class citizen: quantiles, tails, skew and kurtosis, and signals like
+"the median and the mean have opposite signs", which says extremes are driving
+the average.
 """
 
 from __future__ import annotations
@@ -18,14 +23,15 @@ import pandas as pd
 
 from backtest.types import ExitReason, QuoteSource
 
-#: 分布分位点。
+#: Quantiles of the distribution.
 QUANTILES = (0.05, 0.25, 0.50, 0.75, 0.95)
 
 
 def trade_stats(trades: pd.DataFrame) -> dict[str, Any]:
-    """总体交易统计。零交易时返回空统计，而不是报错或给出误导性的零胜率。"""
+    """Overall trade statistics. With no trades this returns an empty summary
+    rather than raising or reporting a misleading 0% win rate."""
     if trades.empty:
-        return {"count": 0, "note": "回测区间内未产生任何交易"}
+        return {"count": 0, "note": "the run produced no trades"}
     pnl = trades["net_pnl"]
     wins, losses = pnl[pnl > 0], pnl[pnl <= 0]
     return {
@@ -42,7 +48,8 @@ def trade_stats(trades: pd.DataFrame) -> dict[str, Any]:
 
 
 def by_exit_reason(trades: pd.DataFrame) -> pd.DataFrame:
-    """按了结原因分组。四类终止方式的表现通常差异巨大。"""
+    """Grouped by exit reason. The ways a trade can end usually perform very
+    differently."""
     if trades.empty:
         return pd.DataFrame(columns=["count", "win_rate", "net_pnl", "avg_pnl"])
     grouped = trades.groupby("exit_reason")["net_pnl"]
@@ -58,9 +65,10 @@ def by_exit_reason(trades: pd.DataFrame) -> pd.DataFrame:
 
 
 def pnl_distribution(trades: pd.DataFrame, notional_capital: float) -> dict[str, Any]:
-    """单笔盈亏分布，两种口径并存。
+    """The per-trade P&L distribution, on two scales.
 
-    绝对金额与占权益比例的形状不同，只看其一会误判风险量级。
+    Absolute amounts and fractions of equity have different shapes; looking at
+    only one misjudges the magnitude of the risk.
     """
     if trades.empty:
         return {"count": 0}
@@ -77,7 +85,7 @@ def pnl_distribution(trades: pd.DataFrame, notional_capital: float) -> dict[str,
         "max_loss": float(pnl.min()),
         "skew": float(pd.Series(pnl).skew()),
         "kurtosis": float(pd.Series(pnl).kurtosis()),
-        # 中位数与均值符号相反 = 平均收益由少数极值驱动
+        # Median and mean of opposite sign: a few extremes drive the average.
         "driven_by_outliers": bool(np.sign(mean) != np.sign(median) and median != 0),
     }
 
@@ -90,7 +98,8 @@ def histogram(trades: pd.DataFrame, bins: int = 20) -> pd.DataFrame:
 
 
 def cost_breakdown(trades: pd.DataFrame) -> dict[str, Any]:
-    """成本分项与扣费前后对照。合起来看不出问题，分开看才知道钱被谁吃掉。"""
+    """Costs broken out, before and after. In aggregate nothing looks wrong;
+    broken out, it is clear what ate the money."""
     if trades.empty:
         return {"total": 0.0}
     gross = float(trades["gross_pnl"].sum())
@@ -107,13 +116,14 @@ def cost_breakdown(trades: pd.DataFrame) -> dict[str, Any]:
         "gross_pnl": gross,
         "net_pnl": net,
         "fees_pct_of_gross": (total / abs(gross)) if gross else float("inf"),
-        # 毛盈亏为正而净盈亏为负：收益不足以覆盖交易成本
+        # Gross positive but net negative: the edge does not cover the costs.
         "eaten_by_costs": gross > 0 > net,
     }
 
 
 def data_provenance(trades: pd.DataFrame) -> dict[str, Any]:
-    """数据来源披露。合成数据的结论不可外推，必须显著标注。"""
+    """Provenance disclosure. Conclusions from synthetic data do not generalise
+    and must be flagged prominently."""
     if trades.empty:
         return {"synthetic_share": 0.0, "all_synthetic": False}
     share = float((trades["source"] == QuoteSource.SYNTHETIC.value).mean())
@@ -125,7 +135,8 @@ def data_provenance(trades: pd.DataFrame) -> dict[str, Any]:
 
 
 def passive_expiry_check(trades: pd.DataFrame) -> dict[str, Any]:
-    """被动到期尤其是实值被动到期，意味着了结规则失效过一次。"""
+    """A passive expiry, in the money especially, means the exit rules failed
+    at least once."""
     if trades.empty:
         return {"itm": 0, "otm": 0}
     counts = trades["exit_reason"].value_counts()
@@ -135,7 +146,8 @@ def passive_expiry_check(trades: pd.DataFrame) -> dict[str, Any]:
 
 
 def environment() -> dict[str, str]:
-    """关键数值依赖的版本。版本变化会改变浮点末位，破坏可复现性。"""
+    """Versions of the numerical dependencies. A version change moves the last
+    floating-point digits and breaks reproducibility."""
     import numpy, pandas, scipy
 
     return {

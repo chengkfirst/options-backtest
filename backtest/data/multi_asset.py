@@ -1,13 +1,17 @@
-"""跨市场数据：美债、美元、信用利差、波动率期限结构。
+"""Cross-market data: Treasuries, the dollar, credit spreads, the volatility
+term structure.
 
-这些不是为了多几条曲线看，是为了两件事：
+These are not extra lines on a chart. They are here for two things:
 
-1. **市场状态分类（regime）**——VIX 水平、波动率期限结构、信用利差共同刻画
-   "现在是什么环境"，而策略在不同环境下的表现通常差很远。
-2. **跨市场确认**——一个看涨判断如果同时有美债收益率、美元、信用利差的配合，
-   与孤立的技术信号是两回事。
+1. **Regime classification** — the VIX level, the volatility term structure and
+   credit spreads together describe what environment this is, and a strategy
+   usually performs very differently across environments.
+2. **Cross-market confirmation** — a bullish judgement that Treasury yields, the
+   dollar and credit spreads all agree with is a different thing from an isolated
+   technical signal.
 
-全部来自同一个数据源（Yahoo），因为多一个源就多一个失败点。口径与局限写在各项旁边。
+All of it from one source (Yahoo), because a second source is a second point of
+failure. Each series' convention and limits are stated beside it.
 """
 
 from __future__ import annotations
@@ -22,57 +26,59 @@ from backtest.data.cache import CacheKey, ParquetCache
 from backtest.data.sources import fetch_close_series
 from backtest.events import EventKind, EventLog
 
-#: 跨市场序列的定义。``transform`` 说明怎么从原始收盘价得到要用的量。
+#: The cross-market series. ``scale`` says how to get from the raw close to the
+#: quantity actually used.
 SERIES: dict[str, dict[str, str]] = {
     "vix": {
         "symbol": "^VIX", "scale": "0.01",
-        "meaning": "标普 500 的 30 天隐含波动率",
-        "caveat": "它是标普的，不是纳指的；QQQ 策略请同时看 VXN",
+        "meaning": "30-day implied volatility of the S&P 500",
+        "caveat": "this is the S&P's, not the Nasdaq's; for a QQQ strategy read VXN too",
     },
     "vix3m": {
         "symbol": "^VIX3M", "scale": "0.01",
-        "meaning": "标普 500 的 3 个月隐含波动率",
-        "caveat": "与 VIX 之比构成期限结构；2011 年之前没有数据",
+        "meaning": "3-month implied volatility of the S&P 500",
+        "caveat": "its ratio to VIX is the term structure; no data before 2011",
     },
     "vxn": {
         "symbol": "^VXN", "scale": "0.01",
-        "meaning": "纳斯达克 100 的 30 天隐含波动率",
-        "caveat": "QQQ 策略应以它为准",
+        "meaning": "30-day implied volatility of the Nasdaq 100",
+        "caveat": "this is the one a QQQ strategy should go by",
     },
     "ust10y": {
         "symbol": "^TNX", "scale": "0.01",
-        "meaning": "10 年期美债收益率",
-        "caveat": "Yahoo 给的是百分数，已除以 100",
+        "meaning": "10-year Treasury yield",
+        "caveat": "Yahoo gives a percentage; already divided by 100",
     },
     "ust3m": {
         "symbol": "^IRX", "scale": "0.01",
-        "meaning": "3 个月期美债收益率",
-        "caveat": "与 10 年期之差即期限利差，负值常被视为衰退信号",
+        "meaning": "3-month Treasury yield",
+        "caveat": "its difference from the 10-year is the curve; negative is widely "
+                  "read as a recession signal",
     },
     "dollar": {
         "symbol": "DX-Y.NYB", "scale": "1",
-        "meaning": "美元指数",
-        "caveat": "对历史较早的区间可能有缺口",
+        "meaning": "the dollar index",
+        "caveat": "may have gaps in the earlier history",
     },
     "hyg": {
         "symbol": "HYG", "scale": "1",
-        "meaning": "高收益债 ETF",
-        "caveat": "与 LQD 之比是信用利差的代理，不是真的利差",
+        "meaning": "high-yield bond ETF",
+        "caveat": "its ratio to LQD is a proxy for the credit spread, not the spread",
     },
     "lqd": {
         "symbol": "LQD", "scale": "1",
-        "meaning": "投资级债 ETF",
-        "caveat": "同上",
+        "meaning": "investment-grade bond ETF",
+        "caveat": "as above",
     },
 }
 
 
 @dataclass(frozen=True, slots=True)
 class CrossMarket:
-    """跨市场面板，以及每个序列的可得性。"""
+    """The cross-market panel, and which series were available."""
 
     frame: pd.DataFrame
-    unavailable: dict[str, str]        # 名字 → 为什么没拿到
+    unavailable: dict[str, str]        # name -> why it could not be fetched
 
     def on(self, day: date) -> pd.Series | None:
         ts = pd.Timestamp(day)
@@ -80,40 +86,46 @@ class CrossMarket:
         return None if prior.empty else prior.iloc[-1]
 
     def describe(self) -> pd.DataFrame:
-        """每个序列的含义、局限、可得性。想改口径先看这张表。"""
+        """Each series' meaning, limits and availability. Read this table before
+        changing any convention."""
         rows = []
         for name, meta in SERIES.items():
             rows.append({
-                "序列": name, "代码": meta["symbol"], "含义": meta["meaning"],
-                "局限": meta["caveat"],
-                "状态": "缺失：" + self.unavailable[name] if name in self.unavailable
-                else f"{int(self.frame[name].notna().sum())} 个观测",
+                "series": name, "ticker": meta["symbol"], "means": meta["meaning"],
+                "limits": meta["caveat"],
+                "status": "absent: " + self.unavailable[name] if name in self.unavailable
+                else f"{int(self.frame[name].notna().sum())} observations",
             })
         for derived, why in (
-            ("term_structure", "VIX3M / VIX。小于 1 表示近端更贵，通常出现在恐慌中"),
-            ("credit_proxy", "HYG / LQD。下降表示信用利差走阔"),
-            ("yield_curve", "10 年期减 3 个月期。负值为倒挂"),
+            ("term_structure", "VIX3M / VIX. Below 1 means the front is dearer, "
+                               "which usually happens in a panic"),
+            ("credit_proxy", "HYG / LQD. Falling means credit spreads are widening"),
+            ("yield_curve", "10-year minus 3-month. Negative is inverted"),
         ):
-            rows.append({"序列": derived, "代码": "（派生）", "含义": why, "局限": "代理量，不是真实利差",
-                         "状态": f"{int(self.frame[derived].notna().sum())} 个观测"
-                         if derived in self.frame else "无法计算"})
-        return pd.DataFrame(rows).set_index("序列")
+            rows.append({"series": derived, "ticker": "(derived)", "means": why,
+                         "limits": "a proxy, not the actual spread",
+                         "status": f"{int(self.frame[derived].notna().sum())} observations"
+                         if derived in self.frame else "cannot be computed"})
+        return pd.DataFrame(rows).set_index("series")
 
 
 def load_cross_market(
     start: date, end: date, *, cache: ParquetCache | None = None,
     events: EventLog | None = None, refresh: bool = False,
 ) -> CrossMarket:
-    """拉取跨市场序列。
+    """Fetch the cross-market series.
 
-    某个序列拿不到时**记录原因并继续**，不中止——跨市场数据是辅助，缺一两个不该让
-    整个回测跑不了。但缺了什么必须说清楚，否则 regime 分类会在使用者不知情的情况下
-    少用了一个维度。
+    When one cannot be fetched this **records why and carries on** rather than
+    aborting — cross-market data is supporting material, and missing one or two
+    should not stop a backtest. But what is missing has to be stated, or regime
+    classification quietly drops a dimension without the user knowing.
     """
     cache = cache or ParquetCache()
     events = events or EventLog()
-    # 预热期必须与 MarketData 对齐（400 天）。取少了，200 日均线这类长窗口维度在区间
-    # 开头算不出来，regime 会有一大段"未知"——那不是数据缺失，是我们自己没取够。
+    # The warm-up has to match MarketData's (400 days). Fetch less and long-window
+    # dimensions like the 200-day average cannot be computed at the start of the
+    # range, leaving a long stretch of "unknown" regime — which is not missing
+    # data, it is us not having fetched enough.
     fetch_start = start - timedelta(days=400)
     columns: dict[str, pd.Series] = {}
     unavailable: dict[str, str] = {}
@@ -132,7 +144,8 @@ def load_cross_market(
         except Exception as exc:  # noqa: BLE001
             unavailable[name] = f"{type(exc).__name__}: {exc}"
             events.record(EventKind.RANGE_TRUNCATED, start,
-                          f"跨市场序列 {name}（{meta['symbol']}）不可得：{exc}")
+                          f"cross-market series {name} ({meta['symbol']}) "
+                          f"unavailable: {exc}")
 
     panel = pd.DataFrame(columns).sort_index()
     if "vix3m" in panel and "vix" in panel:

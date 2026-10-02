@@ -1,8 +1,10 @@
-"""本地 parquet 缓存。
+"""A local parquet cache.
 
-缓存键必须涵盖**一切影响结果的维度**。少涵盖一个，就会出现"请求复权价却拿到实际
-成交价"这类静默串用——数据看上去正常，结论全错。因此键里带上标的、区间、数据源、
-价格类型与生成参数，任一不同即不命中。
+The cache key must cover **every dimension that changes the result**. Leave one
+out and entries get crossed silently — ask for adjusted prices and receive traded
+prices; the data looks fine and every conclusion is wrong. So the key carries the
+symbol, the date range, the source, the price type and the generation parameters,
+and any difference in any of them is a miss.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ def _fingerprint(parts: dict[str, Any]) -> str:
 
 @dataclass(frozen=True, slots=True)
 class CacheKey:
-    """缓存条目的完整身份。"""
+    """The full identity of a cache entry."""
 
     kind: str
     symbol: str
@@ -49,9 +51,9 @@ class ParquetCache:
     def get_or_load(
         self, key: CacheKey, loader: Callable[[], pd.DataFrame], *, refresh: bool = False
     ) -> pd.DataFrame:
-        """命中则读盘，否则调用 ``loader`` 并落盘。
+        """Read from disk on a hit; otherwise call ``loader`` and write it out.
 
-        ``refresh=True`` 强制忽略缓存重新获取，并覆盖原条目。
+        ``refresh=True`` ignores the cache, refetches, and overwrites the entry.
         """
         if not self.enabled:
             self._misses += 1
@@ -65,7 +67,8 @@ class ParquetCache:
         self._misses += 1
         frame = loader()
         path.parent.mkdir(parents=True, exist_ok=True)
-        # 先写临时文件再改名，避免中途失败留下半个文件被后续当成有效缓存
+        # Write to a temporary file and rename, so a failure part-way through
+        # cannot leave half a file that a later run treats as a valid cache entry.
         tmp = path.with_suffix(".parquet.tmp")
         frame.to_parquet(tmp, index=True)
         tmp.replace(path)

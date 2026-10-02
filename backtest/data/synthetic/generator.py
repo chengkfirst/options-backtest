@@ -1,15 +1,20 @@
-"""合成期权链。
+"""The synthetic option chain.
 
-**用途被严格限定**：引擎正确性验证、测试夹具、以及标的信号层研究的占位。
-MUST NOT 用于期权侧参数（选约、止盈、止损）的调优——合成链没有波动率偏斜、
-没有真实的隐含波动率动态、没有随流动性变化的价差，在它上面调出来的是"该合成模型下
-的最优解"，与真实市场没有可靠关系。这条由 :mod:`backtest.engine` 的守卫强制执行。
+**Its uses are strictly bounded**: verifying engine correctness, serving as a
+test fixture, and standing in while underlying-side signal research is done. It
+MUST NOT be used to tune option-side parameters (selection, take-profit, stop
+loss) — it has no volatility skew, no realistic implied-volatility dynamics, and
+no spread that varies with liquidity, so what gets tuned on it is the optimum
+*under this synthetic model*, which bears no reliable relation to the real market.
+A guard in :mod:`backtest.engine` enforces this.
 
-刻意保持粗糙：全部行权价共用一个波动率。一个粗糙且标注清晰的模型，比一个看起来精细、
-实则仍然错误的模型更安全——后者会诱使人相信回测结论。
+Deliberately crude: every strike shares one volatility. A crude model that says
+so is safer than a model that looks refined and is still wrong — the latter
+invites belief in the backtest's conclusions.
 
-**按需生成**：不预先算出十年全表（那是千万行量级），而是查哪天算哪天。真实数据源
-按日查询，合成链也按日生成，两者的访问模式因此一致。
+**Generated on demand**: rather than precomputing ten years (tens of millions of
+rows), each day is built when it is asked for. A real source is queried per day
+and the synthetic chain is generated per day, so the access patterns match.
 """
 
 from __future__ import annotations
@@ -30,21 +35,23 @@ from backtest.types import CHAIN_COLUMNS, ContractId, QuoteSource, Right
 
 
 class SyntheticChainSource:
-    """由标的收盘价、波动率代理与 Black-Scholes 生成的期权链。"""
+    """A chain generated from the underlying's close, the volatility proxy and
+    Black-Scholes."""
 
     def __init__(self, market: MarketData, config: BacktestConfig | None = None) -> None:
         self.market = market
         self.config = config or market.config
         self._cache: dict[date, pd.DataFrame] = {}
 
-    # ---- 接口 ----
+    # ---- the protocol ----
     def snapshot(self, day: date) -> pd.DataFrame:
         if day not in self._cache:
             self._cache[day] = self._build(day)
         return self._cache[day]
 
     def series(self, contract: ContractId, days: Iterable[date]) -> pd.DataFrame:
-        """某张合约的逐日报价。缺标的收盘价或波动率的日期直接不出现。"""
+        """One contract's daily quotes. Days without an underlying close or a
+        volatility simply do not appear."""
         rows = []
         for day in days:
             if day > contract.expiry:
@@ -56,12 +63,14 @@ class SyntheticChainSource:
             return empty_chain()
         return pd.DataFrame(rows, columns=list(CHAIN_COLUMNS))
 
-    # ---- 生成 ----
+    # ---- generation ----
     def _early_exercise_flags(self, strikes, theo, s: float, day: date, expiry: date, right: Right):
-        """深度实值看涨在除息前可能有提前行权价值，欧式价在那里是错的。
+        """A deep in-the-money call may have early-exercise value before a
+        dividend, and the European price is wrong there.
 
-        标在 ``quality_flags`` 上而不是让上层去算：上层消费链上的字段，不关心
-        这些数字怎么来的。
+        Flagged in ``quality_flags`` rather than left for the layers above to work
+        out: they consume the chain's columns and do not care how the numbers
+        were arrived at.
         """
         if self.config.contract.exercise.value != "american":
             return [""] * len(strikes)
@@ -158,8 +167,10 @@ class SyntheticChainSource:
                             "quality_flags": self._early_exercise_flags(
                                 strikes, theo, s, day, expiry, right
                             ),
-                            # 这些希腊字母由生成报价的同一个模型给出，是模型自洽产物
-                            # 而非市场观测。按 delta 选约在合成链上因此是循环的。
+                            # These greeks come from the same model that made the
+                            # quotes: self-consistent model output, not market
+                            # observation. Selecting by delta on the synthetic
+                            # chain is therefore circular.
                             "greeks_model_derived": True,
                         }
                     )

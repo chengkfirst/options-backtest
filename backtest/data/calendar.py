@@ -1,8 +1,9 @@
-"""美股交易日历与期权到期日历。
+"""The US trading calendar and the option expiry calendar.
 
-回测的时间推进以交易日为单位：跳过周末与休市日，并正确处理半日市。到期日历按标的
-真实的到期节奏生成——周度到期是逐步推出的，在推出之前不应凭空出现，否则"选 30DTE"
-的可得性会比历史上真实的情况更好。
+A backtest advances in trading days: weekends and holidays are skipped and early
+closes are handled. The expiry calendar follows the underlying's real cadence —
+weekly expiries were rolled out gradually, and conjuring them up earlier than
+that makes "pick 30 DTE" more available than it historically was.
 """
 
 from __future__ import annotations
@@ -19,26 +20,27 @@ _EXCHANGE = "NYSE"
 
 
 class TradingCalendar:
-    """某个日期区间内的交易日序列。
+    """The trading sessions in a date range.
 
-    构造时一次性取出全部交易日，之后的查询都是内存操作——回测会反复问
-    "下一个交易日是哪天"，每次去查日历库会很慢。
+    Every session is fetched once at construction and all later queries are in
+    memory — a backtest asks "what is the next trading day" over and over, and
+    going to the calendar library each time is slow.
     """
 
     def __init__(self, start: date, end: date) -> None:
         if start > end:
-            raise StartupError(f"日历区间起始日 {start} 晚于结束日 {end}")
+            raise StartupError(f"calendar start {start} is after end {end}")
         schedule = mcal.get_calendar(_EXCHANGE).schedule(
             start_date=pd.Timestamp(start), end_date=pd.Timestamp(end)
         )
         self._sessions: tuple[date, ...] = tuple(d.date() for d in schedule.index)
         if not self._sessions:
-            raise StartupError(f"区间 {start} 至 {end} 内没有交易日")
+            raise StartupError(f"no trading days between {start} and {end}")
         self._index = {d: i for i, d in enumerate(self._sessions)}
         early = mcal.get_calendar(_EXCHANGE).early_closes(schedule)
         self._early_closes = frozenset(d.date() for d in early.index)
 
-    # ---- 基本查询 ----
+    # ---- basic queries ----
     @property
     def sessions(self) -> tuple[date, ...]:
         return self._sessions
@@ -58,33 +60,34 @@ class TradingCalendar:
         return day in self._index
 
     def is_early_close(self, day: date) -> bool:
-        """半日市。期权在这些日子提前收盘，报价的可成交性与平日不同。"""
+        """An early close. Options stop trading early on these days, and quotes
+        are not as executable as usual."""
         return day in self._early_closes
 
     def position(self, day: date) -> int:
         try:
             return self._index[day]
         except KeyError as exc:
-            raise KeyError(f"{day} 不是交易日") from exc
+            raise KeyError(f"{day} is not a trading day") from exc
 
     def shift(self, day: date, n: int) -> date | None:
-        """从 ``day`` 起推进 n 个交易日；越界返回 ``None``。"""
+        """Advance n trading days from ``day``; ``None`` past either end."""
         idx = self.position(day) + n
         if idx < 0 or idx >= len(self._sessions):
             return None
         return self._sessions[idx]
 
     def next_session(self, day: date) -> date | None:
-        """``day`` 之后的第一个交易日（``day`` 本身不必是交易日）。"""
+        """The first session after ``day`` (``day`` need not be one itself)."""
         for i, session in enumerate(self._sessions):
             if session > day:
                 return session
         return None
 
     def sessions_between(self, start: date, end: date) -> int:
-        """``start`` 到 ``end`` 之间的交易日数，左开右闭。
+        """Sessions between ``start`` and ``end``, excluding the first.
 
-        这是"剩余到期交易日数"的口径：到期当日为 0。
+        This is the convention for days to expiry: 0 on the expiry day itself.
         """
         if end < start:
             return -self.sessions_between(end, start)
@@ -93,7 +96,7 @@ class TradingCalendar:
         return hi - lo
 
     def sessions_in(self, start: date, end: date) -> tuple[date, ...]:
-        """闭区间内的交易日。"""
+        """The sessions in a closed interval."""
         return tuple(d for d in self._sessions if start <= d <= end)
 
     def _bisect(self, day: date) -> int:
@@ -103,7 +106,7 @@ class TradingCalendar:
 
 
 def third_friday(year: int, month: int) -> date:
-    """标准月度期权到期日：当月第三个星期五。"""
+    """The standard monthly expiry: the third Friday of the month."""
     d = date(year, month, 1)
     fridays = 0
     while True:
@@ -115,7 +118,8 @@ def third_friday(year: int, month: int) -> date:
 
 
 def _roll_to_session(day: date, calendar: TradingCalendar) -> date | None:
-    """到期日落在休市日时向前调整到最近的交易日（历史上的规则）。"""
+    """When an expiry lands on a holiday, move back to the nearest session
+    (the historical rule)."""
     for _ in range(7):
         if day in calendar:
             return day
@@ -142,10 +146,11 @@ def expiry_dates(
     include_weekly: bool = True,
     weekly_start: date | None = None,
 ) -> tuple[date, ...]:
-    """标的在该区间内实际存在的到期日集合。
+    """The expiries that actually existed for this underlying in the range.
 
-    ``weekly_start`` 之前不产生周度到期——周度期权是在历史上某个时点才推出的，
-    凭空提前会让早年的"选 30DTE"比真实情况更容易得手。
+    No weekly expiries are produced before ``weekly_start`` — weekly options were
+    introduced at a point in history, and conjuring them up earlier makes "pick
+    30 DTE" easier in the early years than it really was.
     """
     found: set[date] = set()
     if include_monthly:

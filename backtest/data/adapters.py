@@ -1,29 +1,34 @@
-"""把**你自己的**期权数据接进来。
+"""Wiring in **your own** option data.
 
-这个模块的存在理由只有一个：让"换掉合成链"是一件**机械的、可验证的**事，
-而不是一次代码考古。
+This module exists for one reason: to make replacing the synthetic chain a
+**mechanical, verifiable** act rather than an archaeological dig through code.
 
-合成链是**测试夹具**，不是数据源。它的唯一用途是在没有真实数据时让整条管道
-跑得起来。任何期权侧的结论（选什么 delta、止盈设多少、偏斜怎么用）在合成链上
-都不成立——它的 IV 是一个常数，没有偏斜，没有期限结构。
+The synthetic chain is a **test fixture**, not a data source. Its only use is
+getting the whole pipeline to run when there is no real data. No option-side
+conclusion (which delta to pick, where to set a take-profit, how to use skew)
+holds on it — its IV is a constant, with no skew and no term structure.
 
-## 换成你的数据，三步
+## Switching to your data, in three steps
 
-1. **看格式**：``describe_schema()`` 打印需要哪些列、每列什么含义、可不可缺。
-2. **查数据**：``check_file(路径)`` 在跑任何回测之前先告诉你数据哪里不对。
-3. **接进去**：``run(..., chain="file:你的路径")``，或
-   ``run(..., chain=FileChainSource(路径, market, config))``。
+1. **See the format**: ``describe_schema()`` prints which columns are needed,
+   what each one means, and whether it may be absent.
+2. **Check the data**: ``check_file(path)`` tells you what is wrong with it
+   before any backtest runs.
+3. **Wire it in**: ``run(..., chain="file:your/path")``, or
+   ``run(..., chain=FileChainSource(path, market, config))``.
 
-上层（选约、引擎、研究）**零改动**——它们只认 ``ChainSource`` 协议。
+The layers above (selection, engine, research) need **no change at all** — they
+know only the ``ChainSource`` protocol.
 
-## 列名对不上怎么办
+## When the column names do not match
 
-不要改你的文件。给 ``column_map`` 传一个 ``{你的列名: 标准列名}``：
+Do not edit your file. Pass ``column_map`` a ``{your name: standard name}``:
 
-    FileChainSource(路径, market, config,
+    FileChainSource(path, market, config,
                     column_map={"trade_date": "asof", "impl_vol": "iv"})
 
-映射在读入时一次完成，之后全系统只见标准列名。
+The mapping happens once on read; from then on the system sees only standard
+column names.
 """
 
 from __future__ import annotations
@@ -41,29 +46,31 @@ from backtest.data.chain import empty_chain, validate_chain
 from backtest.errors import DataQualityError, StartupError
 from backtest.types import CHAIN_COLUMNS, ContractId, Right
 
-#: 每一列的含义与可缺性。``必需`` 的列缺了直接拒绝；其余缺了记为缺失值并说明影响。
+#: What each column means and whether it may be absent. A missing ``required``
+#: column is refused outright; the rest are recorded as absent, with the
+#: consequence stated.
 SCHEMA: dict[str, dict[str, str]] = {
-    "asof":             {"必需": "是", "含义": "报价日（该行是哪一天的快照）", "缺了会怎样": "—"},
-    "symbol":           {"必需": "是", "含义": "标的代码，如 QQQ", "缺了会怎样": "—"},
-    "expiry":           {"必需": "是", "含义": "到期日", "缺了会怎样": "—"},
-    "strike":           {"必需": "是", "含义": "行权价", "缺了会怎样": "—"},
-    "right":            {"必需": "是", "含义": "C 或 P（也接受 call/put、CALL/PUT）", "缺了会怎样": "—"},
-    "bid":              {"必需": "是", "含义": "买一价", "缺了会怎样": "—"},
-    "ask":              {"必需": "是", "含义": "卖一价", "缺了会怎样": "—"},
-    "underlying_price": {"必需": "是", "含义": "该时点的标的价（**实际成交价，不是复权价**）",
-                         "缺了会怎样": "—"},
-    "last":             {"必需": "否", "含义": "最新成交价", "缺了会怎样": "不影响；成交价用 bid/ask 推"},
-    "volume":           {"必需": "否", "含义": "当日成交量", "缺了会怎样": "成交量过滤会被跳过并标明"},
-    "open_interest":    {"必需": "否", "含义": "未平仓合约数", "缺了会怎样": "未平仓过滤会被跳过并标明"},
-    "iv":               {"必需": "否", "含义": "隐含波动率（小数，0.25 不是 25）",
-                         "缺了会怎样": "**按 bid/ask 中价反解**，失败的行标记为缺失"},
-    "delta":            {"必需": "否", "含义": "", "缺了会怎样": "**由 IV 用 Black-Scholes 推**，并标记来源"},
-    "gamma":            {"必需": "否", "含义": "", "缺了会怎样": "同上"},
-    "vega":             {"必需": "否", "含义": "", "缺了会怎样": "同上"},
-    "theta":            {"必需": "否", "含义": "每**日历日**的时间价值衰减（负数）", "缺了会怎样": "同上"},
+    "asof":             {"required": "yes", "means": "quote date (which day this row is a snapshot of)", "if absent": "—"},
+    "symbol":           {"required": "yes", "means": "underlying ticker, e.g. QQQ", "if absent": "—"},
+    "expiry":           {"required": "yes", "means": "expiry date", "if absent": "—"},
+    "strike":           {"required": "yes", "means": "strike price", "if absent": "—"},
+    "right":            {"required": "yes", "means": "C or P (call/put and CALL/PUT also accepted)", "if absent": "—"},
+    "bid":              {"required": "yes", "means": "best bid", "if absent": "—"},
+    "ask":              {"required": "yes", "means": "best ask", "if absent": "—"},
+    "underlying_price": {"required": "yes", "means": "spot at that moment (**the traded price, not the adjusted one**)",
+                         "if absent": "—"},
+    "last":             {"required": "no", "means": "last traded price", "if absent": "no effect; fills are derived from bid/ask"},
+    "volume":           {"required": "no", "means": "contracts traded that day", "if absent": "the volume filter is skipped and flagged"},
+    "open_interest":    {"required": "no", "means": "open contracts", "if absent": "the open-interest filter is skipped and flagged"},
+    "iv":               {"required": "no", "means": "implied volatility (a decimal: 0.25, not 25)",
+                         "if absent": "**solved from the bid/ask mid**; rows that fail are marked absent"},
+    "delta":            {"required": "no", "means": "", "if absent": "**derived from IV with Black-Scholes**, and flagged as such"},
+    "gamma":            {"required": "no", "means": "", "if absent": "as above"},
+    "vega":             {"required": "no", "means": "", "if absent": "as above"},
+    "theta":            {"required": "no", "means": "time decay per **calendar day** (negative)", "if absent": "as above"},
 }
 
-#: right 列的各种常见写法 → 标准值。
+#: The common spellings of the right column -> the standard value.
 _RIGHT_ALIASES: dict[str, str] = {
     "c": "C", "call": "C", "calls": "C", "1": "C",
     "p": "P", "put": "P", "puts": "P", "-1": "P", "0": "P",
@@ -71,13 +78,14 @@ _RIGHT_ALIASES: dict[str, str] = {
 
 
 def describe_schema() -> pd.DataFrame:
-    """打印需要什么列。接数据之前先看这张表。"""
-    return pd.DataFrame(SCHEMA).T.rename_axis("列")
+    """Print which columns are needed. Read this table before wiring in data."""
+    return pd.DataFrame(SCHEMA).T.rename_axis("column")
 
 
 @dataclass(frozen=True, slots=True)
 class FileReport:
-    """一份数据体检报告。``ok`` 为假时**不要**拿它跑回测。"""
+    """A health report on one dataset. When ``ok`` is false, do **not** run a
+    backtest on it."""
 
     ok: bool
     path: str
@@ -85,48 +93,51 @@ class FileReport:
     days: int
     contracts: int
     date_range: tuple[date, date] | None
-    errors: tuple[str, ...]        # 致命：不改就没法用
-    warnings: tuple[str, ...]      # 能用，但结论要打折
+    errors: tuple[str, ...]        # fatal: unusable until fixed
+    warnings: tuple[str, ...]      # usable, but the conclusions are weaker
     columns_present: tuple[str, ...]
     columns_missing: tuple[str, ...]
 
     def summary(self, printout: bool = True) -> str:
-        head = "通过" if self.ok else "**不通过**"
+        head = "PASS" if self.ok else "**FAIL**"
         lines = [
-            f"数据体检：{head}",
-            f"  文件      {self.path}",
-            f"  规模      {self.rows:,} 行 / {self.days:,} 个交易日 / {self.contracts:,} 张合约",
+            f"Data health check: {head}",
+            f"  file      {self.path}",
+            f"  size      {self.rows:,} rows / {self.days:,} trading days / "
+            f"{self.contracts:,} contracts",
         ]
         if self.date_range:
-            lines.append(f"  区间      {self.date_range[0]} → {self.date_range[1]}")
+            lines.append(f"  range     {self.date_range[0]} → {self.date_range[1]}")
         if self.columns_missing:
-            lines.append(f"  缺的列    {', '.join(self.columns_missing)}")
+            lines.append(f"  absent    {', '.join(self.columns_missing)}")
         if self.errors:
-            lines += ["", "致命问题（不改没法用）："] + [f"  ✗ {e}" for e in self.errors]
+            lines += ["", "Fatal (unusable until fixed):"] + [f"  x {e}" for e in self.errors]
         if self.warnings:
-            lines += ["", "警告（能用，但要知道）："] + [f"  ! {w}" for w in self.warnings]
+            lines += ["", "Warnings (usable, but be aware):"] + [f"  ! {w}" for w in self.warnings]
         if not self.errors and not self.warnings:
-            lines += ["", "没发现问题。"]
+            lines += ["", "Nothing found."]
         text = "\n".join(lines)
         if printout:
             print(text)
         return text
 
 
-# ── 读入与规范化 ─────────────────────────────────────────────
+# ── reading and normalisation ───────────────────────────────
 
 def _read_any(path: Path) -> pd.DataFrame:
-    """读 parquet / csv / 一个装着它们的目录。格式由扩展名决定，不猜。"""
+    """Read parquet / csv / a directory of either. The extension decides the
+    format; nothing is guessed."""
     if path.is_dir():
         files = sorted([*path.glob("*.parquet"), *path.glob("*.csv")])
         if not files:
-            raise StartupError(f"目录里没有 .parquet 或 .csv：{path}")
+            raise StartupError(f"no .parquet or .csv in the directory: {path}")
         return pd.concat([_read_any(f) for f in files], ignore_index=True)
     if path.suffix == ".parquet":
         return pd.read_parquet(path)
     if path.suffix in (".csv", ".txt"):
         return pd.read_csv(path)
-    raise StartupError(f"不认识的文件类型 {path.suffix}：只支持 .parquet 和 .csv（或装着它们的目录）")
+    raise StartupError(f"unrecognised file type {path.suffix}: only .parquet and "
+                       ".csv are supported (or a directory of them)")
 
 
 def normalise(
@@ -134,16 +145,18 @@ def normalise(
     column_map: Mapping[str, str] | None = None,
     scale: Mapping[str, float] | None = None,
 ) -> pd.DataFrame:
-    """把任意来源的表规范成标准列名与标准取值。
+    """Normalise a frame from any source to the standard columns and values.
 
-    只做**无损**的转换：改列名、按 ``scale`` 换单位、统一 right 的写法、
-    把日期列转成日期。不做任何补值——补值属于"数据质量处理"，必须先被看见
-    再决定，不能在读入时偷偷完成。
+    Only **lossless** transformations: rename columns, rescale units per
+    ``scale``, unify the spelling of ``right``, parse date columns. Nothing is
+    filled in — filling in values is data-quality work, which has to be seen and
+    decided on, not done quietly on read.
 
-    ``scale`` 用来换单位，最常见的是 IV 写成了百分数：``{"iv": 0.01}``。
-    **刻意要你显式写出来，而不是看到大数就自动除以 100**——自动换算会在
-    字段本身标错（比如把别的列当成了 iv）时给出一个看起来正常的错结果。
-    体检会提示你需不需要它。
+    ``scale`` converts units; the common case is IV stored as a percentage:
+    ``{"iv": 0.01}``. **You are deliberately made to say so, rather than having
+    anything over some threshold divided by 100** — an automatic conversion turns
+    a mislabelled column (another series passed off as iv) into a wrong result
+    that looks right. The health check tells you whether you need it.
     """
     out = frame.rename(columns=dict(column_map or {}))
     out.columns = [str(c).strip().lower() for c in out.columns]
@@ -154,8 +167,8 @@ def normalise(
         unknown = sorted(set(raw[mapped.isna()]))
         if unknown:
             raise DataQualityError(
-                f"right 列有认不出来的取值：{unknown[:8]}。"
-                f"认识的写法：{sorted(set(_RIGHT_ALIASES))}"
+                f"unrecognised values in the right column: {unknown[:8]}. "
+                f"Accepted spellings: {sorted(set(_RIGHT_ALIASES))}"
             )
         out["right"] = mapped
 
@@ -169,31 +182,32 @@ def normalise(
     return out
 
 
-# ── 体检 ────────────────────────────────────────────────────
+# ── the health check ────────────────────────────────────────
 
-def check_frame(frame: pd.DataFrame, *, path: str = "(内存中的表)") -> FileReport:
-    """在跑任何回测**之前**，先看看这份数据有没有问题。
+def check_frame(frame: pd.DataFrame, *, path: str = "(in-memory frame)") -> FileReport:
+    """Look at the data for problems **before** any backtest runs.
 
-    分两档：``errors`` 是不改就没法用的；``warnings`` 是能用但会影响结论可信度的。
-    这个区分很重要——把所有问题一律当成致命，实际效果是逼人去关掉检查。
+    Two tiers: ``errors`` make it unusable until fixed; ``warnings`` leave it
+    usable but weaken the conclusions. The distinction matters — treating every
+    problem as fatal just pushes people into turning the check off.
     """
     errors: list[str] = []
     warnings: list[str] = []
 
-    required = [c for c, m in SCHEMA.items() if m["必需"] == "是"]
+    required = [c for c, m in SCHEMA.items() if m["required"] == "yes"]
     present = [c for c in SCHEMA if c in frame.columns]
     missing = [c for c in SCHEMA if c not in frame.columns]
     for col in required:
         if col not in frame.columns:
-            errors.append(f"缺必需列 {col}（{SCHEMA[col]['含义']}）")
+            errors.append(f"required column {col} is absent ({SCHEMA[col]['means']})")
     for col in missing:
         if col not in required:
-            warnings.append(f"没有 {col} 列 → {SCHEMA[col]['缺了会怎样']}")
+            warnings.append(f"no {col} column -> {SCHEMA[col]['if absent']}")
 
     if errors or frame.empty:
         return FileReport(
             ok=False, path=path, rows=len(frame), days=0, contracts=0, date_range=None,
-            errors=tuple(errors or ("表是空的",)), warnings=tuple(warnings),
+            errors=tuple(errors or ("the frame is empty",)), warnings=tuple(warnings),
             columns_present=tuple(present), columns_missing=tuple(missing),
         )
 
@@ -201,43 +215,49 @@ def check_frame(frame: pd.DataFrame, *, path: str = "(内存中的表)") -> File
     contracts = frame.drop_duplicates(subset=["symbol", "expiry", "strike", "right"])
 
     if frame["asof"].isna().any():
-        errors.append(f"{int(frame['asof'].isna().sum())} 行的 asof 解析不出日期")
+        errors.append(f"{int(frame['asof'].isna().sum())} rows have an unparseable asof")
     if frame["expiry"].isna().any():
-        errors.append(f"{int(frame['expiry'].isna().sum())} 行的 expiry 解析不出日期")
+        errors.append(f"{int(frame['expiry'].isna().sum())} rows have an unparseable expiry")
 
     dup = frame.duplicated(subset=["asof", "symbol", "expiry", "strike", "right"])
     if dup.any():
-        errors.append(f"{int(dup.sum())} 行主键重复（同一天同一张合约出现多次）")
+        errors.append(f"{int(dup.sum())} rows share a primary key "
+                      "(the same contract appears more than once on one day)")
 
     bid, ask = frame["bid"].astype(float), frame["ask"].astype(float)
     crossed = (ask < bid) & bid.notna() & ask.notna()
     if crossed.any():
-        errors.append(f"{int(crossed.sum())} 行 ask < bid（交叉报价）")
+        errors.append(f"{int(crossed.sum())} rows have ask < bid (a crossed quote)")
     nonpos = (ask <= 0) | (bid < 0)
     if nonpos.any():
-        warnings.append(f"{int(nonpos.sum())} 行报价非正，会被剔除")
+        warnings.append(f"{int(nonpos.sum())} rows have a non-positive quote and "
+                        "will be dropped")
 
     expired = pd.Series([e < a for a, e in zip(frame["asof"], frame["expiry"])])
     if expired.any():
-        warnings.append(f"{int(expired.sum())} 行的到期日早于报价日，会被剔除")
+        warnings.append(f"{int(expired.sum())} rows expire before their quote date "
+                        "and will be dropped")
 
     if "iv" in frame.columns:
         iv = frame["iv"].dropna().astype(float)
         if len(iv) and iv.max() > 5:
-            warnings.append(f"iv 最大值 {iv.max():.1f}，看起来是百分数而不是小数（应当 0.25 而非 25）")
+            warnings.append(f"iv tops out at {iv.max():.1f}, which looks like a "
+                            "percentage rather than a decimal (0.25, not 25)")
         if len(iv) and iv.nunique() <= 2:
-            warnings.append(f"iv 只有 {iv.nunique()} 个不同取值——没有偏斜也没有期限结构，"
-                            "期权侧的结论在这种数据上不成立")
+            warnings.append(f"iv takes only {iv.nunique()} distinct values - no skew "
+                            "and no term structure; option-side conclusions do not "
+                            "hold on data like this")
 
-    # 报价陈旧：同一张合约连续多日中价完全不变
+    # Stale quotes: the same contract's mid unchanged over consecutive days.
     stale = _stale_share(frame)
     if stale > 0.20:
-        warnings.append(f"{stale:.0%} 的报价与前一日完全相同（陈旧报价），"
-                        "止盈止损的触发时点会偏晚")
+        warnings.append(f"{stale:.0%} of quotes are identical to the previous day "
+                        "(stale quotes); take-profit and stop triggers will fire late")
 
     gaps = _missing_day_share(days)
     if gaps > 0.05:
-        warnings.append(f"交易日缺口约 {gaps:.0%}——区间内有连续多日没有任何报价")
+        warnings.append(f"about {gaps:.0%} of trading days are missing - there are "
+                        "stretches with no quotes at all")
 
     return FileReport(
         ok=not errors, path=path, rows=len(frame), days=len(days), contracts=len(contracts),
@@ -249,7 +269,8 @@ def check_frame(frame: pd.DataFrame, *, path: str = "(内存中的表)") -> File
 
 def check_file(path: str | Path, column_map: Mapping[str, str] | None = None,
                scale: Mapping[str, float] | None = None) -> FileReport:
-    """读一个文件（或目录）并体检。这是接数据的第二步。"""
+    """Read a file (or directory) and check it. This is step two of wiring in
+    data."""
     path = Path(path)
     frame = normalise(_read_any(path), column_map, scale)
     return check_frame(frame, path=str(path))
@@ -266,25 +287,30 @@ def _stale_share(frame: pd.DataFrame) -> float:
 
 
 def _missing_day_share(days: list) -> float:
-    """区间内有多少比例的工作日完全没有数据。粗口径，不查交易日历。"""
+    """What fraction of weekdays in the range have no data at all. A rough
+    measure; it does not consult the trading calendar."""
     if len(days) < 2:
         return 0.0
     span = pd.bdate_range(days[0], days[-1])
     return 1.0 - len(days) / max(len(span), 1)
 
 
-# ── 数据源实现 ───────────────────────────────────────────────
+# ── the data source ─────────────────────────────────────────
 
 class FileChainSource:
-    """从你的文件读期权链。实现 ``ChainSource`` 协议，与合成链可直接互换。
+    """Read an option chain from your files. Implements the ``ChainSource``
+    protocol, so it is directly interchangeable with the synthetic chain.
 
-    缺的可选列会**补齐并标记来源**：
+    Absent optional columns are **filled in and flagged**:
 
-    - 没有 ``iv``：按中价反解，失败的行标为缺失（不是 0）
-    - 没有 greeks：用 IV 按 Black-Scholes 推，``greeks_model_derived`` 置真
+    - no ``iv``: solved from the mid; rows that fail are marked absent, not 0
+    - no greeks: derived from IV with Black-Scholes, and
+      ``greeks_model_derived`` is set
 
-    这个标记很重要——供应商给的 delta 和我推出来的 delta 不是一回事，研究结论
-    的可信度也不一样。所以标记一路带到交易明细里，而不是在这里抹平。
+    That flag matters — a vendor's delta and a delta I derived are not the same
+    thing, and conclusions drawn on them do not deserve the same confidence. So
+    the flag travels all the way into the trade records rather than being
+    flattened here.
     """
 
     def __init__(
@@ -304,7 +330,8 @@ class FileChainSource:
         report = check_frame(frame, path=str(self.path))
         if strict and not report.ok:
             raise DataQualityError(
-                "数据没通过体检，拒绝用它跑回测：\n" + report.summary(printout=False)
+                "the data failed its health check; refusing to run on it:\n"
+                + report.summary(printout=False)
             )
         self.report = report
         self._frame = self._prepare(frame)
@@ -312,7 +339,7 @@ class FileChainSource:
             d: g.reset_index(drop=True) for d, g in self._frame.groupby("asof", sort=False)
         }
 
-    # ---- 协议 ----
+    # ---- the protocol ----
     def snapshot(self, day: date) -> pd.DataFrame:
         got = self._by_day.get(day)
         return empty_chain() if got is None else got
@@ -329,7 +356,7 @@ class FileChainSource:
         ]
         return hit.reset_index(drop=True) if len(hit) else empty_chain()
 
-    # ---- 补齐 ----
+    # ---- filling in ----
     def _prepare(self, frame: pd.DataFrame) -> pd.DataFrame:
         from backtest.pricing import greeks as bs_greeks, implied_vol
 
@@ -339,8 +366,10 @@ class FileChainSource:
                 out[col] = np.nan
         out["source"] = out["source"].astype("object").fillna(f"file:{self.path.name}")
         out["quality_flags"] = out["quality_flags"].astype("object").fillna("")
-        # 缺列时被建成了 float64 的 NaN 列，直接写 True 会触发 dtype 不兼容。
-        # 先摆正类型，不要靠 pandas 的隐式转换——那条路在新版本里会直接报错。
+        # When the column was absent it was created as a float64 NaN column, and
+        # writing True into that is a dtype conflict. Fix the type up front
+        # rather than relying on pandas' implicit conversion, which newer
+        # versions raise on outright.
         out["greeks_model_derived"] = out["greeks_model_derived"].astype("object")
 
         mid = (out["bid"].astype(float) + out["ask"].astype(float)) / 2.0
@@ -348,8 +377,9 @@ class FileChainSource:
         spot = out["underlying_price"].astype(float).to_numpy()
         strike = out["strike"].astype(float).to_numpy()
         is_call = (out["right"] == Right.CALL.value).to_numpy()
-        # 利率用配置里的回退常数。真实曲线接进来之后这里应当改成按日取值——
-        # 现在是常数，短期限的期权上影响很小，但长期限的 theta 会有偏差。
+        # The rate is the constant fallback from the config. Once a real curve is
+        # wired in this should read per day — as a constant it barely matters for
+        # short-dated options, but it biases theta at long tenors.
         rate = self.config.fallback_risk_free_rate
 
         need_iv = out["iv"].isna()

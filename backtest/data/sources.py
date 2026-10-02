@@ -1,11 +1,14 @@
-"""外部数据源的取数与重试。
+"""Fetching from external sources, with retries.
 
-全部行情来自 Yahoo Finance：标的日线、波动率指数、三个月期国债收益率（^IRX）。
-用同一个来源而非再引入 FRED，是为了少一处失败点；口径上 ^IRX 就是三个月期国债，
-与设计中写的一致。
+All market data comes from Yahoo Finance: underlying bars, the volatility index,
+and the three-month Treasury yield (^IRX). One source rather than adding FRED as
+well means one less point of failure, and ^IRX *is* the three-month bill, as the
+design states.
 
-限流与网络抖动按退避重试；超过上限后**明确报错**，而不是返回空数据——一个静默
-返回空的行情接口会让回测跑出"这段时间没有信号"的假结论。
+Rate limits and network flakiness are retried with backoff; past the limit this
+**raises**, rather than returning empty data — a market-data call that silently
+returns nothing makes the backtest conclude "there were no signals in this
+period".
 """
 
 from __future__ import annotations
@@ -28,25 +31,27 @@ def _with_retry(fetch, what: str) -> pd.DataFrame:
             frame = fetch()
             if frame is not None and not frame.empty:
                 return frame
-            last = DataQualityError(f"{what} 返回空数据")
-        except Exception as exc:  # noqa: BLE001 - 外部接口异常类型不稳定
+            last = DataQualityError(f"{what} returned no data")
+        except Exception as exc:  # noqa: BLE001 - external APIs raise anything
             last = exc
         if attempt < MAX_ATTEMPTS - 1:
             time.sleep(BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)])
-    raise DataQualityError(f"获取 {what} 失败（已重试 {MAX_ATTEMPTS} 次）：{last}")
+    raise DataQualityError(
+        f"could not fetch {what} after {MAX_ATTEMPTS} attempts: {last}")
 
 
 def _yf():
-    import yfinance  # 延迟导入：离线测试不应因为它而失败
+    import yfinance  # imported late: offline tests must not fail on it
 
     return yfinance
 
 
 def fetch_ohlcv(symbol: str, start: date, end: date) -> pd.DataFrame:
-    """日线 OHLCV，同时带回未复权价与复权收盘价。
+    """Daily OHLCV, carrying both the unadjusted prices and the adjusted close.
 
-    取 ``auto_adjust=False`` 是关键：我们需要**两套价格**——复权价用于信号，
-    实际成交价用于与期权行权价对齐。只要其中一套，另一套就补不回来了。
+    ``auto_adjust=False`` is the point: we need **both sets of prices** —
+    adjusted for signals, actually-traded for lining up with option strikes. Take
+    only one and the other cannot be recovered.
     """
 
     def _fetch() -> pd.DataFrame:
@@ -63,21 +68,22 @@ def fetch_ohlcv(symbol: str, start: date, end: date) -> pd.DataFrame:
             raw.columns = raw.columns.get_level_values(0)
         return raw
 
-    frame = _with_retry(_fetch, f"{symbol} 日线")
+    frame = _with_retry(_fetch, f"{symbol} daily bars")
     required = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
     missing = required - set(frame.columns)
     if missing:
-        raise DataQualityError(f"{symbol} 日线缺少字段：{sorted(missing)}")
+        raise DataQualityError(f"{symbol} bars are missing columns: {sorted(missing)}")
     frame.index = pd.to_datetime(frame.index).tz_localize(None)
     return frame
 
 
 def fetch_dividends(symbol: str) -> pd.Series:
-    """除息事件（日期 → 每股金额）。
+    """Dividend events (date -> amount per share).
 
-    取不到时返回空序列，但**把原因写在序列的 ``attrs`` 上**——调用方据此记录事件。
-    直接吞掉异常会让"这只标的不分红"和"分红接口挂了"变得无法区分，而两者对定价
-    的影响完全不同。
+    When unavailable this returns an empty series but **records why in the
+    series' ``attrs``**, which is what the caller logs. Swallowing the error
+    would make "this underlying pays no dividend" indistinguishable from "the
+    dividend call is down", and those two mean very different things for pricing.
     """
 
     def _fetch() -> pd.DataFrame:
@@ -85,7 +91,7 @@ def fetch_dividends(symbol: str) -> pd.Series:
         return series.to_frame("amount") if series is not None else pd.DataFrame()
 
     try:
-        frame = _with_retry(_fetch, f"{symbol} 分红")
+        frame = _with_retry(_fetch, f"{symbol} dividends")
     except DataQualityError as exc:
         empty = pd.Series(dtype=float, name="amount")
         empty.attrs["unavailable_reason"] = str(exc)
@@ -95,6 +101,7 @@ def fetch_dividends(symbol: str) -> pd.Series:
 
 
 def fetch_close_series(symbol: str, start: date, end: date) -> pd.Series:
-    """收盘价序列。用于波动率指数与利率这类只需要收盘的序列。"""
+    """A close series, for things like the vol index and rates where only the
+    close is needed."""
     frame = fetch_ohlcv(symbol, start, end)
     return frame["Close"].rename(symbol)

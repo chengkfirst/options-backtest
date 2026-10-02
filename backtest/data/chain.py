@@ -1,14 +1,18 @@
-"""期权链接口与长表结构。
+"""The option-chain interface and the long-form layout.
 
-字段集按**商业数据源的通用输出**定义，而不是按当前能拿到什么裁剪。某个实现提供不了
-的字段（合成链没有成交量与未平仓）以缺失标记表达，MUST NOT 从接口中移除——否则
-日后接入付费数据时会发现字段对不上，接口得重做，预留的扩展点就白留了。
+The column set is defined after **what commercial vendors generally supply**, not
+trimmed to what is available today. A field one implementation cannot fill (the
+synthetic chain has no volume and no open interest) is marked missing; it MUST
+NOT be dropped from the interface — otherwise wiring up paid data later turns up
+mismatched columns, the interface has to be redone, and the extension point was
+reserved for nothing.
 
-访问方式有两个，对应回测的两种需要：
+There are two ways in, matching the two things a backtest needs:
 
-- :meth:`ChainSource.snapshot` —— 某日的全部合约，用于选约。
-- :meth:`ChainSource.series` —— **某一张合约**在一段日期上的逐日报价，用于判定
-  止盈止损的首次触发。这是成交表引擎的核心操作，一次切片取代逐日循环。
+- :meth:`ChainSource.snapshot` — every contract on one day, for selection.
+- :meth:`ChainSource.series` — **one contract's** daily quotes over a span, for
+  finding when a take-profit or stop was first touched. This is the trade-table
+  engine's core operation: one slice instead of a day-by-day loop.
 """
 
 from __future__ import annotations
@@ -21,19 +25,23 @@ import pandas as pd
 from backtest.errors import DataQualityError
 from backtest.types import CHAIN_COLUMNS, ContractId, Right
 
-#: 合成链无法提供的字段用它标记。下游据此跳过相关判断，而不是当成 0。
+#: Marks a field the synthetic chain cannot supply. Downstream code skips the
+#: affected test rather than reading it as 0.
 UNAVAILABLE = float("nan")
 
 
 class ChainSource(Protocol):
-    """期权链的统一访问接口。真实数据源与合成链实现同一个协议。"""
+    """One way in to any option chain. Real sources and the synthetic chain
+    implement the same protocol."""
 
     def snapshot(self, day: date) -> pd.DataFrame:
-        """某日全部可交易合约的长表，列为 :data:`CHAIN_COLUMNS`。"""
+        """Every tradable contract on one day, in long form, with the columns
+        :data:`CHAIN_COLUMNS`."""
         ...
 
     def series(self, contract: ContractId, days: Iterable[date]) -> pd.DataFrame:
-        """某张合约在给定日期上的逐日报价；无报价的日期不出现在结果中。"""
+        """One contract's quotes on the given days; days without a quote do not
+        appear in the result."""
         ...
 
 
@@ -42,13 +50,15 @@ def empty_chain() -> pd.DataFrame:
 
 
 def validate_chain(frame: pd.DataFrame, *, asof: date) -> pd.DataFrame:
-    """质量校验。异常记录被剔除或标记，不得静默进入回测。
+    """Quality checks. Bad rows are dropped or flagged; none may enter the
+    backtest silently.
 
-    返回剔除异常后的表；被剔除的原因写入 ``quality_flags``，便于事后追溯。
+    Returns the frame with the bad rows removed; the reason each was dropped goes
+    into ``quality_flags`` so it can be traced afterwards.
     """
     missing = set(CHAIN_COLUMNS) - set(frame.columns)
     if missing:
-        raise DataQualityError(f"期权链缺少字段：{sorted(missing)}")
+        raise DataQualityError(f"the chain is missing columns: {sorted(missing)}")
     if frame.empty:
         return frame
 
@@ -64,12 +74,12 @@ def validate_chain(frame: pd.DataFrame, *, asof: date) -> pd.DataFrame:
 
     dropped = bad_price | inverted | expired
     if frame.duplicated(subset=["asof", "symbol", "expiry", "strike", "right"]).any():
-        raise DataQualityError(f"{asof} 的期权链存在重复主键")
+        raise DataQualityError(f"the chain for {asof} has duplicate primary keys")
     return frame.loc[~dropped].reset_index(drop=True)
 
 
 def relative_spread(bid: pd.Series | float, ask: pd.Series | float):
-    """相对买卖价差 = (ask - bid) / mid。报价不可用时结果为 NaN。"""
+    """Relative spread = (ask - bid) / mid. NaN when the quote is unusable."""
     mid = (bid + ask) / 2.0
     return (ask - bid) / mid
 
@@ -78,14 +88,18 @@ def delta_after_move(
     spot: float, strike: float, dte_days: float, iv: float, rate: float,
     right: Right, move: float, days_forward: int = 10,
 ) -> float:
-    """标的动了 ``move``、又过了 ``days_forward`` 天之后，这张合约的 delta。
+    """This contract's delta after the underlying moves by ``move`` and
+    ``days_forward`` days pass.
 
-    **链上没有这个字段，只能重新定价**——"如果涨 3% 会怎样"不是任何数据源会提供的
-    观测值。所以它放在数据层：模型推导出来的链上量本来就在这一层产生并打标，
-    上层只管消费，不关心数字是观测还是推导。
+    **The chain has no such column; it has to be repriced** — "what if it rises
+    3%" is not an observation any vendor supplies. Hence its place in the data
+    layer: model-derived chain quantities are produced and flagged here, and the
+    layers above consume them without caring whether a number was observed or
+    derived.
 
-    假设 IV 不变。现实里标的反弹时 IV 通常会掉，所以**这个数偏乐观**——
-    偏的方向是确定的，用的人知道就行。
+    Assumes IV is unchanged. In reality IV usually falls as the underlying
+    rebounds, so **this number is optimistic** — the direction of the bias is
+    known, which is enough for the caller.
     """
     from backtest.pricing import greeks
 
