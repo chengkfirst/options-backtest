@@ -1,8 +1,10 @@
-"""逐日复查：动态止盈止损、分批加减仓。
+"""The daily review: dynamic exits, scaling in and out.
 
-这块最危险的不是"跑不起来"，是**盈亏悄悄算错**。减仓之后最终记录只按剩余张数
-算进出价差，先减掉的那几张的盈亏会凭空消失——回测照常跑完，数字看着正常。
-所以测试重点是**交易明细与账本必须分毫不差**。
+The danger here is not that it fails to run, it is that **the P&L comes out quietly
+wrong**. After a reduction, the final record computes the price difference on the
+remaining quantity only, and the P&L of the contracts sold earlier vanishes — the
+run finishes and the numbers look fine. So these tests are about the trade log and
+the ledger agreeing exactly.
 """
 
 from __future__ import annotations
@@ -15,21 +17,22 @@ from backtest.errors import StartupError
 
 class TestActions:
     def test_close_kind_validated(self):
-        with pytest.raises(StartupError, match="未知的了结类别"):
-            Close("x", kind="随便写")
+        with pytest.raises(StartupError, match="unknown exit kind"):
+            Close("x", kind="anything")
 
     @pytest.mark.parametrize("bad", [0.0, 1.0, 1.5, -0.2])
     def test_reduce_fraction_bounds(self, bad):
-        with pytest.raises(StartupError, match="减仓比例"):
+        with pytest.raises(StartupError, match="reduction must lie between"):
             Reduce(bad)
 
     def test_add_at_least_one(self):
-        with pytest.raises(StartupError, match="至少 1 张"):
+        with pytest.raises(StartupError, match="at least 1 contract"):
             Add(0)
 
     def test_roll_refuses_loudly(self):
-        """展期没实现。悄悄当成平仓会让胜率与持有期失真，所以直接拒绝。"""
-        with pytest.raises(StartupError, match="展期还没实现"):
+        """Rolling is unimplemented. Quietly treating it as a close would distort the
+        win rate and the holding period, so it refuses."""
+        with pytest.raises(StartupError, match="rolling is not implemented"):
             Roll(to_contract=None)
 
 
@@ -47,56 +50,66 @@ class TestEngineIntegration:
         return run(**self.BASE, **extra)
 
     def test_reduce_keeps_one_logical_trade(self):
-        """减仓不得让一笔变成两笔——展期三次按持仓统计会变成四笔，胜率全失真。
+        """A reduction must not turn one trade into two — counted by position,
+        something rolled three times becomes four and the win rate is distorted.
 
-        判据是 **trade_id 不重复**，不是"总笔数与不减仓时相同"：仓位大小依赖权益，
-        减仓会改变权益路径，后续某些交易的张数随之变化（算出 0 张就不开仓），
-        所以两个变体的总笔数本来就会不同。
+        The criterion is that **trade_id does not repeat**, not "the same total count
+        as without reductions": size depends on equity, a reduction changes the equity
+        path, and later trades' quantities change with it (computing to 0 means no
+        trade), so the two variants' totals differ by construction.
         """
         def review(ctx, pos):
-            return Reduce(0.5, "减半") if (pos.days_held == 5 and pos.quantity >= 2) else None
+            return (Reduce(0.5, "cut half")
+                    if (pos.days_held == 5 and pos.quantity >= 2) else None)
 
         r = self._run(review=review)
         t = r.trades
-        assert len(t) == t.trade_id.nunique(), "减仓把一笔逻辑交易拆成了多行"
+        assert len(t) == t.trade_id.nunique(), \
+            "a reduction split one logical trade across several rows"
         events = r.events
-        assert events.detail.astype(str).str.contains("减仓").any(), "这次没有真的发生减仓"
+        assert events.detail.astype(str).str.contains("reduced by").any(), \
+            "no reduction actually happened in this run"
 
     def test_partial_close_pnl_is_not_lost(self):
-        """最终记录按剩余张数算，天然漏掉先减掉的那几张——不报错，盈亏少一块。"""
+        """The final record computes on the remaining quantity and naturally omits
+        the contracts sold earlier — no error, just P&L that is short."""
         def review(ctx, pos):
-            return Reduce(0.5, "减半") if (pos.days_held == 5 and pos.quantity >= 2) else None
+            return (Reduce(0.5, "cut half")
+                    if (pos.days_held == 5 and pos.quantity >= 2) else None)
 
         r = self._run(review=review)
         fees = sum(x.fees for x in r.raw.records)
         assert r.trades.net_pnl.sum() == pytest.approx(r.raw.ledger.realised - fees, abs=0.01)
 
     def test_dynamic_exit_changes_outcome(self):
-        """复查真的改变了结果，而不是被静默忽略。"""
+        """The review really changes the result rather than being silently ignored."""
         def review(ctx, pos):
-            return Close("跟踪止盈", kind="take_profit") if pos.ratio > 0.2 else None
+            return (Close("trailing take profit", kind="take_profit")
+                    if pos.ratio > 0.2 else None)
 
         plain, dynamic = self._run(), self._run(review=review)
         assert dynamic.trades.holding_days.mean() < plain.trades.holding_days.mean()
 
     def test_static_rules_still_apply(self):
-        """静态规则是安全网，复查绕不过去——否则写错的复查会把仓位拖到到期。"""
+        """The static rules are a safety net a review cannot get round — otherwise a
+        review written wrong drags a position into expiry."""
         r = self._run(review=lambda ctx, pos: None)
         assert (r.trades.holding_days <= 30).all()
 
     def test_bad_return_is_rejected(self):
-        with pytest.raises(StartupError, match="应当返回 Close"):
-            self._run(review=lambda ctx, pos: "平掉")
+        with pytest.raises(StartupError, match="must return one of Close"):
+            self._run(review=lambda ctx, pos: "close it")
 
     def test_exception_carries_the_day(self):
         def review(ctx, pos):
-            raise ValueError("我坏了")
+            raise ValueError("I am broken")
 
-        with pytest.raises(StartupError, match="复查函数在"):
+        with pytest.raises(StartupError, match="the review function raised"):
             self._run(review=review)
 
     def test_trade_table_refuses_review(self):
-        """成交表向量化算出场，逐日复查它做不到——拒绝，不给近似。"""
+        """The trade table computes exits vectorised and cannot review day by day —
+        it refuses rather than approximating."""
         from backtest import run
 
         opts = {**self.BASE, "engine": "trade_table"}

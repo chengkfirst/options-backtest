@@ -1,45 +1,53 @@
-"""逐日复查持仓：③④⑥⑤ 的动态版本。
+"""Reviewing positions daily: the dynamic form of (3)(4)(5)(6).
 
-## 为什么这四件事是同一个机制
+## Why these four are one mechanism
 
-在入场那一刻把止盈止损定成固定比例，隐含了一个假设：**这笔交易的"对"与"错"
-在开仓时就已经知道了，而且不会变。** 真实交易里不成立：
+Fixing the take-profit and stop as ratios at the moment of entry assumes something:
+**that whether this trade is right or wrong was already known when it opened, and
+will not change.** In real trading it does not hold:
 
-- **③ 止盈**不一定是固定比例。跟踪止盈（回吐已得利润的三分之一就走）、
-  按标的波动定（走到 2 倍 ATR）、按论据定（等的那件事发生了就走）——
-  这些都要每天重算。
-- **④ 止损**同理。"亏 50%"是个数字，"论据失效"是个判断，后者往往先发生。
-- **⑥ 仓位**也不一定是一次性的。先建半仓、确认了再加，是很常见的做法。
-- **⑤ headwind** 本来就是持仓期间的事。
+- **(3) take profit** need not be a fixed ratio. A trailing stop (out after giving
+  back a third of the gain), one set by the underlying's volatility (out at 2 ATR),
+  one set by the thesis (out once the thing you waited for happened) — all of those
+  have to be recomputed daily.
+- **(4) stop loss** likewise. "Down 50%" is a number; "the thesis failed" is a
+  judgement, and the judgement usually comes first.
+- **(6) size** need not be settled once either. Taking half now and adding on
+  confirmation is common practice.
+- **(5) headwind** was always a thing that happens while holding.
 
-四件事都要求同一个东西：**每天对每个持仓问一遍，然后可以做点什么。**
-所以它们是一个钩子，不是四个。
+All four want the same thing: **ask the question of every position, every day, and
+then be able to act.** So they are one hook, not four.
 
-## 用法
+## Usage
 
     def review(ctx, pos):
-        # 跟踪止盈：从最高点回吐三分之一就走
+        # A trailing stop: out after giving back a third of the peak gain
         if pos.mfe_so_far > 0.5 and pos.ratio < pos.mfe_so_far * 0.67:
-            return Close("回吐已得利润的三分之一")
+            return Close("gave back a third of the gain")
 
-        # 论据失效（这比固定止损更早触发）
+        # The thesis failed (this usually fires earlier than a fixed stop)
         if ctx.signal("close") < ctx.signal("sma_50"):
-            return Close("跌破 50 日线，当初看多的理由没了")
+            return Close("below the 50-day; the reason for being long is gone")
 
-        # 中间地带：先减一半，不是非黑即白
+        # The middle ground: cut half, rather than all or nothing
         if pos.days_held > 10 and pos.ratio < 0:
-            return Reduce(0.5, "持有十天还没动静，先减一半")
+            return Reduce(0.5, "ten days and nothing has happened; cut half")
 
-        return None      # 继续持有
+        return None      # keep holding
 
-## 边界
+## Boundaries
 
-- **静态出场规则依然生效**，复查是在它之上加判断，不是替代。时间类了结
-  （``hold_days`` / ``dte_floor``）是安全网，不允许被复查绕过——否则一个写错的
-  复查函数会把仓位拖到到期。
-- 只有事件驱动引擎支持。成交表引擎向量化算出场，逐日复查它做不到。
-- **部分了结不产生新的交易记录**：展期三次的头寸按持仓统计会变成四笔，
-  胜率与持有期全部失真。减仓后仍是同一笔逻辑交易，直到彻底平掉。
+- **The static exit rules still apply.** A review adds judgement on top of them;
+  it does not replace them. The time-based exits (``hold_days`` / ``dte_floor``)
+  are a safety net and may not be circumvented by a review — otherwise one review
+  function written wrong drags a position into expiry.
+- Only the event-driven engine supports it. The trade-table engine computes exits
+  vectorised and cannot review day by day.
+- **A partial close produces no new trade record**: counted by position, something
+  rolled three times becomes four trades, and both win rate and holding period are
+  distorted. After a reduction it is still one logical trade, until it is closed
+  out entirely.
 """
 
 from __future__ import annotations
@@ -54,52 +62,60 @@ from backtest.types import require
 
 @dataclass(frozen=True, slots=True)
 class Close:
-    """平掉整个持仓。"""
+    """Close the whole position."""
 
     reason: str = ""
-    #: 归到哪个了结原因下。影响统计分组，所以要老实填。
+    #: Which exit reason this files under. It drives the statistical grouping, so
+    #: fill it in honestly.
     #: ``take_profit`` / ``stop_loss`` / ``headwind`` / ``signal``
     kind: str = "signal"
 
     def __post_init__(self) -> None:
         allowed = {"take_profit", "stop_loss", "headwind", "signal"}
-        require(self.kind in allowed, f"未知的了结类别 {self.kind!r}，可选 {sorted(allowed)}")
+        require(self.kind in allowed,
+                f"unknown exit kind {self.kind!r}; one of {sorted(allowed)}")
 
 
 @dataclass(frozen=True, slots=True)
 class Reduce:
-    """减仓。``fraction`` 是减掉的**比例**，0.5 表示减一半。
+    """Reduce the position. ``fraction`` is the **share removed**: 0.5 cuts it in
+    half.
 
-    减完仍是**同一笔逻辑交易**，不会在明细里多出一行。
+    Afterwards it is still **one logical trade**; no extra row appears in the log.
     """
 
     fraction: float
     reason: str = ""
 
     def __post_init__(self) -> None:
-        require(0 < self.fraction < 1, f"减仓比例须在 0 与 1 之间（0.5 = 减一半），给的是 {self.fraction}")
+        require(0 < self.fraction < 1,
+                f"the reduction must lie between 0 and 1 (0.5 cuts it in half), got "
+                f"{self.fraction}")
 
 
 @dataclass(frozen=True, slots=True)
 class Add:
-    """加仓。同一张合约、同一笔逻辑交易，按加权平均更新成本。"""
+    """Add to the position. Same contract, same logical trade, cost updated as a
+    weighted average."""
 
     contracts: int
     reason: str = ""
 
     def __post_init__(self) -> None:
-        require(self.contracts >= 1, "加仓至少 1 张")
+        require(self.contracts >= 1, "an addition must be at least 1 contract")
 
 
 @dataclass(frozen=True, slots=True)
 class Roll:
-    """展期——**还没实现**。
+    """Rolling — **not implemented**.
 
-    不是"先平掉再开一笔"那么简单：按本项目的口径，展期后仍是**同一笔逻辑交易**
-    （见 ``需求.md`` 的底线约束）。当成两笔统计，胜率和持有期都会失真。
-    要正确支持，``TradeRecord`` 得能容纳"一笔交易经历过多张合约"，那是架构级改动。
+    It is not simply "close and open another": by this project's convention a roll
+    is still **one logical trade**. Counted as two, both win rate and holding period
+    are distorted. Supporting it properly requires ``TradeRecord`` to hold "one
+    trade that passed through several contracts", which is an architectural change.
 
-    现在返回它会直接报错，而不是悄悄当成平仓——后者会给出一个看起来正常的错结果。
+    Returning this raises, rather than quietly being treated as a close — the latter
+    would give a wrong result that looks right.
     """
 
     to_contract: Any
@@ -107,17 +123,20 @@ class Roll:
 
     def __post_init__(self) -> None:
         raise StartupError(
-            "展期还没实现。它要求一笔逻辑交易能跨多张合约，而 TradeRecord 目前一行一张，"
-            "当成'平掉再开一笔'会让胜率与持有期失真。"
-            "现在可以用 Close() + 让计划在下一天重新开仓来近似，但那在统计上是两笔。"
+            "rolling is not implemented. It requires one logical trade to span "
+            "several contracts, and TradeRecord currently holds one contract per "
+            "row; treating it as close-and-reopen distorts the win rate and the "
+            "holding period. It can be approximated with Close() plus a plan that "
+            "reopens the next day, but that counts as two trades."
         )
 
 
 @dataclass(frozen=True, slots=True)
 class PositionView:
-    """复查时看到的这个持仓的状态。
+    """What the review sees of this position.
 
-    ``*_so_far`` 一律是**截至今天**的，不是事后回看的——复查函数不能看见未来。
+    Everything ``*_so_far`` is **as of today**, never looked back on afterwards — a
+    review function cannot see the future.
     """
 
     contract: Any
@@ -125,20 +144,21 @@ class PositionView:
     entry_price: float
     quantity: int
     days_held: int
-    #: 剩余到期（交易日）
+    #: Days to expiry (trading days)
     dte: int
-    #: 当前中价
+    #: The current mid
     mark: float
-    #: 相对入场价的盈亏比例。0.2 表示浮盈 20%
+    #: P&L as a fraction of the entry price. 0.2 means up 20%
     ratio: float
-    #: 截至今天的最好 / 最差。跟踪止盈止损靠它们
+    #: The best and worst **so far**. Trailing stops read these
     mfe_so_far: float
     mae_so_far: float
     iv: float
     delta: float
-    #: 下单时打的标签，来自 Plan
+    #: The tag attached at order time, from the Plan
     tag: str = ""
 
 
-#: 复查函数：拿市场上下文与这个持仓的状态，返回一个动作或 ``None``（继续持有）。
+#: A review function: takes the market context and this position's state, and
+#: returns an action or ``None`` (keep holding).
 Reviewer = Callable[[Any, PositionView], "Close | Reduce | Add | None"]

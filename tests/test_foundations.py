@@ -1,4 +1,4 @@
-"""可缺失值、合约标识、配置校验、错误分层。"""
+"""Maybe, contract ids, config validation, the error hierarchy."""
 
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ class TestMaybe:
         assert Maybe.some(3.5).unwrap() == 3.5
 
     def test_missing_carries_reason(self):
-        m = Maybe.missing("无报价")
-        assert m.is_missing and m.reason == "无报价"
+        m = Maybe.missing("no quote")
+        assert m.is_missing and m.reason == "no quote"
 
     def test_unwrap_missing_raises(self):
         with pytest.raises(MissingValueError):
-            Maybe.missing("无报价").unwrap()
+            Maybe.missing("no quote").unwrap()
 
     def test_some_rejects_none(self):
         with pytest.raises(ValueError):
@@ -33,12 +33,12 @@ class TestMaybe:
             Maybe.missing("")
 
     def test_bool_is_blocked(self):
-        """防止 `if maybe:` —— 那会把缺失悄悄当成 falsy。"""
+        """Guards against `if maybe:`, which would read absence as falsy."""
         with pytest.raises(TypeError):
             bool(Maybe.some(1.0))
 
     def test_or_else_does_not_hide_missing(self):
-        m = Maybe.missing("预热期")
+        m = Maybe.missing("warm-up period")
         assert m.or_else(0.0) == 0.0 and m.is_missing
 
 
@@ -68,7 +68,8 @@ class TestContractId:
 
 class TestExitPriority:
     def test_stop_loss_beats_take_profit(self):
-        """日线看不到盘中先后，同日两者都触及时取亏损一侧，不高估表现。"""
+        """Daily bars do not show intraday order; when both are touched on one day
+        take the losing side, so performance is not flattered."""
         assert (
             resolve_exit_reason([ExitReason.TAKE_PROFIT, ExitReason.STOP_LOSS])
             is ExitReason.STOP_LOSS
@@ -81,7 +82,8 @@ class TestExitPriority:
 
 class TestConfigValidation:
     def test_min_dte_must_exceed_execution_lag(self):
-        """下限小于 lag+1 时，了结意图会落空，仓位被静默拖到到期。"""
+        """Below lag+1 an exit intent comes to nothing and the position is silently
+        dragged into expiry."""
         with pytest.raises(StartupError, match="min_days_to_expiry"):
             BacktestConfig(execution_lag_days=1, min_days_to_expiry=1)
 
@@ -99,13 +101,14 @@ class TestConfigValidation:
 
 class TestTimeConventions:
     def test_pricing_uses_calendar_days(self):
-        """30 个日历日（含 8 个非交易日）按 30/365，不折算成交易日。"""
+        """30 calendar days (8 of them non-trading) are 30/365, not converted to
+        trading days."""
         t = TimeConventions()
         got = t.year_fraction(date(2024, 3, 1), date(2024, 3, 31))
         assert got == pytest.approx(30 / CALENDAR_DAYS_PER_YEAR)
 
     def test_weekend_decays(self):
-        """周五到周一是三个日历日，不是一个交易日。"""
+        """Friday to Monday is three calendar days, not one trading day."""
         t = TimeConventions()
         friday, monday = date(2024, 3, 1), date(2024, 3, 4)
         expiry = date(2024, 4, 1)

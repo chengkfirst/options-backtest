@@ -1,24 +1,32 @@
-"""事件驱动引擎：逐日推进。
+"""The event-driven engine: stepping day by day.
 
-和成交表引擎的区别只有一个，但很关键：**它知道任何时刻账上有多少钱、手里有几张合约**。
-于是权益曲线、回撤、资金约束、并发上限、对冲——这些依赖组合状态的东西才成立。
+There is exactly one difference from the trade-table engine, and it is the one that
+matters: **it knows how much money is in the account and how many contracts are
+held at any moment.** That is what makes the equity curve, drawdown, capital
+constraints, concurrency limits and hedging possible at all.
 
-两个引擎读**同一个** ``Strategy`` 定义。这不是为了省事，是为了能互相校验：
-同一配置在无资金约束、无并发上限时，两边必须产出逐行相同的交易明细。任何一边算错
-都会被对方照出来。
+Both engines read the **same** ``Strategy`` definition. Not for convenience — so
+they can check each other: with no capital constraint and no concurrency limit, the
+same configuration must produce row-identical trade logs on both sides, and an
+error on either is shown up by the other.
 
-主循环每天的顺序是固定的，每一步的位置都有理由：
+The main loop's order within a day is fixed, and every step's position has a reason:
 
-    ① 推进到 T 日
-    ② 加载 T 日数据
-    ③ 撮合 T-1 产生的意图  ← 在到期结算之前：到期日当天合约仍在交易，
-                              T-1 下的平仓单应该有机会成交
-    ④ T 日到期结算
-    ⑤ 盯市 → 写入 T 日快照  ← 在策略回调之前：策略要看到今日市值；
-                              且第 ⑥⑦ 步不改组合，所以这就是当日最终快照
-    ⑥ 计算信号
-    ⑦ 策略产出意图
-    ⑧ 校验意图 → 入队等 T+1  ← 与产出分开：执行延迟造成的冲突必须在源头暴露
+    1  advance to day T
+    2  load T's data
+    3  fill the intents created on T-1   <- before expiry settlement: a contract
+                                            still trades on its expiry day, so an
+                                            exit placed on T-1 deserves the chance
+    4  settle T's expiries
+    5  mark to market -> write T's snapshot  <- before the strategy callback: the
+                                            strategy must see today's value; and
+                                            steps 6-7 do not change the portfolio,
+                                            so this is the day's final snapshot
+    6  compute signals
+    7  the strategy produces intents
+    8  validate -> queue for T+1        <- separate from producing them: conflicts
+                                            caused by the execution lag have to
+                                            surface at the source
 """
 
 from __future__ import annotations
@@ -55,7 +63,8 @@ from backtest.types import (
 ENGINE_NAME = "event_driven"
 
 
-#: 复查平仓时，``Close.kind`` 归到哪个了结原因。统计按这个分组，所以要一一对上。
+#: Which exit reason a review's ``Close.kind`` files under. The statistics group on
+#: this, so the mapping has to be exact.
 REVIEW_EXIT_KIND = {
     "take_profit": ExitReason.TAKE_PROFIT,
     "stop_loss": ExitReason.STOP_LOSS,
@@ -66,7 +75,7 @@ REVIEW_EXIT_KIND = {
 
 @dataclass(frozen=True, slots=True)
 class Intent:
-    """一笔交易意图。T 日产生，T+lag 日执行。"""
+    """One trade intent. Created on T, executed on T+lag."""
 
     contract: ContractId
     side: Side
@@ -74,12 +83,12 @@ class Intent:
     created: date
     execute_on: date
     trade_id: int
-    #: 开仓还是平仓。**必须是显式字段**：用给人看的说明文本当控制流开关，
-    #: 改一下措辞就会把开仓当成平仓执行。
-    kind: str = "entry"               # "entry" | "exit"
-    reason: str = ""                  # 为什么下这一单，纯给人看
+    #: Opening or closing. **This must be an explicit field**: using human-readable
+    #: text as a control-flow switch means rewording it executes an entry as an exit.
+    kind: str = "entry"               # "entry" | "exit" | "reduce" | "add"
+    reason: str = ""                  # why this order, for a person to read
     exit_reasons: tuple[ExitReason, ...] = ()
-    #: 计划式下带过来的东西：这一笔自己的出场规则、分组标签、备注。
+    #: What a plan carries over: this trade's own exit rule, tag and note.
     exit_rule: "ExitRule | None" = None
     tag: str = ""
     note: str = ""
@@ -87,27 +96,31 @@ class Intent:
 
 @dataclass
 class OpenTrade:
-    """一笔尚未了结的逻辑交易。了结时变成 TradeRecord。"""
+    """A logical trade not yet closed. It becomes a TradeRecord on exit."""
 
     trade_id: int
     contract: ContractId
     entry_date: date
     entry_price: float
     quantity: int
-    side: Side                        # 建仓方向：BUY=多头，SELL=空头
+    side: Side                        # the entry side: BUY = long, SELL = short
     fees: float
     entry_quote: dict
     entry_signals: dict
-    #: 持仓期内的最大有利/不利偏移，供 MFE/MAE 研究用
+    #: Maximum favourable / adverse excursion while held, for MFE/MAE research
     mfe: float = 0.0
     mae: float = 0.0
-    #: **这一笔自己的**出场规则。计划式下每笔可以不同——深回撤那档止损放宽、
-    #: 持有更久。为空则回落到策略的全局规则。
+    #: **This trade's own** exit rule. Under a plan each can differ — the deep
+    #: drawdown case widens the stop and holds longer. Empty falls back to the
+    #: strategy's global rule.
     exit_rule: "ExitRule | None" = None
-    #: 减仓时已经落袋的毛盈亏。**必须单独记**：最终记录按"剩余张数 × 进出价差"算，
-    #: 天然漏掉先减掉的那几张。漏了不会报错，只会让这笔交易的盈亏静静地少一块。
+    #: Gross P&L already banked by reductions. **It has to be recorded separately**:
+    #: the final record computes "remaining quantity x price difference", which
+    #: naturally omits the contracts sold earlier. Omitting it raises nothing and
+    #: simply leaves this trade's P&L quietly short.
     realised_gross: float = 0.0
-    #: 下单时打的分组标签与备注，来自 Plan。一路存进交易明细，事后按它分类研究。
+    #: The tag and note attached at order time, from the Plan. They travel into the
+    #: trade log for classified research afterwards.
     tag: str = ""
     note: str = ""
 
@@ -120,15 +133,18 @@ class EventDrivenResult:
     strategy: Strategy
     events: EventLog
     ledger: Ledger
-    #: 每日组合层希腊字母。带默认值，所以必须排在无默认值的字段之后。
+    #: Daily portfolio greeks. It has a default, so it must follow the fields
+    #: that do not.
     greeks: tuple = ()
-    #: **逐日持仓轨迹**：每个在持仓位每天的状态。⑤ headwind 研究的硬前置——
-    #: 只有入场和出场两个点，看不出中间发生了什么。事后补不回来，所以先采着。
+    #: **The daily position trajectory**: every held position's state each day. A
+    #: hard prerequisite for headwind research (5) — with only an entry and an exit
+    #: point there is no way to see what happened in between. It cannot be
+    #: reconstructed afterwards, so it is collected from the start.
     paths: tuple = ()
 
     @property
     def paths_frame(self):
-        """逐日持仓轨迹表。一行 = 某笔交易的某一天。"""
+        """The daily trajectory table. One row = one trade on one day."""
         import pandas as pd
 
         if not self.paths:
@@ -139,25 +155,29 @@ class EventDrivenResult:
 
     @property
     def trades(self) -> pd.DataFrame:
-        """与成交表引擎同一种表——研究层不需要知道是哪条引擎跑的。"""
+        """The same table the trade-table engine produces — the research layer need
+        not know which engine ran."""
         return trades_frame(self.records)
 
     @property
     def greeks_frame(self) -> pd.DataFrame:
-        """逐日组合层希腊字母。空仓日也在，值为 0——缺行和"当天没敞口"是两回事。"""
+        """Daily portfolio greeks. Flat days are present too, at 0 — a missing row
+        and "no exposure that day" are different things."""
         if not self.greeks:
             return pd.DataFrame()
         return pd.DataFrame([g.as_dict() for g in self.greeks]).set_index("date")
 
     @property
     def concurrency(self) -> pd.Series:
-        """每日同时持仓数。事件驱动是真的知道，不像成交表要事后推算。"""
+        """Concurrent positions per day. This engine actually knows, where the trade
+        table has to infer it afterwards."""
         return pd.Series(
             {s.day: s.n_positions for s in self.snapshots}, name="concurrent_positions"
         )
 
     def capital_check(self) -> dict:
-        """资金是否够用。事件驱动已经强制了约束，所以这里是事后确认。"""
+        """Whether capital sufficed. This engine already enforced the constraint, so
+        this is confirmation after the fact."""
         peak = max((s.n_positions for s in self.snapshots), default=0)
         peak_deployed = max((s.deployed for s in self.snapshots), default=0.0)
         return {
@@ -168,7 +188,7 @@ class EventDrivenResult:
 
     @property
     def equity(self) -> pd.DataFrame:
-        """两条权益曲线 + 资金占用。"""
+        """Both equity curves plus capital utilisation."""
         return pd.DataFrame(
             [
                 {
@@ -183,7 +203,7 @@ class EventDrivenResult:
 
 
 class EventDrivenEngine:
-    """逐日推进的回测引擎。"""
+    """The backtest engine that steps day by day."""
 
     def __init__(
         self,
@@ -203,42 +223,51 @@ class EventDrivenEngine:
         self.signals = signals
         self.config = config or market.config
         self.events = events or market.events
-        #: None 表示不限。设为 None 且 enforce_capital=False 时，本引擎应与成交表引擎一致。
+        #: None means no limit. With None and enforce_capital=False, this engine
+        #: should agree with the trade-table engine.
         self.max_concurrent = max_concurrent
         self.enforce_capital = enforce_capital
-        #: 组合层敞口上限（ExposureLimits）与回撤熔断（DrawdownBrake）。
-        #: 两者都只拦新开仓，不主动减仓——减仓是 headwind 的事，那还没做。
+        #: Portfolio exposure limits (ExposureLimits) and the drawdown brake
+        #: (DrawdownBrake). Both only block new entries; neither reduces an existing
+        #: position — reducing is headwind's job, which is not built.
         self.limits = limits
         self.brake = brake
 
-    # ── 守卫 ──────────────────────────────────────────────
+    # ── guards ────────────────────────────────────────────
     def _guard(self, strategy: Strategy) -> None:
         self.signals.require(list(strategy.entry.requires))
         if strategy.exit.hold_days is None and strategy.exit.dte_floor is None:
-            raise StartupError("缺少时间类了结条件，仓位会被拖到到期")
+            raise StartupError("no time-based exit, so positions get dragged into expiry")
         lag = self.config.execution_lag_days
         floor = strategy.exit.dte_floor
         if floor is not None and floor < lag + 1:
             raise StartupError(
-                f"剩余到期下限 {floor} 过小：执行延迟 {lag} 天，下限至少 {lag + 1}"
+                f"the days-to-expiry floor {floor} is too small: with an execution lag "
+                f"of {lag} days it must be at least {lag + 1}"
             )
-        # 选约写成函数时，方向由函数自己决定，这里查不了也不该查。
+        # When selection is a function it decides direction itself, which cannot and
+        # should not be checked here.
         if not callable(strategy.select) and strategy.select.right is Right.CALL \
                 and getattr(strategy, "short", False):
-            raise StartupError("裸卖 call 未被支持：保证金模型还没做，给出的数字会是错的")
+            raise StartupError("a naked short call is not supported: there is no margin "
+                               "model, so any number given would be wrong")
         if strategy.allow_stacking:
-            # 真实账户按合约净额记仓：同一张合约买两次，在券商那里就是一个仓位，
-            # 不是两笔独立持仓。账本忠实地这么做了，但引擎按 trade_id 追踪逻辑交易，
-            # 于是第二笔永远等不到"它的"持仓被平，会被静默丢掉。
-            # 要支持得加一层批次追踪，现在没做——所以拒绝，而不是丢。
+            # A real account nets positions by contract: buying the same contract
+            # twice is one position at the broker, not two independent ones. The
+            # ledger does this faithfully, but the engine tracks logical trades by
+            # trade_id, so the second one never sees "its" position closed and is
+            # silently dropped. Supporting it needs a lot-tracking layer, which does
+            # not exist — hence a refusal rather than a drop.
             raise StartupError(
-                "事件驱动引擎暂不支持 allow_stacking：真实账户按合约净额记仓，"
-                "同一张合约的多笔建仓会被合并成一个持仓，无法再拆回成多笔逻辑交易。"
-                "需要批次追踪层，尚未实现。成交表引擎可以开这个开关，"
-                "但那样两个引擎的结果不再可比。"
+                "the event-driven engine does not support allow_stacking: a real "
+                "account nets positions by contract, so several entries in the same "
+                "contract merge into one position and cannot be split back into "
+                "several logical trades. That needs a lot-tracking layer, which is "
+                "not implemented. The trade-table engine can take this flag, but "
+                "then the two engines' results are no longer comparable."
             )
 
-    # ── 主循环 ────────────────────────────────────────────
+    # ── the main loop ─────────────────────────────────────
     def run(self, strategy: Strategy) -> EventDrivenResult:
         self._guard(strategy)
         cal = self.market.calendar
@@ -255,32 +284,34 @@ class EventDrivenEngine:
         paths: list[dict] = []
         self._brake_state = "normal"
         self._last_greeks = None
-        self._closed_pnl = records          # Kelly 用它估参数，引用同一个列表
+        self._closed_pnl = records          # the same list, referenced not copied
 
         for day in self.market.sessions():
-            # ③ 撮合昨日意图
+            # 3  fill yesterday's intents
             due, queue = [i for i in queue if i.execute_on == day], [i for i in queue if i.execute_on > day]
             for intent in due:
                 closed = self._execute(intent, ledger, open_trades, day)
                 if closed is not None:
                     records.append(closed)
 
-            # ④ 到期结算
+            # 4  settle expiries
             for pos in list(ledger.positions):
                 if pos.contract.expiry <= day:
                     rec = self._settle(pos, ledger, open_trades, day)
                     if rec is not None:
                         records.append(rec)
 
-            # ⑤ 盯市
+            # 5  mark to market
             quotes = self._quotes(day, ledger.positions)
             snap = ledger.snapshot(day, quotes, self.market.spot(day))
             ledger.check_invariant(snap)
             snapshots.append(snap)
             self._last_equity = snap.equity_mid
             self._peak_equity = max(self._peak_equity, snap.equity_mid)
-            # 回撤无条件算一次。以前只在熔断分支里算，于是计划函数想看当前回撤
-            # 时拿不到——而"回撤多深"恰恰是仓位和减仓判断最常用的输入。
+            # The drawdown is computed unconditionally. Computing it only inside the
+            # brake's branch left a plan function unable to read it — and how deep
+            # the drawdown is happens to be the commonest input to sizing and
+            # reduction decisions.
             self._drawdown = snap.equity_mid / self._peak_equity - 1.0
             g = aggregate_greeks(ledger.positions, self.chain, day,
                                  self.market.spot(day).or_else(float("nan")), snap.equity_mid)
@@ -291,11 +322,12 @@ class EventDrivenEngine:
                 if new_state != self._brake_state:
                     self.events.record(
                         EventKind.CANDIDATE_DROPPED, day,
-                        f"回撤熔断：{self._brake_state} → {new_state}（回撤 {self._drawdown:.1%}）")
+                        f"drawdown brake: {self._brake_state} -> {new_state} "
+                        f"(drawdown {self._drawdown:.1%})")
                     self._brake_state = new_state
             self._track_excursions(ledger, open_trades, quotes, day, paths)
 
-            # ⑥⑦ 信号 → 策略
+            # 6-7  signals -> the strategy
             view = self.signals.on(day)
             intents: list[Intent] = []
 
@@ -303,8 +335,9 @@ class EventDrivenEngine:
                 trade = open_trades.get(pos.trade_id)
                 if trade is None or self._already_queued(queue, pos.contract):
                     continue
-                # 静态规则先判。它是**安全网**：时间类了结不允许被复查绕过，
-                # 否则一个写错的复查函数会把仓位悄悄拖到到期。
+                # The static rules are tested first. They are a **safety net**: the
+                # time-based exits may not be circumvented by a review, or one review
+                # function written wrong quietly drags a position into expiry.
                 reasons = self._exit_reasons(pos, trade, quotes, day, strategy)
                 action = None
                 if not reasons and strategy.review is not None:
@@ -313,13 +346,14 @@ class EventDrivenEngine:
 
                 target = cal.shift(day, self.config.execution_lag_days)
                 if target is None or target > self.config.end:
-                    continue               # 区间末尾：留给到期结算处理
+                    continue               # end of the range: leave it to expiry
 
                 if reasons or isinstance(action, Close):
                     if isinstance(action, Close) and not reasons:
                         reasons = [REVIEW_EXIT_KIND[action.kind]]
                         self.events.record(EventKind.CANDIDATE_DROPPED, day,
-                                           f"复查平仓：{action.reason}", str(pos.contract))
+                                           f"review closed it: {action.reason}",
+                                           str(pos.contract))
                     intents.append(Intent(
                         contract=pos.contract,
                         side=Side.SELL if pos.quantity > 0 else Side.BUY,
@@ -328,13 +362,15 @@ class EventDrivenEngine:
                         exit_reasons=tuple(reasons),
                     ))
                 elif isinstance(action, Reduce):
-                    # 向下取整，且至少留 1 张——减到 0 张应当用 Close 表达，
-                    # 让"减仓"悄悄变成"平仓"会让统计分不清这两件事。
+                    # Round down, and keep at least 1 — reducing to 0 should be
+                    # expressed as Close; letting a reduction quietly become a close
+                    # leaves the statistics unable to tell them apart.
                     cut = int(pos.abs_quantity * action.fraction)
                     if cut < 1 or cut >= pos.abs_quantity:
                         self.events.record(
                             EventKind.CANDIDATE_DROPPED, day,
-                            f"减仓 {action.fraction:.0%} 算出 {cut} 张（当前 {pos.abs_quantity} 张），跳过",
+                            f"a {action.fraction:.0%} reduction computes to {cut} "
+                            f"contracts (holding {pos.abs_quantity}), skipped",
                             str(pos.contract))
                     else:
                         intents.append(Intent(
@@ -342,7 +378,7 @@ class EventDrivenEngine:
                             side=Side.SELL if pos.quantity > 0 else Side.BUY,
                             quantity=cut, created=day, execute_on=target,
                             trade_id=pos.trade_id, kind="reduce",
-                            reason=action.reason or "复查减仓",
+                            reason=action.reason or "reduced by review",
                         ))
                 elif isinstance(action, Add):
                     intents.append(Intent(
@@ -350,7 +386,7 @@ class EventDrivenEngine:
                         side=Side.BUY if pos.quantity > 0 else Side.SELL,
                         quantity=action.contracts, created=day, execute_on=target,
                         trade_id=pos.trade_id, kind="add",
-                        reason=action.reason or "复查加仓",
+                        reason=action.reason or "added by review",
                     ))
 
             if strategy.entry.condition(view):
@@ -359,7 +395,7 @@ class EventDrivenEngine:
                     intents.append(intent)
                     next_trade_id += 1
 
-            # ⑧ 校验入队
+            # 8  validate and queue
             for intent in intents:
                 if self._validate(intent, ledger, day):
                     queue.append(intent)
@@ -370,31 +406,37 @@ class EventDrivenEngine:
             config=self.config, strategy=strategy, events=self.events, ledger=ledger,
         )
 
-    # ── 各步 ──────────────────────────────────────────────
+    # ── the steps ─────────────────────────────────────────
     def _quotes(self, day: date, positions) -> dict[ContractId, tuple]:
         out: dict[ContractId, tuple] = {}
         for pos in positions:
             frame = self.chain.series(pos.contract, [day])
             if frame.empty:
-                self.events.record(EventKind.QUOTE_MISSING, day, "盯市无报价", str(pos.contract))
+                self.events.record(EventKind.QUOTE_MISSING, day, "no quote to mark against",
+                                   str(pos.contract))
                 continue
             row = frame.iloc[0]
-            # 带上整行：轨迹采集要 iv 与 delta。只回 (bid, ask) 的话，
-            # 想多记一个字段就得再查一次链——那是白跑一遍。
+            # Carry the whole row: trajectory collection needs iv and delta.
+            # Returning only (bid, ask) would mean querying the chain again to record
+            # one more field, which is a wasted pass.
             out[pos.contract] = (float(row["bid"]), float(row["ask"]), row)
         return out
 
     def _track_excursions(self, ledger, open_trades, quotes, day, paths) -> None:
-        """逐日采集每个在持仓位的状态。
+        """Collect every held position's state, each day.
 
-        两个用途：
+        Two uses:
 
-        1. **MFE / MAE**——止盈该设在哪、止损该设在哪，看分布比扫参数直接得多。
-        2. **逐日轨迹**——这是 ⑤ headwind 研究的**硬前置**。只有入场和出场两个点，
-           看不出中间发生了什么，也就无法回答"结果不好的持仓事前有没有预警"。
+        1. **MFE / MAE** — where the take-profit and the stop belong; reading the
+           distribution is far more direct than sweeping parameters.
+        2. **The daily trajectory** — a **hard prerequisite** for headwind research
+           (5). With only an entry and an exit point there is no way to see what
+           happened in between, and so no way to answer whether the positions that
+           ended badly gave a warning beforehand.
 
-        数据只能在持仓过程中采，**事后补不回来**——这就是为什么即使 headwind 的
-        研究工具还没写，采集也得先做。
+        The data can only be collected while a position is held and **cannot be
+        reconstructed afterwards** — which is why collection comes first, even
+        though the headwind research tools are not written.
         """
         for pos in ledger.positions:
             trade = open_trades.get(pos.trade_id)
@@ -413,8 +455,8 @@ class EventDrivenEngine:
                 "days_held": self.market.calendar.sessions_between(trade.entry_date, day),
                 "dte": self.market.calendar.sessions_between(day, pos.contract.expiry),
                 "mark": mark,
-                "ratio": ratio,              # 相对入场价的盈亏比例
-                "mfe_so_far": trade.mfe,     # 至今的最好/最差，**不是事后回看的**
+                "ratio": ratio,              # P&L as a fraction of the entry price
+                "mfe_so_far": trade.mfe,     # best/worst so far, **not looked back on**
                 "mae_so_far": trade.mae,
                 "underlying": self.market.spot(day).or_else(float("nan")),
                 "iv": float(row["iv"]) if row is not None and "iv" in row else float("nan"),
@@ -423,8 +465,9 @@ class EventDrivenEngine:
             })
 
     def _exit_reasons(self, pos: Position, trade: OpenTrade, quotes, day: date, strategy: Strategy):
-        # 这一笔自己的规则优先。计划式下每笔的止盈止损可以不同——那正是
-        # "七个组件互相联动"的落点：同一个判断同时决定了买什么和怎么了结。
+        # This trade's own rule wins. Under a plan each trade's take-profit and stop
+        # can differ — which is where the seven components' coupling actually lands:
+        # one judgement decides both what to buy and how to get out.
         rule = trade.exit_rule or strategy.exit
         cal = self.market.calendar
         reasons: list[ExitReason] = []
@@ -444,19 +487,23 @@ class EventDrivenEngine:
 
     def _entry_intent(self, day, strategy, ledger, queue, trade_id) -> Intent | None:
         if self.max_concurrent is not None and len(ledger) >= self.max_concurrent:
-            self.events.record(EventKind.CANDIDATE_DROPPED, day, f"并发已达上限 {self.max_concurrent}")
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               f"at the concurrency limit of {self.max_concurrent}")
             return None
         if self.brake is not None and self._brake_state == "halted":
-            self.events.record(EventKind.CANDIDATE_DROPPED, day, "回撤熔断中，停止开新仓")
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               "the drawdown brake has halted new entries")
             return None
         if self.limits is not None and self._last_greeks is not None:
             allowed, why = self.limits.check(self._last_greeks, self._last_equity)
             if not allowed:
-                self.events.record(EventKind.CANDIDATE_DROPPED, day, f"敞口限额：{why}")
+                self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                                   f"exposure limit: {why}")
                 return None
         target = self.market.calendar.shift(day, self.config.execution_lag_days)
         if target is None or target > self.config.end:
-            self.events.record(EventKind.CANDIDATE_DROPPED, day, "执行日超出回测区间")
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               "the execution day falls outside the backtest range")
             return None
 
         if strategy.plan is not None:
@@ -464,23 +511,26 @@ class EventDrivenEngine:
 
         selection = select_contract(
             self.chain.snapshot(target), strategy.select, self.config, self.market.calendar, target,
-            # 同上：链是执行日 target 的，视图是决策日 day 的。
+            # As above: the chain is the execution day's (target), the view is the
+            # decision day's (day).
             self.signals.on(day),
         )
         if not selection.ok:
             self.events.record(EventKind.SELECTION_FAILED, target, selection.describe())
             return None
-        # 选中了，但有被跳过的约束或退化的排序——这些不该只留在 trace 里，
-        # 使用者看不到就等于没提示。
+        # Something was chosen, but a constraint was skipped — that must not stay
+        # only in the trace; a warning the user cannot see is no warning.
         for why in selection.skipped_filters:
-            self.events.record(EventKind.CANDIDATE_DROPPED, target, f"选约提示：{why}")
+            self.events.record(EventKind.CANDIDATE_DROPPED, target,
+                               f"selection note: {why}")
         contract = selection.contract.unwrap()
         if not strategy.allow_stacking and (
             ledger.position(contract) is not None or self._already_queued(queue, contract)
         ):
             self.events.record(
                 EventKind.CANDIDATE_DROPPED, day,
-                "同一合约已在持仓中，allow_stacking 为假", str(contract))
+                "this contract is already held and allow_stacking is false",
+                str(contract))
             return None
         quantity = self._size(strategy, ledger, contract, day, target)
         if self.brake is not None and self._brake_state == "reduced":
@@ -489,19 +539,21 @@ class EventDrivenEngine:
         if quantity <= 0:
             self.events.record(
                 EventKind.CANDIDATE_DROPPED, day,
-                f"仓位算出 {quantity} 张（方法 {strategy.sizing.method}）——不足一张即不开仓，"
-                f"绝不向上取整", str(contract))
+                f"sizing computes to {quantity} contracts (method "
+                f"{strategy.sizing.method}) — less than one means no trade, and it is "
+                f"never rounded up", str(contract))
             return None
         return Intent(contract=contract, side=Side.BUY, quantity=quantity,
                       created=day, execute_on=target, trade_id=trade_id,
                       kind="entry", reason="entry")
 
     def _market_ctx(self, day, ledger) -> Context:
-        """复查时的市场与组合上下文。
+        """The market and portfolio context for a review.
 
-        **不带候选链**：复查看的是已有持仓，不是在挑新合约。传一张空表而不是
-        当天的全链，是为了不给人"可以在复查里换合约"的错觉——那是展期，
-        要另外支持（见 review.Roll）。
+        **It carries no candidate chain**: a review looks at a position already held,
+        not at choosing a new contract. Passing an empty frame rather than the day's
+        full chain avoids suggesting that a review could switch contracts — that is a
+        roll, and needs its own support (see review.Roll).
         """
         import pandas as pd
 
@@ -512,10 +564,11 @@ class EventDrivenEngine:
         )
 
     def _review_action(self, strategy, ctx, pos, trade, quotes, day):
-        """跑用户的复查函数。异常不吞，带上是哪天哪个合约一起抛。"""
+        """Run the user's review function. Exceptions are never swallowed; they are
+        raised with the day and the contract."""
         quote = quotes.get(pos.contract)
         if quote is None:
-            return None                     # 今天没报价，无从判断，留给静态规则
+            return None                     # no quote today: leave it to the static rules
         row = quote[2] if len(quote) > 2 else None
         mark = (quote[0] + quote[1]) / 2.0
         view = PositionView(
@@ -534,21 +587,23 @@ class EventDrivenEngine:
             action = strategy.review(ctx, view)
         except Exception as exc:  # noqa: BLE001
             raise StartupError(
-                f"复查函数在 {day} 处理 {pos.contract} 时抛出异常："
+                f"the review function raised on {day} handling {pos.contract}: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
         if action is not None and not isinstance(action, (Close, Reduce, Add)):
             raise StartupError(
-                f"复查函数在 {day} 返回了 {type(action).__name__}，"
-                "应当返回 Close / Reduce / Add 之一，或 None 表示继续持有。"
+                f"the review function returned {type(action).__name__} on {day}; it "
+                f"must return one of Close / Reduce / Add, or None to keep holding."
             )
         return action
 
     def _plan_intent(self, day, target, strategy, ledger, queue, trade_id) -> Intent | None:
-        """计划式入场：一个函数同时决定买什么、买多少、怎么了结。
+        """Entry by plan: one function decides what to buy, how much, and how to get
+        out.
 
-        七个组件在这里是联动的——同一个判断产出合约、仓位、止盈止损。这正是
-        参数化写法表达不了的东西。
+        This is where the seven components are coupled — one judgement yields the
+        contract, the size and the exit levels. It is exactly what the parameterised
+        form cannot express.
         """
         from backtest.selection.rules import enrich_chain
 
@@ -556,7 +611,8 @@ class EventDrivenEngine:
             self.chain.snapshot(target), self.config, self.market.calendar, target
         )
         if chain.empty:
-            self.events.record(EventKind.SELECTION_FAILED, target, "当日没有可执行的合约")
+            self.events.record(EventKind.SELECTION_FAILED, target,
+                               "no executable contract that day")
             return None
 
         ctx = Context(
@@ -567,16 +623,18 @@ class EventDrivenEngine:
         try:
             plan = strategy.plan(ctx)
         except Exception as exc:  # noqa: BLE001
-            # 不吞。计划函数里的错必须带着哪一天一起抛出来。
+            # Never swallowed. An error inside the plan function is raised with the
+            # day it happened on.
             raise StartupError(
-                f"计划函数在 {day} 抛出异常：{type(exc).__name__}: {exc}"
+                f"the plan function raised on {day}: {type(exc).__name__}: {exc}"
             ) from exc
 
         if plan is None:
             return None
         if not isinstance(plan, Plan):
             raise StartupError(
-                f"计划函数在 {day} 返回了 {type(plan).__name__}，应当返回 Plan 或 None。"
+                f"the plan function returned {type(plan).__name__} on {day}; it must "
+                f"return a Plan or None."
             )
 
         row = plan.contract
@@ -587,47 +645,54 @@ class EventDrivenEngine:
             right=Right(row["right"]),
             strike=float(row["strike"]),
         )
-        # 用户可能从别处拼了一行，或者筛之前就把链改了。校验它确实在当日可执行的链上。
+        # The user may have assembled a row elsewhere, or modified the chain before
+        # filtering. Verify it really is on that day's executable chain.
         key = chain[(chain["symbol"].astype(str) == contract.symbol)
                     & (chain["strike"].astype(float) == contract.strike)
                     & (chain["right"].astype(str) == contract.right.value)]
         if key.empty:
             raise StartupError(
-                f"计划在 {day} 选的合约不在当日可执行的链上：{contract}。"
-                "请从 ctx.chain 里挑一行，不要自己拼。"
+                f"the contract the plan chose on {day} is not on that day's "
+                f"executable chain: {contract}. Pick a row from ctx.chain; do not "
+                f"assemble one."
             )
 
         if not strategy.allow_stacking and (
             ledger.position(contract) is not None or self._already_queued(queue, contract)
         ):
             self.events.record(EventKind.CANDIDATE_DROPPED, day,
-                               "同一合约已在持仓中，allow_stacking 为假", str(contract))
+                               "this contract is already held and allow_stacking is "
+                               "false", str(contract))
             return None
 
         quantity = self._plan_size(plan, contract, target, strategy)
         if quantity <= 0:
             self.events.record(EventKind.CANDIDATE_DROPPED, day,
-                               f"计划算出 0 张（权益 {ctx.equity:,.0f}）", plan.tag)
+                               f"the plan computes to 0 contracts "
+                               f"(equity {ctx.equity:,.0f})", plan.tag)
             return None
         if self.brake is not None and self._brake_state == "reduced":
             quantity = int(quantity * self.brake.scale(self._drawdown))
             if quantity <= 0:
-                self.events.record(EventKind.CANDIDATE_DROPPED, day, "回撤熔断降规模后为 0 张")
+                self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                                   "0 contracts after the drawdown brake cut the size")
                 return None
 
         return Intent(
             contract=contract, side=Side.BUY, quantity=quantity, created=day,
             execute_on=target, trade_id=trade_id,
-            kind="entry", reason=plan.note or plan.tag or "计划入场",
+            kind="entry", reason=plan.note or plan.tag or "entry by plan",
             exit_rule=self._plan_exit_rule(plan, strategy),
             tag=plan.tag, note=plan.note,
         )
 
     def _plan_exit_rule(self, plan: Plan, strategy: Strategy) -> ExitRule:
-        """计划没给的了结项回落到策略的全局规则，不是回落到"无限制"。
+        """An exit the plan did not give falls back to the strategy's global rule,
+        never to "no limit".
 
-        回落到无限制会让"计划里忘了写 dte_floor"变成"这一笔被拖到到期"，
-        而且不报错。回落到全局值至少还有那道时间类了结的守卫。
+        Falling back to no limit turns "the plan forgot dte_floor" into "this trade
+        got dragged into expiry", and raises nothing. Falling back to the global value
+        at least keeps the time-based-exit guard in force.
         """
         base = strategy.exit
         return ExitRule(
@@ -638,10 +703,11 @@ class EventDrivenEngine:
         )
 
     def _plan_size(self, plan: Plan, contract, execute_on, strategy) -> int:
-        """按计划里给的仓位口径算张数。三个都没给就退回策略的仓位方法。
+        """Compute the quantity from whichever sizing the plan gave. With none of the
+        three, fall back to the strategy's method.
 
-        算出 0 张就是不开仓——**绝不向上取整到 1**，那会让"风险占 1.5%"
-        悄悄变成"风险占 6%"。
+        Zero contracts means no trade — **never rounded up to 1**, which would
+        quietly turn "1.5% at risk" into "6% at risk".
         """
         if plan.contracts is not None:
             return plan.contracts
@@ -658,10 +724,11 @@ class EventDrivenEngine:
         return int(budget // premium)
 
     def _size(self, strategy, ledger, contract, day, execute_on) -> int:
-        """按配置的仓位方法算张数。
+        """Compute the quantity from the configured sizing method.
 
-        对买方，最大损失就是权利金，所以"每笔风险"可以直接除。任何方法算出 0 张都
-        不开仓——**绝不向上取整到 1**，那会让"风险占 2%"悄悄变成"风险占 8%"。
+        For a buyer the maximum loss is the premium, so risk per trade divides
+        directly. Any method computing to 0 means no trade — **never rounded up to
+        1**, which would quietly turn "2% at risk" into "8% at risk".
         """
         sizing = strategy.sizing
         if sizing.method == "fixed":
@@ -676,8 +743,9 @@ class EventDrivenEngine:
         equity = self._last_equity
 
         if sizing.method == "risk_pct":
-            # **规模 = 风险预算 ÷ 止损距离。** 止损设在 -50% 时，单笔真实风险只有
-            # 权利金的一半，按全损算会把仓位压小一倍。没有止损才等于全损。
+            # **Size = risk budget / stop distance.** With the stop at -50%, a
+            # trade's real risk is half the premium, and treating it as a total loss
+            # halves the position. Only without a stop is it a total loss.
             budget = equity * sizing.risk_pct / self._loss_fraction(strategy)
         elif sizing.method == "fixed_notional":
             budget = sizing.notional
@@ -685,25 +753,29 @@ class EventDrivenEngine:
             vol = self.market.volatility(day)
             if vol.is_missing:
                 self.events.record(EventKind.CANDIDATE_DROPPED, day,
-                                   f"scale_by_vol 需要波动率，当日不可得：{vol.reason}")
+                                   f"scale_by_vol needs a volatility, unavailable "
+                                   f"that day: {vol.reason}")
                 return 0
-            # 标的波动高就少买。**这不是组合波动率目标**——那需要预测组合波动，
-            # 期权上得靠希腊字母推。名字如实反映它做的事。
+            # Buy less when the underlying is more volatile. **This is not a
+            # portfolio volatility target** — that would need a forecast of portfolio
+            # volatility, which for options has to come from the greeks. The name
+            # says what it actually does.
             budget = (equity * sizing.risk_pct / self._loss_fraction(strategy)
                       * (sizing.target_vol / max(vol.unwrap(), 1e-6)))
         else:
-            raise StartupError(f"未实现的仓位方法 {sizing.method}")
+            raise StartupError(f"unimplemented sizing method {sizing.method}")
 
         return min(int(budget // premium), sizing.max_contracts)
 
     def _loss_fraction(self, strategy) -> float:
-        """单笔最坏情况亏掉权利金的几分之几。
+        """What fraction of the premium a trade loses in the worst case.
 
-        止损 0.5 表示亏到 -50% 就走，所以真实风险是权利金的一半。没设止损时
-        才等于全损（买方最大损失就是权利金）。
+        A stop of 0.5 means out at -50%, so the real risk is half the premium. Only
+        with no stop is it the whole premium (a buyer's maximum loss).
 
-        这是「规模 = 风险预算 ÷ 止损距离」这条约束在代码里的落点——两者分开设，
-        算出来的仓位就和你以为的风险对不上。
+        This is where "size = risk budget / stop distance" lands in the code — set
+        the two independently and the computed position no longer matches the risk
+        you think you took.
         """
         stop = strategy.exit.stop_loss
         if stop is None or not 0 < stop <= 1:
@@ -715,27 +787,34 @@ class EventDrivenEngine:
         return any(i.contract == contract for i in queue)
 
     def _validate(self, intent: Intent, ledger: Ledger, day: date) -> bool:
-        """执行延迟造成的冲突必须在源头暴露，不能等到执行时才失败。"""
+        """Conflicts caused by the execution lag have to surface at the source, not
+        fail at execution time."""
         if intent.contract.expiry <= intent.execute_on:
             self.events.record(
                 EventKind.CANDIDATE_DROPPED, day,
-                f"{intent.contract} 在执行日 {intent.execute_on} 已到期", str(intent.contract))
+                f"{intent.contract} has expired by its execution day "
+                f"{intent.execute_on}", str(intent.contract))
             return False
-        if intent.reason == "entry" and self.enforce_capital:
+        # `kind`, never `reason`. `reason` is free text for a person to read, and a
+        # plan sets it to its own note, so testing it here skipped the capital check
+        # for every plan-based entry.
+        if intent.kind == "entry" and self.enforce_capital:
             frame = self.chain.series(intent.contract, [intent.execute_on])
             if not frame.empty:
                 need = float(frame.iloc[0]["ask"]) * intent.quantity * self.config.contract.multiplier
                 if need > ledger.cash:
                     self.events.record(
                         EventKind.NOT_TRADABLE, day,
-                        f"资金不足：需要 {need:,.0f}，可用 {ledger.cash:,.0f}", str(intent.contract))
+                        f"not enough cash: {need:,.0f} needed, {ledger.cash:,.0f} "
+                        f"available", str(intent.contract))
                     return False
         return True
 
     def _execute(self, intent: Intent, ledger: Ledger, open_trades, day: date) -> TradeRecord | None:
         frame = self.chain.series(intent.contract, [day])
         if frame.empty:
-            self.events.record(EventKind.NOT_TRADABLE, day, "执行日无报价", str(intent.contract))
+            self.events.record(EventKind.NOT_TRADABLE, day,
+                               "no quote on the execution day", str(intent.contract))
             return None
         row = frame.iloc[0]
         tradable = check_tradable(row["bid"], row["ask"], self.config.costs)
@@ -761,15 +840,18 @@ class EventDrivenEngine:
             return None
 
         if intent.kind in ("reduce", "add"):
-            # **不产生交易记录，也不弹出 OpenTrade。** 减仓/加仓之后仍是同一笔
-            # 逻辑交易——按持仓统计会让一笔变成好几笔，胜率与持有期全部失真。
+            # **No trade record, and the OpenTrade is not popped.** After a
+            # reduction or an addition it is still one logical trade — counted by
+            # position, one trade becomes several and both the win rate and the
+            # holding period are distorted.
             trade = open_trades.get(intent.trade_id)
             if trade is None:
-                raise InvariantError(f"{intent.kind} 意图 {intent.trade_id} 找不到对应的持仓记录")
+                raise InvariantError(f"the {intent.kind} intent {intent.trade_id} has "
+                                     f"no matching open trade")
             if intent.kind == "add":
                 total = trade.entry_price * trade.quantity + price * intent.quantity
                 trade.quantity += intent.quantity
-                trade.entry_price = total / trade.quantity   # 加权平均成本
+                trade.entry_price = total / trade.quantity   # weighted average cost
             else:
                 direction = 1 if trade.side is Side.BUY else -1
                 trade.realised_gross += (
@@ -780,13 +862,15 @@ class EventDrivenEngine:
             trade.fees += fees.total
             self.events.record(
                 EventKind.CANDIDATE_DROPPED, day,
-                f"{'加仓' if intent.kind == 'add' else '减仓'} {intent.quantity} 张："
-                f"{intent.reason}（现 {trade.quantity} 张）", str(intent.contract))
+                f"{'added' if intent.kind == 'add' else 'reduced by'} "
+                f"{intent.quantity} contracts: {intent.reason} "
+                f"(now {trade.quantity})", str(intent.contract))
             return None
 
         trade = open_trades.pop(intent.trade_id, None)
         if trade is None:
-            raise InvariantError(f"了结意图 {intent.trade_id} 找不到对应的持仓记录")
+            raise InvariantError(f"the exit intent {intent.trade_id} has no matching "
+                                 f"open trade")
         reason = resolve_exit_reason(list(intent.exit_reasons)) if intent.exit_reasons else ExitReason.TIME_EXIT
         return self._record(trade, exit_day=day, exit_price=price, exit_fees=fees.total,
                             exit_quote=row.to_dict(), reason=reason,
@@ -803,7 +887,8 @@ class EventDrivenEngine:
                      else max(pos.contract.strike - s, 0.0))
         reason = ExitReason.EXPIRY_OTM if kind == "worthless" else ExitReason.EXPIRY_ITM
         self.events.record(EventKind.PASSIVE_EXPIRY, day,
-                           f"被动到期（{kind}），内在价值 {intrinsic:.2f}", str(pos.contract))
+                           f"expired passively ({kind}), intrinsic {intrinsic:.2f}",
+                           str(pos.contract))
         quote = dict(trade.entry_quote)
         quote.update({"asof": day, "underlying_price": s, "bid": intrinsic, "ask": intrinsic})
         return self._record(trade, exit_day=day, exit_price=intrinsic, exit_fees=0.0,
@@ -812,8 +897,10 @@ class EventDrivenEngine:
     def _record(self, trade: OpenTrade, *, exit_day, exit_price, exit_fees, exit_quote, reason, suppressed):
         mult = self.config.contract.multiplier
         direction = 1 if trade.side is Side.BUY else -1
-        # 剩余张数的盈亏 + 减仓时已经落袋的。少了后一项，减过仓的交易盈亏会偏小，
-        # 而且不报任何错——是这一类改动里最容易漏、最难发现的地方。
+        # The remaining contracts' P&L plus what reductions already banked. Without
+        # the second term, a trade that was reduced reports too little P&L and raises
+        # nothing — the easiest thing to omit in a change like this, and the hardest
+        # to notice.
         gross = ((exit_price - trade.entry_price) * mult * trade.quantity * direction
                  + trade.realised_gross)
         fees = trade.fees + exit_fees
@@ -843,7 +930,7 @@ class EventDrivenEngine:
         def numeric(key):
             v = quote.get(key)
             if v is None or (isinstance(v, float) and np.isnan(v)):
-                return Maybe.missing(f"{key} 不可用")
+                return Maybe.missing(f"{key} is unavailable")
             return Maybe.some(float(v))
 
         spot = numeric("underlying_price")
@@ -851,7 +938,7 @@ class EventDrivenEngine:
             "underlying_price": spot, "iv": numeric("iv"), "delta": numeric("delta"),
             "gamma": numeric("gamma"), "vega": numeric("vega"), "theta": numeric("theta"),
             "moneyness": Maybe.some(float(spot.unwrap() / contract.strike - 1.0))
-            if spot.is_present else Maybe.missing("标的价不可用"),
+            if spot.is_present else Maybe.missing("the underlying price is unavailable"),
             "dte_calendar": Maybe.some(float((contract.expiry - day).days)),
             "dte_trading": Maybe.some(float(self.market.calendar.sessions_between(day, contract.expiry))),
         }

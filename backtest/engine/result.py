@@ -1,7 +1,8 @@
-"""成交表引擎的产出。
+"""What the trade-table engine produces.
 
-与引擎分开，是因为它们是两件事：引擎负责**怎么算出**这些交易，产出对象负责**怎么看**
-它们。研究时反复摆弄的是后者，它不该跟着前者的复杂度一起长。
+Kept apart from the engine because they are two jobs: the engine is how the trades
+are computed, this object is how they are looked at. Research handles the latter
+over and over, and it should not grow with the former's complexity.
 """
 
 from __future__ import annotations
@@ -18,10 +19,11 @@ from backtest.types import TRADE_COLUMNS, TradeRecord
 
 
 def trades_frame(records: "tuple[TradeRecord, ...]") -> pd.DataFrame:
-    """交易记录 → DataFrame。
+    """Trade records -> DataFrame.
 
-    **两个引擎共用这一个函数**，所以研究层拿到的表长得完全一样，不需要知道
-    是哪条引擎跑出来的。这正是"统一交易明细格式"那条契约的落点。
+    **Both engines share this one function**, so the table the research layer gets
+    looks exactly the same and need not know which engine produced it. This is where
+    the one-trade-log contract actually lands.
     """
     if not records:
         return pd.DataFrame(columns=list(TRADE_COLUMNS))
@@ -51,7 +53,7 @@ def trades_frame(records: "tuple[TradeRecord, ...]") -> pd.DataFrame:
 
 @dataclass(frozen=True, slots=True)
 class TradeTableResult:
-    """成交表引擎的产出。"""
+    """What the trade-table engine produces."""
 
     records: tuple[TradeRecord, ...]
     config: BacktestConfig
@@ -65,7 +67,8 @@ class TradeTableResult:
 
     @property
     def concurrency(self) -> pd.Series:
-        """每个交易日的同时持仓数。资金可行性的缺口靠它显形。"""
+        """Concurrent positions on each trading day. This is what makes the gap in
+        capital feasibility visible."""
         counts = {d: 0 for d in self.calendar_sessions}
         for r in self.records:
             for day in self.calendar_sessions:
@@ -74,7 +77,8 @@ class TradeTableResult:
         return pd.Series(counts, name="concurrent_positions")
 
     def capital_check(self) -> dict[str, float | bool]:
-        """按单笔规模推算峰值资金需求，与名义资金比较。"""
+        """Peak capital required, inferred from per-trade size, against the
+        notional."""
         if not self.records:
             return {"peak_positions": 0, "peak_capital": 0.0, "feasible": True}
         peak = int(self.concurrency.max())
