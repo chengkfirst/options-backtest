@@ -1,8 +1,12 @@
-"""自有数据接入：体检、列名映射、与合成链的可互换性。
+"""Wiring in your own data: the health check, column mapping, interchangeability with
+the synthetic chain.
 
-这块的风险不是"读不进来"——读不进来会报错，很明显。真正的风险是**读进来了但读错了**：
-right 列的 1/-1 被当成字符串、IV 是百分数当成小数、同一张合约一天出现两行。
-这些都能让回测正常跑完并给出一个完全可信的错误结果。所以测试重点是**错的时候会不会说出来**。
+The risk here is not failing to read the file — that raises, and is obvious. The real
+risk is **reading it and reading it wrong**: 1/-1 in the right column taken as
+strings, IV as a percentage taken as a decimal, the same contract appearing twice on
+one day. Any of those lets the backtest finish normally and produce a wholly
+believable wrong result. So these tests are about whether it says so when it is
+wrong.
 """
 
 from __future__ import annotations
@@ -37,12 +41,13 @@ def make_vendor(n_days=5, n_strikes=6, iv=0.25) -> pd.DataFrame:
 class TestSchema:
     def test_schema_is_documented(self):
         table = describe_schema()
-        assert {"必需", "含义", "缺了会怎样"} <= set(table.columns)
+        assert {"required", "means", "if absent"} <= set(table.columns)
         assert "underlying_price" in table.index
 
     def test_every_required_column_explains_itself(self):
         for name, meta in SCHEMA.items():
-            assert meta["含义"] or meta["必需"] == "否", f"{name} 没有含义说明"
+            assert meta["means"] or meta["required"] == "no", \
+                f"{name} has no description"
 
 
 class TestNormalise:
@@ -55,9 +60,10 @@ class TestNormalise:
         assert out["right"].iloc[0] == expect
 
     def test_unknown_right_raises(self):
-        """认不出来就报错。猜一个方向会让整个回测做反。"""
-        with pytest.raises(DataQualityError, match="认不出来的取值"):
-            normalise(pd.DataFrame({"right": ["看涨"]}))
+        """An unrecognised value raises. Guessing the direction runs the whole
+        backtest backwards."""
+        with pytest.raises(DataQualityError, match="unrecognised values"):
+            normalise(pd.DataFrame({"right": ["bullish"]}))
 
     def test_column_map_applied(self):
         out = normalise(pd.DataFrame({"trade_date": ["2023-01-03"]}),
@@ -65,24 +71,26 @@ class TestNormalise:
         assert "asof" in out.columns
 
     def test_scale_fixes_percent_iv(self):
-        """IV 写成百分数时，给 scale 换单位——体检的提示随之消失。"""
+        """With IV as a percentage, scale converts the unit and the warning goes
+        away."""
         frame = make_vendor(iv=25.0)
-        assert any("百分数" in w for w in check_frame(normalise(frame)).warnings)
+        assert any("percentage" in w for w in check_frame(normalise(frame)).warnings)
         fixed = normalise(frame, scale={"iv": 0.01})
         assert fixed["iv"].max() == pytest.approx(0.25)
-        assert not any("百分数" in w for w in check_frame(fixed).warnings)
+        assert not any("percentage" in w for w in check_frame(fixed).warnings)
 
     def test_scale_is_explicit_not_automatic(self):
-        """**不自动换算。** 字段本身标错时，自动除以 100 会给出一个
-        看起来正常的错结果。"""
+        """**Nothing is converted automatically.** When the field itself is
+        mislabelled, dividing by 100 produces a wrong result that looks right."""
         frame = make_vendor(iv=25.0)
         assert normalise(frame)["iv"].max() == pytest.approx(25.0)
 
     def test_scale_ignores_missing_column(self):
-        normalise(make_vendor(), scale={"不存在的列": 0.01})
+        normalise(make_vendor(), scale={"no_such_column": 0.01})
 
     def test_normalise_does_not_fill(self):
-        """规范化只改名与统一写法，绝不补值——补值必须先被看见。"""
+        """Normalising renames and unifies spellings and never fills in a value —
+        filling in has to be seen first."""
         frame = make_vendor().drop(columns=["iv"])
         assert "iv" not in normalise(frame).columns
 
@@ -102,7 +110,7 @@ class TestChecker:
     def test_duplicate_key_is_fatal(self):
         frame = make_vendor()
         r = check_frame(pd.concat([frame, frame.iloc[:1]], ignore_index=True))
-        assert not r.ok and any("主键重复" in e for e in r.errors)
+        assert not r.ok and any("share a primary key" in e for e in r.errors)
 
     def test_crossed_quote_is_fatal(self):
         frame = make_vendor()
@@ -111,18 +119,20 @@ class TestChecker:
         assert not r.ok and any("ask < bid" in e for e in r.errors)
 
     def test_percent_iv_is_flagged(self):
-        """IV 写成 25 而不是 0.25 是最常见的接入错误，且不报错照样跑完。"""
+        """IV as 25 rather than 0.25 is the commonest wiring error, and it finishes
+        the run without raising."""
         r = check_frame(make_vendor(iv=25.0))
-        assert any("百分数" in w for w in r.warnings)
+        assert any("percentage" in w for w in r.warnings)
 
     def test_flat_iv_surface_is_flagged(self):
-        """IV 没有变化意味着没有偏斜与期限结构，期权侧结论不成立。"""
+        """IV that never varies means no skew and no term structure, so no
+        option-side conclusion holds."""
         r = check_frame(make_vendor(iv=0.25))
-        assert any("偏斜" in w for w in r.warnings)
+        assert any("skew" in w for w in r.warnings)
 
     def test_report_summary_is_readable(self):
         text = check_frame(make_vendor()).summary(printout=False)
-        assert "数据体检" in text and "行" in text
+        assert "Data health check" in text and "rows" in text
 
     def test_empty_frame_is_fatal_not_silent(self):
         r = check_frame(pd.DataFrame())
@@ -134,7 +144,7 @@ class TestRegistry:
         from backtest.data.chain_registry import available, build_chain_source
         from backtest.errors import StartupError
 
-        with pytest.raises(StartupError, match="未知的数据源"):
+        with pytest.raises(StartupError, match="unknown data source"):
             build_chain_source("nosuch:x", None, None)
         assert "synthetic" in available() and "file" in available()
 
@@ -149,5 +159,5 @@ class TestRegistry:
         from backtest.data.chain_registry import register
         from backtest.errors import StartupError
 
-        with pytest.raises(StartupError, match="已经注册"):
+        with pytest.raises(StartupError, match="already registered"):
             register("synthetic", lambda *a: None)

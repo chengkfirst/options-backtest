@@ -1,15 +1,17 @@
-"""文档里的代码必须能跑。
+"""The code in the docs has to run.
 
-## 为什么需要这个
+## Why this exists
 
-文档里跑不通的代码比没有文档更糟——它看起来是权威的。而文档腐烂是必然的：
-接口改了、参数名换了、模块搬了家，文档不会自己跟着变。
+Code in a document that does not run is worse than no document — it looks
+authoritative. And documents rot inevitably: an interface changes, a parameter is
+renamed, a module moves, and the document does not follow.
 
-手写的静态描述会腐烂："等阶段 4 的事件驱动引擎"、"⑤ headwind 完全没有"——
-写的时候是对的，代码往前走了它们没跟上。
+Hand-written static descriptions rot the same way: they were true when written and the
+code moved on.
 
-这里只查**可执行的部分**：README 里的 Python 代码块。带 ``# 不跑`` 标记的跳过
-（比如需要真实数据文件的例子）。跑不通就是文档错了，或者代码改了没同步。
+Only the **executable part** is checked: the Python blocks in the README. A block
+marked ``# skip`` is skipped (an example that needs a real data file, say). A block
+that does not run means the document is wrong, or the code changed without it.
 """
 
 from __future__ import annotations
@@ -22,8 +24,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ("README.md",)
-#: 需要外部条件（你的数据文件、联网）的示例用这个标记跳过。
-SKIP_MARK = "# 不跑"
+#: An example needing something external (your data file, a network) is skipped with
+#: this marker.
+SKIP_MARK = "# skip"
 
 
 def blocks(text: str) -> list[str]:
@@ -49,16 +52,17 @@ def main() -> int:
                                capture_output=True, text=True, timeout=300)
             Path(tmp).unlink(missing_ok=True)
             if r.returncode != 0:
-                tail = (r.stderr.strip().splitlines() or ["(无输出)"])[-1]
+                tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
                 failures.append((name, i, tail))
 
     if failures:
-        print(f"文档代码检查失败（{len(failures)}/{total} 个代码块跑不通）")
+        print(f"the doc-code check failed ({len(failures)}/{total} blocks did not run)")
         for name, i, err in failures:
-            print(f"  - {name} 第 {i} 个 python 代码块：{err}")
-        print("\n文档里跑不通的代码比没有文档更糟——它看起来是权威的。")
+            print(f"  - {name}, python block {i}: {err}")
+        print("\nCode in a document that does not run is worse than no document — it "
+              "looks authoritative.")
         return 1
-    print(f"文档代码检查通过（{total} 个代码块）")
+    print(f"the doc-code check passed ({total} blocks)")
     return 0
 
 

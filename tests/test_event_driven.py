@@ -1,9 +1,11 @@
-"""事件驱动引擎。
+"""The event-driven engine.
 
-最重要的一条是 :class:`TestDualEngine` —— 同一策略在无资金约束、无并发上限时，
-两个引擎必须产出逐行相同的交易明细。它们的实现方式完全不同（一个查表、一个逐日推进），
-所以任何一边算错都会被对方照出来。这条在开发中第一次跑就抓到了一个语义分歧：
-成交表允许对同一张合约重复建仓，事件驱动不允许。
+The most important one is :class:`TestDualEngine` — with no capital constraint and no
+concurrency limit, the two engines must produce row-identical trade logs for the same
+strategy. Their implementations are entirely different (one a table lookup, one a daily
+walk), so an error on either side is shown up by the other. The first run of this test
+caught a semantic divergence: the trade table allowed repeated entries in one contract
+and the event-driven engine did not.
 """
 
 from __future__ import annotations
@@ -35,7 +37,8 @@ def build_strategy(signals, **overrides):
 
 
 def comparable(records) -> pd.DataFrame:
-    """两个引擎的记录顺序不同（一个按入场、一个按了结），所以先排序再比。"""
+    """The two engines order their records differently (one by entry, one by exit), so
+    sort before comparing."""
     return (
         pd.DataFrame([
             {
@@ -53,7 +56,8 @@ def comparable(records) -> pd.DataFrame:
 
 @pytest.fixture(scope="module")
 def both(market, chain, signals, config):
-    """同一策略跑两个引擎。事件驱动关掉资金约束与并发上限以求可比。"""
+    """One strategy on both engines. The event-driven one has its capital constraint
+    and concurrency limit off, for comparability."""
     strategy = build_strategy(signals)
     table = TradeTableEngine(market, chain, signals, config).run(strategy)
     driven = EventDrivenEngine(
@@ -68,22 +72,26 @@ class TestDualEngine:
         assert len(table.records) == len(driven.records) > 0
 
     def test_row_for_row_identical(self, both):
-        """逐行一致。不一致说明两边有一个算错了，或者语义悄悄分歧了。"""
+        """Row for row. A difference means one side computed wrongly, or the semantics
+        diverged quietly."""
         table, driven = both
         pd.testing.assert_frame_equal(comparable(table.records), comparable(driven.records))
 
     def test_event_driven_rejects_stacking(self, market, chain, signals, config):
-        """事件驱动拒绝 allow_stacking，而不是静默丢掉合并后拆不回来的那些交易。
+        """The event-driven engine refuses allow_stacking rather than silently dropping
+        the trades that cannot be split back out after netting.
 
-        账本按合约净额记仓（真实券商就是这样），引擎按 trade_id 追踪逻辑交易，
-        两者在同一张合约上建两次仓时对不上——第二笔会永远挂着。宁可报错。
+        The ledger nets positions by contract (as a real broker does) and the engine
+        tracks logical trades by trade_id; on a second entry in the same contract the
+        two no longer line up and the second trade hangs for ever. Better to raise.
         """
         stacked = build_strategy(signals, allow_stacking=True)
         with pytest.raises(StartupError, match="allow_stacking"):
             EventDrivenEngine(market, chain, signals, config).run(stacked)
 
     def test_trade_table_still_allows_stacking(self, market, chain, signals, config):
-        """成交表各笔独立计算，开这个开关是成立的——只是结果不再与事件驱动可比。"""
+        """The trade table computes trades independently, so the flag is valid there —
+        it just makes the results incomparable with the event-driven engine's."""
         plain = TradeTableEngine(market, chain, signals, config).run(build_strategy(signals))
         stacked = TradeTableEngine(market, chain, signals, config).run(
             build_strategy(signals, allow_stacking=True))
@@ -101,7 +109,8 @@ class TestPortfolioState:
         assert len(result.snapshots) == len(market.sessions())
 
     def test_liquidation_equity_never_above_mid(self, result):
-        """多头按买价、空头按卖价估值，清算权益必然不高于中价权益。"""
+        """Longs marked at the bid and shorts at the ask, so liquidation equity cannot
+        exceed mid equity."""
         equity = result.equity
         assert (equity["equity_liq"] <= equity["equity_mid"] + 1e-9).all()
 
@@ -109,7 +118,8 @@ class TestPortfolioState:
         assert result.equity["positions"].max() <= 3
 
     def test_no_position_left_open(self, result):
-        """区间结束时不应留着未了结的持仓——那说明了结路径有漏。"""
+        """Nothing should still be open at the end of the range — that would mean a
+        hole in the exit paths."""
         assert len(result.ledger) == 0
 
     def test_every_trade_has_both_contexts(self, result):
@@ -118,7 +128,8 @@ class TestPortfolioState:
             assert any(k.startswith("sig_") for k in record.entry_context)
 
     def test_accounting_conserved_throughout(self, result):
-        """主循环每天都会校验守恒；能跑完就说明 753 天全部通过。"""
+        """The main loop checks the identity every day; finishing means all 753 days
+        passed."""
         assert result.snapshots
 
     def test_cash_never_negative_when_enforced(self, result):
@@ -127,7 +138,8 @@ class TestPortfolioState:
 
 class TestCapitalConstraint:
     def test_small_capital_reduces_trades(self, market, chain, signals, config):
-        """资金不足时开不出仓——这正是成交表引擎看不见的那部分。"""
+        """Not enough cash means no entry — exactly what the trade-table engine cannot
+        see."""
         import dataclasses
 
         strategy = build_strategy(signals)
@@ -147,14 +159,14 @@ class TestCapitalConstraint:
 class TestGuards:
     def test_rejects_unknown_signal(self, market, chain, signals, config):
         bad = build_strategy(signals, entry=EntryRule("bad", lambda v: True, ("nope",)))
-        with pytest.raises(StartupError, match="未注册的信号"):
+        with pytest.raises(StartupError, match="unregistered signals"):
             EventDrivenEngine(market, chain, signals, config).run(bad)
 
     def test_rejects_dte_floor_below_lag(self, market, chain, signals, config):
         bad = build_strategy(
             signals, exit=ExitRule(hold_days=10, take_profit=1.0, stop_loss=0.5, dte_floor=1)
         )
-        with pytest.raises(StartupError, match="剩余到期下限"):
+        with pytest.raises(StartupError, match="days-to-expiry floor"):
             EventDrivenEngine(market, chain, signals, config).run(bad)
 
 

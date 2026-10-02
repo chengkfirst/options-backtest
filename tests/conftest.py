@@ -1,7 +1,8 @@
-"""测试夹具：确定性的离线市场。
+"""Test fixtures: a deterministic offline market.
 
-测试必须在没有网络的机器上稳定跑完，否则它不是回归防线，而是又一个不确定来源。
-这里用固定种子的几何布朗运动造标的价格，因此每次运行的输入逐位相同。
+A test has to pass reliably on a machine with no network, or it is not a regression
+defence but one more source of non-determinism. The underlying's prices come from a
+seeded geometric Brownian motion, so every run's input is bit-identical.
 """
 
 from __future__ import annotations
@@ -26,7 +27,8 @@ END = date(2023, 12, 31)
 
 
 def make_raw_bars(start: date = START, end: date = END, seed: int = SEED) -> pd.DataFrame:
-    """确定性的日线。含四次除息，使两套价格必然分离。"""
+    """Deterministic daily bars. Four ex-dividend events, so the two price sets must
+    separate."""
     sessions = TradingCalendar(start - timedelta(days=430), end).sessions
     rng = np.random.default_rng(seed)
     n = len(sessions)
@@ -46,7 +48,7 @@ def make_raw_bars(start: date = START, end: date = END, seed: int = SEED) -> pd.
     frame["Low"] = np.minimum(frame["Low"], frame[["Open", "Close"]].min(axis=1))
     frame["High"] = np.maximum(frame["High"], frame[["Open", "Close"]].max(axis=1))
 
-    # 每季度一次除息，复权因子累积下移
+    # One ex-dividend per quarter, so the adjustment factor steps down cumulatively.
     factor = np.ones(n)
     for i in range(0, n, 63):
         factor[: i + 1] *= 1 - 0.0015

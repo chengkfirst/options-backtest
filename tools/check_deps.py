@@ -1,13 +1,19 @@
-"""依赖方向检查。
+"""The dependency-direction check.
 
-模块之间只允许自下而上依赖，且**定价不得越过数据层**：`selection`、`engine`、
-`research` 不得直接导入 `backtest.pricing`——上层消费的是链上的报价与希腊字母字段，
-不关心那些数字是市场观测、供应商给的、还是模型推的。这条约束保证换数据源时上层零改动。
+Modules may depend only upwards from the bottom, and **pricing must not escape the
+data layer**: `selection`, `engine` and `research` may not import `backtest.pricing`
+directly. The layers above consume the chain's quote and greek columns and do not care
+whether those numbers were observed in the market, supplied by a vendor, or derived
+from a model. That constraint is what lets the data source be swapped with no change
+above.
 
-定价本身是**市场模型**，不是合成链的私产：合成链用它造价格，文件源用它在供应商
-不给 greeks 时补推。所以它在 `backtest.pricing`（第 0 层），允许数据层的各个实现使用。
+Pricing itself is a **market model**, not the synthetic chain's private property: the
+synthetic chain uses it to make prices, and the file source uses it to fill in greeks a
+vendor omits. So it lives in `backtest.pricing` (layer 0), available to every
+implementation in the data layer.
 
-单独成文而不是只写在文档里，是因为文档拦不住 import。
+This is a tool rather than a line in a document because a document cannot stop an
+import.
 """
 
 from __future__ import annotations
@@ -19,33 +25,41 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = "backtest"
 
-#: 层级：数字越小越底层。上层可依赖下层，反之不可。
+#: The layers: a smaller number is further down. Upper layers may depend on lower
+#: ones, never the reverse.
 #:
-#: ``report`` 与 ``data`` 同层：它只读交易明细，不依赖任何上游模块，因此是叶子而非
-#: 顶层。把它摆在顶层会让 ``engine`` 复用它的统计函数变成"反向依赖"，那是分层定错，
-#: 不是代码有问题。真正要守住的约束由 ``REPORT_FORBIDDEN`` 单独表达。
+#: ``report`` sits beside ``data``: it only reads the trade log and depends on nothing
+#: upstream, which makes it a leaf rather than a top layer. Putting it on top would
+#: make ``engine`` reusing its statistics a "reverse dependency", which would be a
+#: mistake in the layering, not in the code. The constraint that actually matters is
+#: expressed separately by ``REPORT_FORBIDDEN``.
 LAYERS: dict[str, int] = {
     "maybe": 0, "errors": 0, "events": 0, "types": 0, "config": 0, "pricing": 0,
-    #: components 是概念底座：七个组件各自在交易里干什么、它们怎么互相牵制。
-    #: 它**不依赖任何东西**（只有文字与数据），所以在最底层；界面、文档、研究
-    #: 工具都从它读，这样"缺口清单"不会在两处各写一份然后走样。
+    #: components is the conceptual base: what each of the seven components decides in
+    #: a trade and how they constrain one another. It **depends on nothing** (only text
+    #: and data), hence the bottom layer; the interface, the docs and the research
+    #: tools all read it, so the gap list is never written twice and left to drift.
     "components": 0,
     "data": 1, "report": 1,
     "signals": 2, "selection": 2, "costs": 2,
     "portfolio": 2, "risk": 2,
     "engine": 3,
-    #: research 会**调用引擎跑回测**（比如仓位方法对照要把同一策略跑很多遍），
-    #: 所以它在引擎之上。risk 反过来被引擎导入（逐日希腊字母聚合），在引擎之下。
+    #: research **calls the engine to run backtests** (the sizing comparison runs one
+    #: strategy many times), so it sits above the engine. risk is imported by the
+    #: engine instead (aggregating daily greeks), so it sits below.
     "research": 4,
     "api": 5, "__init__": 5,
 }
 
-#: 只有数据层的实现可以导入定价工具——合成链造价格、文件源补 greeks 都在那一层。
-#: 再往上（选约、引擎、研究）一律禁止：它们只许读链上的字段。
+#: Only implementations in the data layer may import pricing — the synthetic chain
+#: making prices and the file source filling in greeks both live there. Above that
+#: (selection, engine, research) it is forbidden outright: they may only read the
+#: chain's columns.
 PRICING_MODULE = "backtest.pricing"
 PRICING_ALLOWED_PREFIX = "backtest.data"
 
-#: `report` 只读交易明细，不应依赖引擎或数据层。
+#: `report` only reads the trade log and must not depend on the engine or the data
+#: layer.
 REPORT_FORBIDDEN = {"data", "engine", "signals", "selection", "costs"}
 
 
@@ -68,10 +82,12 @@ def _imports(path: Path) -> set[str]:
 
 
 def check() -> list[str]:
-    """返回问题清单。空表示通过。
+    """Return the list of problems; empty means it passed.
 
-    **未在 LAYERS 登记的模块一律判为失败。** 早先的版本对不认识的模块直接跳过，
-    结果新增的 portfolio 模块整个逃过了检查——防线自己有静默失败，比没有防线更糟。
+    **A module not registered in LAYERS is a failure.** An earlier version skipped
+    modules it did not recognise, and the newly added portfolio package escaped the
+    check entirely — a defence with a silent failure of its own is worse than no
+    defence.
     """
     problems: list[str] = []
     tops = {
@@ -81,8 +97,9 @@ def check() -> list[str]:
     }
     for top in sorted(tops - set(LAYERS) - {"__pycache__"}):
         problems.append(
-            f"模块 {PACKAGE}.{top} 没有在 LAYERS 里登记层级——它的依赖方向没有被检查。"
-            f"请在 tools/check_deps.py 的 LAYERS 中为它指定层级。"
+            f"the module {PACKAGE}.{top} is not registered in LAYERS, so its "
+            f"dependency direction is not being checked. Give it a layer in LAYERS in "
+            f"tools/check_deps.py."
         )
     for path in sorted((ROOT / PACKAGE).rglob("*.py")):
         rel = path.relative_to(ROOT).with_suffix("")
@@ -102,14 +119,16 @@ def check() -> list[str]:
                 PRICING_ALLOWED_PREFIX
             ):
                 problems.append(
-                    f"{module} 直接导入了 {imported}；定价是合成链的内部工具，"
-                    f"上层应消费链上的字段"
+                    f"{module} imports {imported} directly; pricing is confined to the "
+                    f"data layer, and the layers above must consume the chain's columns"
                 )
             if own_top == "report" and target_top in REPORT_FORBIDDEN:
-                problems.append(f"{module} 不应依赖 {imported}；report 只读交易明细")
+                problems.append(f"{module} must not depend on {imported}; report only "
+                                f"reads the trade log")
             if target_layer > own_layer:
                 problems.append(
-                    f"{module}（第 {own_layer} 层）导入了 {imported}（第 {target_layer} 层）：反向依赖"
+                    f"{module} (layer {own_layer}) imports {imported} "
+                    f"(layer {target_layer}): a reverse dependency"
                 )
     return problems
 
@@ -117,11 +136,11 @@ def check() -> list[str]:
 def main() -> int:
     problems = check()
     if problems:
-        print("依赖方向检查失败：")
+        print("the dependency-direction check failed:")
         for p in problems:
             print(f"  - {p}")
         return 1
-    print("依赖方向检查通过")
+    print("the dependency-direction check passed")
     return 0
 
 

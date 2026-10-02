@@ -1,7 +1,9 @@
-"""成交表引擎：执行延迟、首次触发、优先级、守卫、被动到期。
+"""The trade-table engine: execution lag, first trigger, precedence, guards, passive
+expiry.
 
-首次触发这类逻辑用**脚本化的报价**来测，而不是用合成链——只有当每日价格由测试
-指定时，"应该在第几天以什么原因了结"才有唯一正确答案。
+Logic like the first trigger is tested with **scripted quotes** rather than the
+synthetic chain — only when the test dictates each day's price does "which day, and for
+which reason, should it exit" have one correct answer.
 """
 
 from __future__ import annotations
@@ -21,7 +23,8 @@ from backtest.types import CHAIN_COLUMNS, ContractId, ExitReason, Right
 
 
 class ScriptedChain:
-    """按脚本给价的链：``prices`` 是 {日期: 理论价}，价差固定 2%。"""
+    """A chain priced from a script: ``prices`` is {date: theoretical price}, with a
+    fixed 2% spread."""
 
     def __init__(self, contract: ContractId, prices: dict[date, float], spot: dict[date, float] | None = None):
         self.contract = contract
@@ -64,7 +67,8 @@ def enter_on(days: set[date]):
 
 @pytest.fixture
 def scripted(market, config):
-    """构造一笔可控交易：信号日、入场日、以及其后的价格脚本。"""
+    """Construct one controlled trade: the signal day, the entry day, and the price
+    script that follows."""
 
     def build(path: list[float], *, exit_rule: ExitRule, expiry_offset: int = 40):
         sessions = market.sessions()
@@ -92,7 +96,8 @@ def scripted(market, config):
 
 class TestExecutionLag:
     def test_entry_is_next_session_after_signal(self, market, chain, signals, config):
-        """T 日收盘产生意图，T+1 收盘执行。用 T 日收盘价同时决策与成交是前视。"""
+        """The intent forms at T's close and executes at T+1's. Using T's close for
+        both the decision and the fill is look-ahead."""
         sessions = market.sessions()
         signal_day = sessions[60]
         strategy = Strategy(
@@ -118,7 +123,7 @@ class TestExecutionLag:
 
 class TestFirstTrigger:
     def test_take_profit(self, market, signals, config, scripted):
-        path = [5.0, 5.5, 11.0, 12.0, 6.0]  # 第 2 个交易日翻倍，次日成交
+        path = [5.0, 5.5, 11.0, 12.0, 6.0]  # doubles on day 2, fills the next day
         _, entry, contract, chain, strategy = scripted(
             path, exit_rule=ExitRule(hold_days=20, take_profit=1.0, stop_loss=0.5, dte_floor=2)
         )
@@ -142,7 +147,8 @@ class TestFirstTrigger:
         assert rec.exit_reason is ExitReason.TIME_EXIT
 
     def test_earliest_trigger_wins(self, market, signals, config, scripted):
-        """先跌破止损再涨到止盈：应当记止损，而不是事后诸葛地取更好的那个。"""
+        """Through the stop first, then up to the take-profit: it records the stop,
+        not whichever turned out better with hindsight."""
         path = [5.0, 2.0, 2.1, 12.0, 12.0]
         _, _, _, chain, strategy = scripted(
             path, exit_rule=ExitRule(hold_days=20, take_profit=1.0, stop_loss=0.5, dte_floor=2)
@@ -153,12 +159,15 @@ class TestFirstTrigger:
     def test_same_day_conflict_takes_priority_and_records_suppressed(
         self, market, signals, config, scripted
     ):
-        """止盈与持有期满同日成立：按优先级取止盈，被压制的原因仍可查。
+        """Take-profit and the holding cap on the same day: precedence takes the
+        take-profit, and the suppressed reason is still recorded.
 
-        止盈与止损不可能同日成立（价格无法既 +100% 又 -50%），真实的同日冲突发生在
-        价格类与时间类条件之间。
+        Take-profit and stop-loss cannot hold on one day (a price cannot be both +100%
+        and -50%); the real same-day conflict is between a price condition and a time
+        condition.
         """
-        path = [5.0, 5.2, 11.0, 10.8]  # 第 2 个交易日既翻倍、又正好是持有期上限；第 3 天成交
+        path = [5.0, 5.2, 11.0, 10.8]  # day 2 both doubles and hits the holding cap;
+                                       # fills on day 3
         _, _, _, chain, strategy = scripted(
             path, exit_rule=ExitRule(hold_days=2, take_profit=1.0, stop_loss=0.5, dte_floor=2)
         )
@@ -184,22 +193,23 @@ class TestGuards:
             select=SelectionRule(target_delta=0.30),
             exit=ExitRule(),
         )
-        with pytest.raises(StartupError, match="未注册的信号"):
+        with pytest.raises(StartupError, match="unregistered signals"):
             TradeTableEngine(market, chain, signals, config).run(strategy)
 
     def test_exit_rule_requires_time_condition(self):
-        """没有时间类了结条件，仓位会被拖到到期。"""
-        with pytest.raises(StartupError, match="时间类了结条件"):
+        """With no time-based exit, positions get dragged into expiry."""
+        with pytest.raises(StartupError, match="time-based exit"):
             ExitRule(hold_days=None, dte_floor=None, take_profit=1.0, stop_loss=0.5)
 
     def test_rejects_dte_floor_below_execution_lag(self, market, chain, signals, config):
-        """剩余到期下限小于 lag+1 时，了结意图会落空、仓位被静默拖到到期。"""
+        """Below lag+1 the exit intent comes to nothing and the position is silently
+        dragged into expiry."""
         strategy = Strategy(
             entry=EntryRule("all", always_enter),
             select=SelectionRule(target_delta=0.30),
             exit=ExitRule(hold_days=10, take_profit=1.0, stop_loss=0.5, dte_floor=1),
         )
-        with pytest.raises(StartupError, match="剩余到期下限"):
+        with pytest.raises(StartupError, match="days-to-expiry floor"):
             TradeTableEngine(market, chain, signals, config).run(strategy)
 
     def test_quantity_must_be_positive(self):
@@ -243,7 +253,7 @@ class TestPnlIntegrity:
 
 
 class TestSweep:
-    """参数扫描：速度是它的价值，试验次数是它的刹车。"""
+    """Parameter sweeps: speed is the value, the trial count is the brake."""
 
     @pytest.fixture
     def pieces(self, market, chain, signals, config):
@@ -261,7 +271,8 @@ class TestSweep:
         assert res.trials == 4 and len(res.table) == 4
 
     def test_records_trial_count(self, pieces):
-        """扫了多少组必须留档——阶段 2 的多重检验修正要用它，不让人假装只试了一次。"""
+        """How many sets were swept has to be recorded — the multiple-testing
+        correction needs it, and nobody gets to pretend they tried once."""
         from backtest.engine.sweep import sweep
 
         res = sweep(*pieces, {"take_profit": [0.5, 1.0, 1.5]})
@@ -278,17 +289,18 @@ class TestSweep:
     def test_rejects_unknown_parameter(self, pieces):
         from backtest.engine.sweep import sweep
 
-        with pytest.raises(StartupError, match="不可扫描"):
+        with pytest.raises(StartupError, match="cannot be swept"):
             sweep(*pieces, {"leverage": [1, 2]})
 
     def test_rejects_empty_grid(self, pieces):
         from backtest.engine.sweep import sweep
 
-        with pytest.raises(StartupError, match="为空"):
+        with pytest.raises(StartupError, match="grid is empty"):
             sweep(*pieces, {})
 
     def test_dte_window_follows_target(self, pieces):
-        """扫 target_dte 时窗口自动跟随，否则会撞上"目标不在窗口内"的校验。"""
+        """Sweeping target_dte moves the window with it, or it would hit the "target
+        outside the window" check."""
         from backtest.engine.sweep import sweep
 
         res = sweep(*pieces, {"target_dte": [14, 30, 45]})

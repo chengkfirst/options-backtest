@@ -1,7 +1,8 @@
-"""组件定义：它现在是界面的唯一事实源。
+"""The component definitions, which are now the interface's single source of truth.
 
-这份定义错了不会让测试红——界面会照着画出一个错的表单，而且看起来很正常。
-所以这里检查的不是"能不能跑"，是**定义本身自洽吗、和真实代码对得上吗**。
+An error here does not turn a test red by itself — the interface draws a wrong form
+from it, and the form looks perfectly normal. So what is checked is not whether it
+runs, but whether the definition is self-consistent and matches the real code.
 """
 
 from __future__ import annotations
@@ -20,31 +21,32 @@ from backtest.components import (
 
 class TestDefinition:
     def test_every_component_says_what_it_decides(self):
-        """没有 role，组件就只是一个名字。"""
+        """Without a role a component is just a name."""
         for c in COMPONENTS:
-            assert len(c.role) > 10, f"{c.name} 没写清在交易里决定什么"
-            assert c.output, f"{c.name} 没写输出什么"
+            assert len(c.role) > 10, f"{c.name} does not say what it decides in a trade"
+            assert c.output, f"{c.name} does not say what it outputs"
 
     def test_unfinished_components_say_what_is_missing(self):
         for c in COMPONENTS:
             if c.status != "done":
-                assert c.gap, f"{c.name} 状态是 {c.status} 却没写缺什么"
+                assert c.gap, f"{c.name} is {c.status} but does not say what is missing"
 
     def test_discovered_components_say_how_to_find(self):
-        """标成"研究出来的"却不说怎么研究，等于让人拍脑袋。"""
+        """Marked as discovered without saying how is an invitation to guess."""
         for c in COMPONENTS:
             if c.origin == "discovered":
-                assert len(c.how_to_find) > 50, f"{c.name} 没写怎么找"
+                assert len(c.how_to_find) > 50, f"{c.name} does not say how to find it"
 
     def test_every_component_sits_in_a_known_layer(self):
         known = {name for name, _ in LAYERS}
         for c in COMPONENTS:
-            assert c.layer in known, f"{c.name} 的层 {c.layer!r} 不在 LAYERS 里"
+            assert c.layer in known, f"{c.name}'s layer {c.layer!r} is not in LAYERS"
 
     def test_couplings_reference_real_components(self):
         keys = {c.key for c in COMPONENTS}
         for a, b, why in COUPLINGS:
-            assert a in keys and b in keys, f"联动关系引用了不存在的组件：{a} / {b}"
+            assert a in keys and b in keys, \
+                f"a coupling references a component that does not exist: {a} / {b}"
             assert len(why) > 10
 
     def test_keys_unique(self):
@@ -54,30 +56,32 @@ class TestDefinition:
 
 class TestFields:
     def test_field_names_are_unique_across_components(self):
-        """字段名会直接变成表单的 name，重名会让后端收到错的值。"""
+        """A field name becomes the form's name directly, and a duplicate sends the
+        backend the wrong value."""
         seen: dict[str, str] = {}
         for c in COMPONENTS:
             for f in c.inputs:
-                assert f.name not in seen, f"{f.name} 同时属于 {seen[f.name]} 和 {c.name}"
+                assert f.name not in seen, \
+                    f"{f.name} belongs to both {seen[f.name]} and {c.name}"
                 seen[f.name] = c.name
 
     def test_select_fields_have_options_and_valid_default(self):
         for c in COMPONENTS:
             for f in c.inputs:
                 if f.kind == "select":
-                    assert f.options, f"{f.name} 是 select 却没有选项"
+                    assert f.options, f"{f.name} is a select with no options"
                     values = [v for v, _ in f.options]
-                    assert f.default in values, f"{f.name} 的默认值不在选项里"
+                    assert f.default in values, f"{f.name}'s default is not an option"
 
     def test_depends_points_at_an_existing_field(self):
-        """依赖写错会让那个字段**永远不显示**，而且不报错。"""
+        """A wrong dependency makes the field **never appear**, and raises nothing."""
         names = {f.name for c in COMPONENTS for f in c.inputs}
         for c in COMPONENTS:
             for f in c.inputs:
                 if f.depends:
                     src, _, want = f.depends.partition("=")
-                    assert src in names, f"{f.name} 依赖了不存在的字段 {src}"
-                    assert want, f"{f.name} 的 depends 没写取值"
+                    assert src in names, f"{f.name} depends on a field that does not exist: {src}"
+                    assert want, f"{f.name}'s depends states no value"
 
     def test_depends_value_is_a_real_option(self):
         by_name = {f.name: f for c in COMPONENTS for f in c.inputs}
@@ -88,16 +92,17 @@ class TestFields:
                 src, _, want = f.depends.partition("=")
                 opts = [v for v, _ in by_name[src].options]
                 if opts:
-                    assert want in opts, f"{f.name} 依赖 {src}={want}，但那不是可选值"
+                    assert want in opts, \
+                        f"{f.name} depends on {src}={want}, which is not one of its options"
 
     def test_numeric_bounds_contain_the_default(self):
         for c in COMPONENTS:
             for f in c.inputs:
                 if f.kind in ("number", "ratio", "int") and f.default is not None:
                     if f.lo is not None:
-                        assert f.default >= f.lo, f"{f.name} 默认值低于下限"
+                        assert f.default >= f.lo, f"{f.name}'s default is below its floor"
                     if f.hi is not None:
-                        assert f.default <= f.hi, f"{f.name} 默认值高于上限"
+                        assert f.default <= f.hi, f"{f.name}'s default is above its ceiling"
 
 
 class TestFormSpec:
@@ -107,17 +112,19 @@ class TestFormSpec:
         assert sorted(listed) == sorted(c.key for c in COMPONENTS)
 
     def test_layers_in_trading_order(self):
-        """层的顺序就是交易里发生的顺序，不能乱。"""
+        """The order of the layers is the order things happen in a trade."""
         assert [L["layer"] for L in as_form_spec()] == [n for n, _ in LAYERS]
 
     def test_serialisable(self):
-        """界面通过 JSON 拿这份定义——不能序列化就等于界面拿不到。"""
+        """The interface fetches this definition as JSON — unserialisable means the
+        interface cannot have it."""
         import json
 
         json.dumps(as_form_spec(), ensure_ascii=False)
 
     def test_gaps_generated_not_handwritten(self):
-        """缺口清单必须与组件状态一致。手写的清单会在功能补上后忘了改。"""
+        """The gap list has to agree with the component statuses. A hand-written list
+        goes stale once the feature lands."""
         assert len(gaps()) == sum(1 for c in COMPONENTS if c.status != "done" and c.gap)
 
 
@@ -126,13 +133,15 @@ class TestDescribe:
         assert len(describe()) == len(COMPONENTS)
 
     def test_fields_match_real_run_parameters(self):
-        """表单字段必须是 backtest.run 真认识的东西，否则填了没用还不报错。"""
+        """A form field has to be something backtest.run really knows, or filling it
+        in has no effect and raises nothing."""
         import inspect
 
         from backtest import run
 
         sig = set(inspect.signature(run).parameters)
-        # 这些由前端组装后换个名字送进去，不直接对应 run 的参数
+        # The front end assembles these under different names; they do not correspond
+        # to a run() parameter directly.
         indirect = {
             "entry_mode", "entry_code", "review_code", "exit_mode", "delta", "right",
             "dte_lo", "dte_hi", "delta_lo", "delta_hi",
@@ -143,6 +152,6 @@ class TestDescribe:
         for c in COMPONENTS:
             for f in c.inputs:
                 assert f.name in sig or f.name in indirect, (
-                    f"{f.name} 既不是 run() 的参数，也没登记为间接字段——"
-                    "界面上填了它不会有任何效果"
+                    f"{f.name} is neither a run() parameter nor registered as an "
+                    f"indirect field — filling it in on the interface has no effect"
                 )

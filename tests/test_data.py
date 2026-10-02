@@ -1,4 +1,5 @@
-"""交易日历、两套价格、期权链的字段契约与质量校验。"""
+"""The trading calendar, the two price sets, the chain's column contract and quality
+checks."""
 
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ class TestCalendar:
         assert len(cal) == 252
 
     def test_skips_holiday(self, cal):
-        """感恩节不产生交易日。"""
+        """Thanksgiving is not a trading day."""
         assert date(2024, 11, 28) not in cal
 
     def test_detects_half_day(self, cal):
@@ -45,10 +46,11 @@ class TestCalendar:
             TradingCalendar(date(2024, 12, 31), date(2024, 1, 1))
 
     def test_weekly_expiries_absent_before_introduction(self, cal):
-        """周度期权是逐步推出的；提前出现会让早年的选约比历史更容易得手。"""
+        """Weekly options were rolled out gradually; conjuring them up earlier makes
+        selection in the early years easier than it was."""
         later = expiry_dates(cal, weekly_start=date(2030, 1, 1))
         assert all((e.month, e.day) != (1, 5) for e in later)
-        assert len(later) == 12  # 只剩月度
+        assert len(later) == 12  # monthlies only
 
     def test_monthly_and_weekly_together(self, cal):
         both = expiry_dates(cal, weekly_start=date(2010, 6, 4))
@@ -67,7 +69,8 @@ class TestUnderlyingBars:
         assert (bars.adjusted("close") <= bars.traded("close")).all()
 
     def test_adjustment_applied_to_all_fields(self, bars):
-        """只复权收盘价会让 ATR 这类用到日内区间的指标失真。"""
+        """Adjusting only the close distorts indicators that use the intraday range,
+        such as ATR."""
         ratio_close = bars.adjusted("close") / bars.traded("close")
         ratio_high = bars.adjusted("high") / bars.traded("high")
         assert np.allclose(ratio_close, ratio_high)
@@ -79,24 +82,25 @@ class TestUnderlyingBars:
     def test_rejects_high_below_low(self, bars):
         bad = bars.frame.copy()
         bad.iloc[3, bad.columns.get_loc("low")] = 1e9
-        with pytest.raises(DataQualityError, match="最高价低于最低价"):
+        with pytest.raises(DataQualityError, match="high below its low"):
             validate_bars("QQQ", bad)
 
     def test_rejects_duplicate_dates(self, bars):
         bad = pd.concat([bars.frame, bars.frame.iloc[[5]]]).sort_index()
-        with pytest.raises(DataQualityError, match="重复日期"):
+        with pytest.raises(DataQualityError, match="duplicate dates"):
             validate_bars("QQQ", bad)
 
     def test_rejects_non_positive_price(self, bars):
         bad = bars.frame.copy()
         bad.iloc[2, bad.columns.get_loc("close")] = 0.0
-        with pytest.raises(DataQualityError, match="非正价格"):
+        with pytest.raises(DataQualityError, match="non-positive prices"):
             validate_bars("QQQ", bad)
 
 
 class TestChainContract:
     def test_snapshot_has_full_vendor_schema(self, chain, market):
-        """字段集按商业数据源定义；合成链提供不了的标为不可用，不得从接口删除。"""
+        """The column set follows a commercial vendor's; what the synthetic chain
+        cannot supply is marked unavailable and never dropped from the interface."""
         snap = chain.snapshot(market.sessions()[60])
         assert list(snap.columns) == list(CHAIN_COLUMNS)
 
@@ -140,7 +144,7 @@ class TestChainContract:
         frame["strike"] = [400.0, 401.0]
         frame["right"] = "C"
         frame["bid"] = [1.0, 5.0]
-        frame["ask"] = [1.2, 3.0]  # 第二行 ask < bid
+        frame["ask"] = [1.2, 3.0]  # the second row has ask < bid
         frame["quality_flags"] = ""
         kept = validate_chain(frame, asof=date(2024, 1, 2))
         assert len(kept) == 1 and kept["strike"].iloc[0] == 400.0
@@ -162,12 +166,13 @@ class TestChainContract:
 
 class TestMarketData:
     def test_rejects_mismatched_vol_proxy(self, config):
-        """纳指波动率系统性高于标普；套用同一代理会整体低估 QQQ 期权价格。"""
+        """Nasdaq volatility runs systematically above the S&P's; sharing one proxy
+        understates QQQ option prices across the board."""
         from backtest.data.market import MarketData
         from backtest.types import ContractSpec
 
         bad = BacktestConfigWithProxy(config, "^VIX")
-        with pytest.raises(StartupError, match="波动率代理"):
+        with pytest.raises(StartupError, match="volatility proxy"):
             MarketData(bad)
 
     def test_dividend_yield_from_actual_ex_dates(self, market):
@@ -197,10 +202,12 @@ def BacktestConfigWithProxy(config, proxy):
 
 
 class TestPriceUsageAlignment:
-    """两套价格的用途对齐：期权相关计算必须用实际成交价，绝不用复权价。
+    """Each price set's use: everything option-related takes traded prices, never
+    adjusted ones.
 
-    用复权价判断历史合约的价值状态不会报错，只会让所有历史选约系统性偏移——
-    误差随累计分红单调增大。所以这条要用测试钉死。
+    Judging a historical contract's moneyness off adjusted prices raises nothing; it
+    simply shifts every historical selection, with an error that grows monotonically
+    with cumulative dividends. So a test pins it down.
     """
 
     def test_chain_underlying_is_traded_not_adjusted(self, chain, market):
@@ -208,7 +215,8 @@ class TestPriceUsageAlignment:
         snap = chain.snapshot(day)
         traded = market.bars.traded_close_on(day).unwrap()
         adjusted = float(market.bars.adjusted("close").loc[pd.Timestamp(day)])
-        assert traded != adjusted, "夹具应当含分红，否则这条测试没有区分力"
+        assert traded != adjusted, \
+            "the fixture must include dividends, or this test cannot discriminate"
         assert float(snap["underlying_price"].iloc[0]) == pytest.approx(traded)
 
     def test_spot_returns_traded_price(self, market):
@@ -217,13 +225,15 @@ class TestPriceUsageAlignment:
         assert market.spot(day).unwrap() != pytest.approx(adjusted)
 
     def test_signals_use_adjusted_price(self, market, signals):
-        """信号反过来必须用复权价，否则除息日会出现虚假跳空。"""
+        """Signals, conversely, must take adjusted prices, or ex-dividend days produce
+        false gaps."""
         day = market.sessions()[120]
         adjusted = float(market.bars.adjusted("close").loc[pd.Timestamp(day)])
         assert signals.on(day)["close"].unwrap() == pytest.approx(adjusted)
 
     def test_range_truncation_is_reported(self, config):
-        """可用区间窄于请求时必须提示，不得静默返回不完整数据。"""
+        """A narrower available range than requested has to be reported; incomplete
+        data is never returned silently."""
         import dataclasses
 
         from backtest.data.market import MarketData
@@ -242,7 +252,8 @@ class TestPriceUsageAlignment:
 
 class TestEarlyExerciseFlag:
     def test_deep_itm_call_before_dividend_is_flagged(self, chain, market):
-        """欧式模型用于美式期权是近似；失效的情形必须标出来，不能默认当公允价值。"""
+        """A European model on an American option is an approximation; where it fails
+        has to be flagged rather than taken as fair value."""
         day = date(2023, 3, 1)
         snap = chain.snapshot(day)
         calls = snap.loc[snap["right"] == "C"]

@@ -1,10 +1,13 @@
-"""回归基线。
+"""The regression baseline.
 
-确定性测试只能保证"同一份代码跑两次一样"，挡不住**代码改动带来的非预期结果变化**。
-基线比对补上这一层：对固定输入与配置，输出与基线的任何差异都必须被检出。
+A determinism test only guarantees that the same code twice gives the same answer; it
+cannot catch **an unintended change in results caused by a change in the code**. The
+baseline comparison covers that: on fixed inputs and a fixed configuration, any
+difference from the baseline has to be caught.
 
-基线的更新是一次**显式操作**（``python -m tools.baseline update``），且更新前后的
-差异会被打印出来——否则"顺手更新基线"会让这道防线形同虚设。
+Updating the baseline is an **explicit act** (``python -m tools.baseline update``), and
+the difference is printed when it happens — otherwise "just update the baseline while
+I am here" makes this defence worthless.
 """
 
 from __future__ import annotations
@@ -18,7 +21,8 @@ import pandas as pd
 BASELINE_DIR = Path(__file__).resolve().parent.parent / "tests" / "baselines"
 BASELINE_FILE = BASELINE_DIR / "baseline_trades.csv"
 
-#: 参与比对的列。上下文列随信号集合演化，不入基线以免噪音。
+#: The columns compared. The context columns evolve with the signal set and stay out
+#: of the baseline to avoid noise.
 COMPARED = [
     "trade_id", "entry_date", "exit_date", "contract", "quantity",
     "entry_price", "exit_price", "gross_pnl", "fees", "net_pnl",
@@ -27,7 +31,8 @@ COMPARED = [
 
 
 def build_trades() -> pd.DataFrame:
-    """用离线夹具跑出基线策略的交易明细。输入固定，因此输出应当逐位稳定。"""
+    """Run the baseline strategy's trade log on the offline fixture. The input is
+    fixed, so the output should be bit-stable."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from backtest.api import Result
     from backtest.config import BacktestConfig
@@ -73,15 +78,17 @@ def build_trades() -> pd.DataFrame:
 
 
 def compare() -> pd.DataFrame | None:
-    """返回差异；无差异返回 ``None``。基线不存在时抛错，提示先 capture。"""
+    """Return the difference, or ``None`` when there is none. With no baseline this
+    raises and says to capture one first."""
     if not BASELINE_FILE.exists():
-        raise FileNotFoundError(f"基线不存在：{BASELINE_FILE}，先运行 `python -m tools.baseline update`")
+        raise FileNotFoundError(f"no baseline at {BASELINE_FILE}; run "
+                                f"`python -m tools.baseline update` first")
     current = build_trades().reset_index(drop=True)
     stored = pd.read_csv(BASELINE_FILE, parse_dates=["entry_date", "exit_date"])
     stored["entry_date"] = stored["entry_date"].dt.date
     stored["exit_date"] = stored["exit_date"].dt.date
     if len(current) != len(stored):
-        return pd.DataFrame({"issue": [f"笔数 {len(stored)} → {len(current)}"]})
+        return pd.DataFrame({"issue": [f"trade count {len(stored)} -> {len(current)}"]})
     numeric = current.select_dtypes("number").columns
     diff_mask = ~(
         current[numeric].round(8).eq(stored[numeric].round(8)).all(axis=1)
@@ -96,14 +103,14 @@ def update() -> None:
     trades = build_trades()
     trades.to_csv(BASELINE_FILE, index=False, date_format="%Y-%m-%d")
     if previous is None:
-        print(f"基线已建立：{len(trades)} 笔 → {BASELINE_FILE}")
+        print(f"baseline created: {len(trades)} trades -> {BASELINE_FILE}")
     else:
-        print(f"基线已更新：{len(previous)} 笔 → {len(trades)} 笔")
-        print(f"净盈亏 {previous['net_pnl'].sum():.2f} → {trades['net_pnl'].sum():.2f}")
+        print(f"baseline updated: {len(previous)} trades -> {len(trades)}")
+        print(f"net P&L {previous['net_pnl'].sum():.2f} -> {trades['net_pnl'].sum():.2f}")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="回归基线")
+    parser = argparse.ArgumentParser(description="the regression baseline")
     parser.add_argument("action", choices=["check", "update"])
     args = parser.parse_args()
     if args.action == "update":
@@ -111,11 +118,12 @@ def main() -> int:
         return 0
     diff = compare()
     if diff is None:
-        print("基线比对通过")
+        print("the baseline comparison passed")
         return 0
-    print("基线比对失败，以下交易发生变化：")
+    print("the baseline comparison failed; these trades changed:")
     print(diff.to_string(index=False))
-    print("\n若该改动确实应当改变结果，显式执行：python -m tools.baseline update")
+    print("\nIf the change really should move the results, run explicitly: "
+          "python -m tools.baseline update")
     return 1
 
 

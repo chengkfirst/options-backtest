@@ -1,4 +1,4 @@
-"""Black-Scholes 定价、希腊字母、隐含波动率反解。"""
+"""Black-Scholes prices, greeks, and solving for implied volatility."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from backtest.pricing import (
 from backtest.types import Right
 
 BASE = dict(s=100.0, k=100.0, t=1.0, r=0.05, q=0.0)
-#: 公开基准值（S=100, K=100, T=1, r=5%, sigma=20%, q=0）
+#: Published reference values (S=100, K=100, T=1, r=5%, sigma=20%, q=0)
 REF_CALL = 10.450583572185565
 REF_PUT = 5.573526022256971
 
@@ -58,7 +58,8 @@ class TestGreeks:
         assert ((g["delta"] < 0) & (g["delta"] > -1)).all()
 
     def test_delta_relation(self):
-        """看涨与看跌 delta 之差等于按分红率贴现的因子。"""
+        """The difference between call and put delta is the dividend discount
+        factor."""
         q, t = 0.01, 1.0
         c = greeks(100, 100, t, 0.05, 0.2, q, Right.CALL)["delta"]
         p = greeks(100, 100, t, 0.05, 0.2, q, Right.PUT)["delta"]
@@ -85,7 +86,7 @@ class TestImpliedVol:
 
     def test_price_below_intrinsic_returns_missing(self):
         got = implied_vol(1.0, 150.0, 100.0, 1.0, 0.05, 0.0, Right.CALL)
-        assert got.is_missing and "内在价值" in got.reason
+        assert got.is_missing and "intrinsic" in got.reason
 
     def test_price_above_upper_bound_returns_missing(self):
         got = implied_vol(10_000.0, 100.0, 100.0, 1.0, 0.05, 0.0, Right.CALL)
@@ -95,7 +96,8 @@ class TestImpliedVol:
         assert implied_vol(5.0, 100.0, 100.0, 0.0, 0.05, 0.0, Right.CALL).is_missing
 
     def test_never_raises_nor_returns_zero(self):
-        """无解时必须显式缺失——返回 0 会让下游选出完全错误的合约且不报错。"""
+        """No solution must be an explicit absence — returning 0 selects a completely
+        wrong contract downstream and raises nothing."""
         for price in (-1.0, 0.0, 1e9):
             got = implied_vol(price, 100.0, 100.0, 1.0, 0.05, 0.0, Right.CALL)
             assert got.is_missing

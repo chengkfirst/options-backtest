@@ -1,6 +1,6 @@
-"""端到端：表达式、确定性、导出、账目守恒。
+"""End to end: expressions, determinism, export, the accounting identity.
 
-这些用离线夹具跑，因此不依赖网络、结果逐位可复现。
+These run on the offline fixture, so they need no network and reproduce bit for bit.
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ from backtest.types import Right
 
 @pytest.fixture
 def baseline(market, chain, signals, config):
-    """基线策略：均线入场、30DTE、delta 0.30 看涨、四条件先达者了结。"""
+    """The baseline strategy: a moving-average entry, 30 DTE, a delta 0.30 call, and
+    whichever of the four exit conditions comes first."""
     condition, requires = parse_condition("sma_20 > sma_50", signals.names)
     strategy = Strategy(
         name="baseline",
@@ -44,23 +45,25 @@ class TestExpression:
         assert isinstance(condition(signals.on(market.sessions()[100])), bool)
 
     def test_unknown_name_fails_at_startup(self, signals):
-        with pytest.raises(StartupError, match="未注册的信号"):
+        with pytest.raises(StartupError, match="unregistered signals"):
             parse_condition("sma_20 > nope", signals.names)
 
     def test_syntax_error_reported(self, signals):
-        with pytest.raises(StartupError, match="语法错误"):
+        with pytest.raises(StartupError, match="syntax error"):
             parse_condition("sma_20 >", signals.names)
 
     @pytest.mark.parametrize(
         "expr", ["__import__('os').system('ls')", "open('/etc/passwd')", "[x for x in ()]"]
     )
     def test_rejects_non_whitelisted_nodes(self, signals, expr):
-        """只允许比较、and/or/not 与四则运算——表达式不是执行任意代码的入口。"""
+        """Comparisons, and/or/not and arithmetic only — an expression is not a way in
+        to arbitrary code."""
         with pytest.raises(StartupError):
             parse_condition(expr, signals.names)
 
     def test_missing_signal_means_no_entry(self, signals, market):
-        """任一信号缺失则整条件不成立；缺失绝不被当成 0 参与比较。"""
+        """Any signal absent makes the whole condition false; an absence never takes
+        part in a comparison as 0."""
         condition, _ = parse_condition("sma_200 > 0", signals.names)
         assert condition(signals.on(market.bars.dates[0])) is False
 
@@ -79,7 +82,7 @@ class TestDeterminism:
 
 class TestAccounting:
     def test_pnl_conservation(self, baseline):
-        """每笔净盈亏 = 了结金额 − 入场金额 − 全部费用。"""
+        """Each trade's net P&L = exit proceeds − entry cost − all fees."""
         trades = baseline().trades
         assert not trades.empty
         expected = (
@@ -107,22 +110,24 @@ class TestAccounting:
 
 class TestResultSurface:
     def test_trades_carry_entry_and_exit_context(self, baseline):
-        """入场与了结上下文是任意事后分组分析的前提，不能事后补。"""
+        """The entry and exit context is the prerequisite for any grouped analysis
+        afterwards, and cannot be reconstructed later."""
         columns = set(baseline().trades.columns)
         for name in ("underlying_price", "iv", "delta", "moneyness", "dte_calendar"):
             assert f"entry_{name}" in columns and f"exit_{name}" in columns
 
     def test_summary_discloses_synthetic_data(self, baseline):
         text = baseline().summary(printout=False)
-        assert "合成期权链" in text and "不可据此调优" in text
+        assert "synthetic option chain" in text and "must not be tuned on it" in text
 
     def test_summary_discloses_engine_scope(self, baseline):
-        """成交表没有权益曲线，报告必须说清楚没有回撤与夏普。"""
+        """The trade table has no equity curve, and the report has to say there is no
+        drawdown and no Sharpe."""
         text = baseline().summary(printout=False)
-        assert "不含资金约束" in text and "没有回撤与夏普" in text
+        assert "no capital constraint" in text and "no drawdown and no Sharpe" in text
 
     def test_summary_reports_concurrency_and_capital(self, baseline):
-        assert "峰值同时持仓" in baseline().summary(printout=False)
+        assert "Peak concurrent positions" in baseline().summary(printout=False)
 
     def test_manifest_is_complete(self, baseline, tmp_path):
         paths = baseline().export(tmp_path)
@@ -149,4 +154,4 @@ class TestNoTrades:
         )
         result = Result(TradeTableEngine(market, chain, signals, config).run(strategy))
         assert result.trades.empty
-        assert "未产生任何交易" in result.summary(printout=False)
+        assert "No trades were produced" in result.summary(printout=False)
