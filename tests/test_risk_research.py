@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.risk.attribution import RESIDUAL_WARN, attribute, attribute_by
-from backtest.risk.hedge import DrawdownBrake, ExposureLimits, hedge_value, without_hedges
-from backtest.risk.stress import (
+from backtest.accounting.attribution import RESIDUAL_WARN, attribute, attribute_by
+from backtest.portfolio.constraints import DrawdownBrake, ExposureLimits, hedge_value, without_hedges
+from backtest.portfolio.scenarios import (
     LARGE_SHOCK,
     PortfolioGreeks,
     scenario_replay,
@@ -201,7 +201,7 @@ class TestExcursion:
             study(trades)
 
     def test_censoring_detected(self):
-        from backtest.engine.strategy import ExitRule
+        from backtest.signals.strategy import ExitRule
         from backtest.research.excursion import study
 
         result = study(make_trades(), ExitRule(hold_days=10, take_profit=1.0, stop_loss=0.5))
@@ -209,7 +209,7 @@ class TestExcursion:
         assert any("take profit" in c for c in result.censoring)
 
     def test_no_censoring_when_rules_off(self):
-        from backtest.engine.strategy import ExitRule
+        from backtest.signals.strategy import ExitRule
         from backtest.research.excursion import study
 
         rule = ExitRule(hold_days=20, take_profit=None, stop_loss=None, dte_floor=5)
@@ -227,14 +227,14 @@ class TestExcursion:
 
 class TestRegime:
     def test_dimension_label_count_validated(self):
-        from backtest.research.regime import Dimension
+        from backtest.signals.setup.regime import Dimension
 
         with pytest.raises(ValueError, match="labels"):
             Dimension("x", "vix", (0.2, 0.3), ("low", "high"),
                       "two boundaries need three labels")
 
     def test_missing_source_marked_unavailable(self):
-        from backtest.research.regime import DEFAULT_DIMENSIONS, classify
+        from backtest.signals.setup.regime import DEFAULT_DIMENSIONS, classify
 
         panel = pd.DataFrame({"vxn": [0.2] * 5},
                              index=pd.date_range("2023-01-03", periods=5, freq="B"))
@@ -245,7 +245,7 @@ class TestRegime:
     def test_partial_dimensions_yield_unknown(self):
         """Any dimension absent makes the whole thing unknown — making do with the
         rest would quietly change what the regime means."""
-        from backtest.research.regime import classify
+        from backtest.signals.setup.regime import classify
 
         panel = pd.DataFrame(
             {"vxn": [0.2, 0.35], "term_structure": [1.1, np.nan]},
@@ -255,7 +255,7 @@ class TestRegime:
         assert regimes.frame.loc[pd.Timestamp("2023-01-04"), "combined"] == "unknown"
 
     def test_stratify_flags_thin_samples(self):
-        from backtest.research.regime import classify, stratify
+        from backtest.signals.setup.regime import classify, stratify
 
         panel = pd.DataFrame({"vxn": [0.15] * 40},
                              index=pd.date_range("2023-01-03", periods=40, freq="B"))

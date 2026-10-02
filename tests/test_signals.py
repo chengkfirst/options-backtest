@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.config import TRADING_DAYS_PER_YEAR
+from backtest.core.config import TRADING_DAYS_PER_YEAR
 from backtest.data.underlying import UnderlyingBars
-from backtest.errors import StartupError
+from backtest.core.errors import StartupError
 from backtest.signals import indicators
 from backtest.signals.registry import SignalSet
 

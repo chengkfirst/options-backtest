@@ -1,8 +1,9 @@
 # Working conventions
 
-> This file is independent of [requirements.md](requirements.md) (what to build) and
-> [ROADMAP.md](ROADMAP.md) (what it looks like). It covers one thing only: **how to make
-> sure what gets built is right, and does not break quietly.**
+> This file is independent of `Plan/backtest-system-architecture.pdf` (the architecture),
+> [ROADMAP.md](ROADMAP.md) (what is built against it) and
+> [requirements.md](requirements.md) (the criteria). It covers one thing only: **how to
+> make sure what gets built is right, and does not break quietly.**
 
 ---
 
@@ -123,6 +124,8 @@ convention** — pretending they are guarded is more dangerous than admitting th
 | Detect events on the close, measure the pain intraday | closes throughout understate both the drawdown and the probability of a further fall | tested |
 | A conditional probability always comes with its unconditional baseline | reporting only the former is self-deception | tested |
 | **One fact is defined in exactly one place** | two definitions always drift | a person |
+| **A realism assumption is never optimised** | picking the λ, the latency or the cleaning rule that maximises backtest returns optimises an illusion. These are set conservatively and only tested for sensitivity | a person |
+| **A slot's logic never calls another slot** | the architecture requires every influence to pass through the trade context and the action vocabulary; direct calls are what make per-slot ablation impossible | a person, until the component protocol exists |
 
 ---
 

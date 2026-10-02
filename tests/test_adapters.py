@@ -17,8 +17,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.data.adapters import SCHEMA, check_frame, describe_schema, normalise
-from backtest.errors import DataQualityError
+from backtest.data.options.adapters import SCHEMA, check_frame, describe_schema, normalise
+from backtest.core.errors import DataQualityError
 
 
 def make_vendor(n_days=5, n_strikes=6, iv=0.25) -> pd.DataFrame:
@@ -141,23 +141,23 @@ class TestChecker:
 
 class TestRegistry:
     def test_unknown_source_names_the_alternatives(self):
-        from backtest.data.chain_registry import available, build_chain_source
-        from backtest.errors import StartupError
+        from backtest.data.options.chain_registry import available, build_chain_source
+        from backtest.core.errors import StartupError
 
         with pytest.raises(StartupError, match="unknown data source"):
             build_chain_source("nosuch:x", None, None)
         assert "synthetic" in available() and "file" in available()
 
     def test_object_must_implement_protocol(self):
-        from backtest.data.chain_registry import build_chain_source
-        from backtest.errors import StartupError
+        from backtest.data.options.chain_registry import build_chain_source
+        from backtest.core.errors import StartupError
 
         with pytest.raises(StartupError, match="snapshot"):
             build_chain_source(object(), None, None)
 
     def test_duplicate_registration_refused(self):
-        from backtest.data.chain_registry import register
-        from backtest.errors import StartupError
+        from backtest.data.options.chain_registry import register
+        from backtest.core.errors import StartupError
 
         with pytest.raises(StartupError, match="already registered"):
             register("synthetic", lambda *a: None)

@@ -40,7 +40,7 @@ MARK = {"done": "[x] ", "partial": "[~] ", "missing": "[ ] "}
 
 def _components() -> list[str]:
     sys.path.insert(0, str(ROOT))
-    from backtest.components import COMPONENTS, LAYERS
+    from backtest.core.slots import COMPONENTS, LAYERS
 
     lines = []
     for layer, what in LAYERS:
@@ -55,6 +55,24 @@ def _components() -> list[str]:
             lines.append(f"      {MARK[c.status]}{c.name}   {c.output}{tail}")
             if c.gap:
                 lines.append(f"          missing: {c.gap[:64]}")
+    return lines
+
+
+def _lifecycle() -> list[str]:
+    """The lifecycle settings the architecture leaves open.
+
+    Shown beside the components because they change strategy behaviour just as much, and
+    because four of the five are currently decided by accident rather than chosen.
+    """
+    sys.path.insert(0, str(ROOT))
+    from backtest.signals.lifecycle import SETTINGS
+
+    lines = []
+    for s in SETTINGS:
+        mark = MARK["done"] if not s.gap else MARK["partial"] if s.enforced_by else MARK["missing"]
+        lines.append(f"  {mark}{s.name:22s} {s.enforced_by or 'nothing enforces it'}")
+        if s.gap:
+            lines.append(f"      missing: {s.gap[:84]}")
     return lines
 
 
@@ -104,6 +122,8 @@ def main() -> int:
     print("=" * 62)
     print("\n[ the seven components ]  in four layers, ordered as a trade happens")
     print("\n".join(_components()))
+    print("\n[ lifecycle ]  settings the architecture leaves open")
+    print("\n".join(_lifecycle()))
     print("\n[ acceptance ]")
     print("\n".join(_requirements()))
     print("\n[ guards ]  the constraints a tool can check")

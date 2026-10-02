@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from backtest.config import TRADING_DAYS_PER_YEAR
+from backtest.core.config import TRADING_DAYS_PER_YEAR
 
 
 def sma(series: pd.Series, window: int) -> pd.Series:

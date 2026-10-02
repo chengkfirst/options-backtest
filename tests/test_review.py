@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from backtest.engine.review import Add, Close, PositionView, Reduce, Roll
-from backtest.errors import StartupError
+from backtest.signals.review import Add, Close, PositionView, Reduce, Roll
+from backtest.core.errors import StartupError
 
 
 class TestActions:

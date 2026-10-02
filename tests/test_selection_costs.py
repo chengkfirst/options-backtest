@@ -8,11 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.config import CostConfig
-from backtest.costs.model import check_tradable, execute, fill_price, order_fees
-from backtest.errors import StartupError
-from backtest.selection.rules import SelectionRule, select_contract
-from backtest.types import CHAIN_COLUMNS, Right, Side
+from backtest.core.config import CostConfig
+from backtest.execution.costs import check_tradable, execute, fill_price, order_fees
+from backtest.core.errors import StartupError
+from backtest.signals.contracts import SelectionRule, select_contract
+from backtest.core.types import CHAIN_COLUMNS, Right, Side
 
 
 @pytest.fixture

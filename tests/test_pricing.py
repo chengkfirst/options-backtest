@@ -5,13 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from backtest.pricing import (
+from backtest.data.options.pricing import (
     bs_price,
     greeks,
     has_early_exercise_value,
     implied_vol,
 )
-from backtest.types import Right
+from backtest.core.types import Right
 
 BASE = dict(s=100.0, k=100.0, t=1.0, r=0.05, q=0.0)
 #: Published reference values (S=100, K=100, T=1, r=5%, sigma=20%, q=0)

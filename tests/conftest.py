@@ -13,13 +13,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.config import BacktestConfig
-from backtest.data.calendar import TradingCalendar
+from backtest.core.config import BacktestConfig
+from backtest.core.clock import TradingCalendar
 from backtest.data.market import MarketData
-from backtest.data.synthetic.generator import SyntheticChainSource
+from backtest.data.options.synthetic.generator import SyntheticChainSource
 from backtest.data.underlying import build_bars
 from backtest.signals.registry import SignalSet
-from backtest.types import ContractSpec
+from backtest.core.types import ContractSpec
 
 SEED = 20260917
 START = date(2022, 1, 1)

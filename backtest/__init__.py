@@ -4,13 +4,14 @@ For usage see :func:`run`. For the design and its boundaries see ``ROADMAP.md`` 
 project root.
 """
 
-from backtest.api import Result, run
-from backtest.config import BacktestConfig, CostConfig, SyntheticChainConfig
-from backtest.engine.sweep import SweepResult
-from backtest.engine.strategy import ExitRule, Strategy, all_of, crossover, threshold
-from backtest.maybe import Maybe
-from backtest.selection.rules import SelectionRule
-from backtest.types import ExitReason, Right
+from backtest.api.sdk import Result, run
+from backtest.core.config import BacktestConfig, CostConfig, SyntheticChainConfig
+from backtest.research.sweep import SweepResult
+from backtest.signals.strategy import ExitRule, all_of, crossover, threshold
+from backtest.engine.strategy import Strategy
+from backtest.core.maybe import Maybe
+from backtest.signals.contracts import SelectionRule
+from backtest.core.types import ExitReason, Right
 
 __all__ = [
     "run",

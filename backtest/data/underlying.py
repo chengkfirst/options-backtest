@@ -20,8 +20,8 @@ from datetime import date
 
 import pandas as pd
 
-from backtest.errors import DataQualityError
-from backtest.maybe import Maybe
+from backtest.core.errors import DataQualityError
+from backtest.core.maybe import Maybe
 
 RAW_FIELDS = ("open", "high", "low", "close")
 ADJ_PREFIX = "adj_"

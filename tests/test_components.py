@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from backtest.components import (
+from backtest.core.slots import (
     COMPONENTS,
     COUPLINGS,
     LAYERS,

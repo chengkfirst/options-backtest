@@ -15,11 +15,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.engine.strategy import EntryRule, ExitRule, Strategy
-from backtest.engine.trade_table import TradeTableEngine
-from backtest.errors import StartupError
-from backtest.selection.rules import SelectionRule
-from backtest.types import CHAIN_COLUMNS, ContractId, ExitReason, Right
+from backtest.signals.strategy import EntryRule, ExitRule
+
+from backtest.engine.strategy import Strategy
+from backtest.engine.vectorized import TradeTableEngine
+from backtest.core.errors import StartupError
+from backtest.signals.contracts import SelectionRule
+from backtest.core.types import CHAIN_COLUMNS, ContractId, ExitReason, Right
 
 
 class ScriptedChain:
@@ -265,7 +267,7 @@ class TestSweep:
         return market, chain, signals, config, strategy
 
     def test_covers_full_grid(self, pieces):
-        from backtest.engine.sweep import sweep
+        from backtest.research.sweep import sweep
 
         res = sweep(*pieces, {"take_profit": [0.5, 1.0], "stop_loss": [0.3, 0.5]})
         assert res.trials == 4 and len(res.table) == 4
@@ -273,13 +275,13 @@ class TestSweep:
     def test_records_trial_count(self, pieces):
         """How many sets were swept has to be recorded — the multiple-testing
         correction needs it, and nobody gets to pretend they tried once."""
-        from backtest.engine.sweep import sweep
+        from backtest.research.sweep import sweep
 
         res = sweep(*pieces, {"take_profit": [0.5, 1.0, 1.5]})
         assert res.trials == 3
 
     def test_runs_are_independent_and_reproducible(self, pieces):
-        from backtest.engine.sweep import sweep
+        from backtest.research.sweep import sweep
 
         grid = {"take_profit": [0.5, 1.0]}
         first = sweep(*pieces, grid).table
@@ -287,13 +289,13 @@ class TestSweep:
         pd.testing.assert_frame_equal(first, second)
 
     def test_rejects_unknown_parameter(self, pieces):
-        from backtest.engine.sweep import sweep
+        from backtest.research.sweep import sweep
 
         with pytest.raises(StartupError, match="cannot be swept"):
             sweep(*pieces, {"leverage": [1, 2]})
 
     def test_rejects_empty_grid(self, pieces):
-        from backtest.engine.sweep import sweep
+        from backtest.research.sweep import sweep
 
         with pytest.raises(StartupError, match="grid is empty"):
             sweep(*pieces, {})
@@ -301,13 +303,13 @@ class TestSweep:
     def test_dte_window_follows_target(self, pieces):
         """Sweeping target_dte moves the window with it, or it would hit the "target
         outside the window" check."""
-        from backtest.engine.sweep import sweep
+        from backtest.research.sweep import sweep
 
         res = sweep(*pieces, {"target_dte": [14, 30, 45]})
         assert res.trials == 3 and res.table["count"].sum() > 0
 
     def test_top_is_ordered(self, pieces):
-        from backtest.engine.sweep import sweep
+        from backtest.research.sweep import sweep
 
         res = sweep(*pieces, {"take_profit": [0.5, 1.0, 1.5]})
         top = res.top(3)

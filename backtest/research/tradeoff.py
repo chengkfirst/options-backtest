@@ -143,8 +143,8 @@ def _delta_after(spot, strike, dte, iv, rate, is_call, move) -> float:
     and do not care whether a number was observed or derived, which is what lets the
     data source be swapped with no change above.
     """
-    from backtest.data.chain import delta_after_move
-    from backtest.types import Right
+    from backtest.data.options.chain import delta_after_move
+    from backtest.core.types import Right
 
     return delta_after_move(spot, strike, dte, iv, rate,
                             Right.CALL if is_call else Right.PUT, move)

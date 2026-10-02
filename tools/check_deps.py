@@ -1,7 +1,7 @@
 """The dependency-direction check.
 
 Modules may depend only upwards from the bottom, and **pricing must not escape the
-data layer**: `selection`, `engine` and `research` may not import `backtest.pricing`
+data layer**: `selection`, `engine` and `research` may not import `backtest.data.options.pricing`
 directly. The layers above consume the chain's quote and greek columns and do not care
 whether those numbers were observed in the market, supplied by a vendor, or derived
 from a model. That constraint is what lets the data source be swapped with no change
@@ -9,7 +9,7 @@ above.
 
 Pricing itself is a **market model**, not the synthetic chain's private property: the
 synthetic chain uses it to make prices, and the file source uses it to fill in greeks a
-vendor omits. So it lives in `backtest.pricing` (layer 0), available to every
+vendor omits. So it lives in `backtest.data.options.pricing` (layer 0), available to every
 implementation in the data layer.
 
 This is a tool rather than a line in a document because a document cannot stop an
@@ -25,42 +25,50 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = "backtest"
 
-#: The layers: a smaller number is further down. Upper layers may depend on lower
-#: ones, never the reverse.
-#:
-#: ``report`` sits beside ``data``: it only reads the trade log and depends on nothing
-#: upstream, which makes it a leaf rather than a top layer. Putting it on top would
-#: make ``engine`` reusing its statistics a "reverse dependency", which would be a
-#: mistake in the layering, not in the code. The constraint that actually matters is
-#: expressed separately by ``REPORT_FORBIDDEN``.
+#: The layers, numbered as in the architecture document. A smaller number is further
+#: down; an upper layer may import a lower one, never the reverse. Two packages on the
+#: same layer may import each other.
 LAYERS: dict[str, int] = {
-    "maybe": 0, "errors": 0, "events": 0, "types": 0, "config": 0, "pricing": 0,
-    #: components is the conceptual base: what each of the seven components decides in
-    #: a trade and how they constrain one another. It **depends on nothing** (only text
-    #: and data), hence the bottom layer; the interface, the docs and the research
-    #: tools all read it, so the gap list is never written twice and left to drift.
-    "components": 0,
-    "data": 1, "report": 1,
-    "signals": 2, "selection": 2, "costs": 2,
-    "portfolio": 2, "risk": 2,
-    "engine": 3,
-    #: research **calls the engine to run backtests** (the sizing comparison runs one
-    #: strategy many times), so it sits above the engine. risk is imported by the
-    #: engine instead (aggregating daily greeks), so it sits below.
-    "research": 4,
-    "api": 5, "__init__": 5,
+    #: Layer 0 · Foundation. The contract every layer shares.
+    #: `slots` is the conceptual base: what each of the seven components decides in a
+    #: trade and how they constrain one another. It **depends on nothing** (only text
+    #: and data), so it belongs at the bottom; the interface, the docs and the research
+    #: tools all read it, which is why the gap list is never written twice and left to
+    #: drift.
+    "core": 0,
+    #: Layer 1 · Data. Raw data to clean data that was genuinely available at t.
+    "data": 1,
+    #: Layer 2 · Signals. What to buy or sell, and how strongly. Hosts the Setup,
+    #: Entry, Take Profit, Stop Loss, Headwind and per-trade Hedge slots.
+    "signals": 2,
+    #: Layer 3 · Portfolio and risk. Signals to target positions, within limits.
+    #: Hosts the Positioning slot and the book-wide Headwind and Hedge slots.
+    "portfolio": 3,
+    #: Layer 4 · Execution simulation. How much fills, and at what price.
+    "execution": 4,
+    #: Layer 5 · Engine and accounting. The engine drives the order of events;
+    #: accounting records every movement of money. They sit on one layer because the
+    #: engine writes to the ledger and reads positions back each period.
+    "engine": 5, "accounting": 5,
+    #: Layer 6 · Research and reports. Is the result real.
+    "research": 6,
+    #: Layer 7 · Interfaces. The SDK, the CLI and the local web app.
+    "api": 7, "__init__": 7,
 }
 
 #: Only implementations in the data layer may import pricing — the synthetic chain
 #: making prices and the file source filling in greeks both live there. Above that
 #: (selection, engine, research) it is forbidden outright: they may only read the
 #: chain's columns.
-PRICING_MODULE = "backtest.pricing"
+PRICING_MODULE = "backtest.data.options.pricing"
 PRICING_ALLOWED_PREFIX = "backtest.data"
 
-#: `report` only reads the trade log and must not depend on the engine or the data
-#: layer.
-REPORT_FORBIDDEN = {"data", "engine", "signals", "selection", "costs"}
+#: `research.metrics` only reads a trade log. Keeping it free of the engine and the
+#: data layer is what lets any layer compute statistics from a trade log without
+#: dragging the whole system in. This is the constraint the old "report sits beside
+#: data" layering was really about.
+METRICS_MODULE = "backtest.research.metrics"
+METRICS_FORBIDDEN = {"data", "engine", "signals", "execution", "portfolio"}
 
 
 def _layer_of(module: str) -> int | None:
@@ -122,9 +130,9 @@ def check() -> list[str]:
                     f"{module} imports {imported} directly; pricing is confined to the "
                     f"data layer, and the layers above must consume the chain's columns"
                 )
-            if own_top == "report" and target_top in REPORT_FORBIDDEN:
-                problems.append(f"{module} must not depend on {imported}; report only "
-                                f"reads the trade log")
+            if module == METRICS_MODULE and target_top in METRICS_FORBIDDEN:
+                problems.append(f"{module} must not depend on {imported}; metrics only "
+                                f"reads a trade log")
             if target_layer > own_layer:
                 problems.append(
                     f"{module} (layer {own_layer}) imports {imported} "

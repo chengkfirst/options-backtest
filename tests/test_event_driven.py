@@ -15,13 +15,14 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from backtest.engine.event_driven import EventDrivenEngine
-from backtest.engine.expression import parse_condition
-from backtest.engine.strategy import EntryRule, ExitRule, Strategy
-from backtest.engine.trade_table import TradeTableEngine
-from backtest.errors import StartupError
-from backtest.selection.rules import SelectionRule
-from backtest.types import Right
+from backtest.engine.loop import EventDrivenEngine
+from backtest.signals.entry.expression import parse_condition
+from backtest.signals.strategy import EntryRule, ExitRule
+from backtest.engine.strategy import Strategy
+from backtest.engine.vectorized import TradeTableEngine
+from backtest.core.errors import StartupError
+from backtest.signals.contracts import SelectionRule
+from backtest.core.types import Right
 
 
 def build_strategy(signals, **overrides):

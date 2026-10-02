@@ -4,6 +4,10 @@
 > answer: where is the platform, what is still missing, and what do I believe exists that
 > does not.
 >
+> The architecture is `Plan/backtest-system-architecture.pdf`; the layer-by-layer status
+> against it is in [ROADMAP.md](ROADMAP.md) and is not repeated here. This file is the
+> list of criteria.
+>
 > The rule: **anything not built says so explicitly**, with no hedging. There are three
 > statuses only — **done** (built and verified) / **partial** (exists but falls short, with
 > what is short stated) / **missing** (absent, with whether it is a placeholder or still to
@@ -166,6 +170,44 @@ direction rather than a verdict.
 | 4.22 | Multiple-testing disclosure (how many times it was tried) | partial → P4 | including **exploration by grouping** — stratifying on different dimensions is statistically the same as sweeping parameters |
 | 4.23 | **Evidence graded strong / medium / weak** | missing → P4 | — |
 | 4.24 | **Weak evidence is still shown, labelled as weak, with no binary gate** | missing → P4 | what you want is useful information plus a sense of how much to trust it, not to have it filtered away |
+
+---
+
+## Goal one, continued: the criteria the architecture document adds
+
+> These come from `Plan/backtest-system-architecture.pdf` and were not in this list
+> before. Most are structural: they are what makes the seven slots separately
+> researchable, which is the whole of use two. ROADMAP.md says where each one stands in
+> the code.
+
+| # | The criterion | Status | Note |
+|---|---|---|---|
+| 1.15 | **Layers communicate only through events** (MarketEvent, SignalEvent, OrderEvent, FillEvent, RiskEvent…) | missing | **The largest structural gap.** Layers call each other directly today. Until this lands, no slot can be a component that receives events, so ablation and variant swapping cannot be built |
+| 1.16 | **One component protocol** — `on_event`, `get_state`, a parameter schema — and a variant registry by name and version | missing | The parameter schema is what drives both config validation and the generated web form; `core/slots.py` does the second half already |
+| 1.17 | **One shared action vocabulary**, with the unbuilt actions refused at the source rather than mapped to the nearest thing that works | done | `core/actions.py`. Six of nine executable; the other three each state why not |
+| 1.18 | **The trade lifecycle is explicit**: candidate scope against trade scope, four states, and the five lifecycle settings chosen rather than implied | partial | `signals/lifecycle.py` defines it. The engine has no Armed state, and four of the five settings are currently decided by accident — each gap is recorded and shown by `tools/status.py` |
+| 1.19 | **A DataView that cuts at `available_at`**, raising on an out-of-range access | partial | The property is held by construction (decision-day signals, execution-day chain); the interface does not exist and raw data carries no `available_at` |
+| 1.20 | **Signal and fill never share a quote**: the signal at snapshot t, the fill at t plus a decision latency | partial | Held at daily resolution (T decides, T+1 fills). The plan's intraday form needs intraday option quotes |
+| 1.21 | **Illegal orders are rejected**: trading hours, halts, tick sizes, position limits, borrow | missing | Nothing checks any of these, so principle 2 ("correctness by mechanism") is not held in Layer 4 |
+| 1.22 | **A `run_id` hash over config, code commit, data snapshot and run settings** | partial | `result.manifest()` records all four; they are not hashed into one identifier |
+| 1.23 | **The same strategy code runs in backtest, paper and live**, with only the feed and the broker swapped | missing | There is no SimBroker interface, so nothing proves it |
+| 1.24 | **The fill-price multiple λ can exceed 1** (worse than the ask), so the strategy can be tested at λ = 1.5 | missing | `adverse_fraction` interpolates between mid and the ask and stops at 1 |
+| 1.25 | **Beta-weighted delta and vega to a common index** | missing | SPY, QQQ, IWM and their largest holdings behave largely as one position; without this, book risk is understated |
+| 1.26 | **Shadow tracking after a trade closes** | missing | Without prices after the exit, counterfactual exit research is guesswork — which blocks 4.15 |
+| 1.27 | **A point-in-time earnings and event calendar**, readable by Setup, Entry and Headwind | missing | A long option held through an earnings event behaves very differently; results should be split by event exposure |
+| 1.28 | **Deflated Sharpe over the total trial count**, across every slot and setting | missing | `research/sweep.py` records trials per sweep; nothing aggregates them across an idea |
+
+## Goal two, continued: the research tools the architecture document adds
+
+| # | The criterion | Status | Note |
+|---|---|---|---|
+| 2.9 | **Ablation**: run with one slot switched off or filled by a neutral variant | missing | Needs 1.16 |
+| 2.10 | **Variant swap**: fill one slot differently, everything else fixed, as a pair of runs differing in one slot alone | missing | Needs 1.16. This is what makes the strategy's change history auditable |
+| 2.11 | **Counterfactual exits**: replay each closed trade under an alternative exit | missing | Needs 1.26. In-sample by construction, so anything it suggests must be confirmed out of sample |
+| 2.12 | **Attribution by component**: split P&L by the slot that opened, sized, reduced, hedged or closed each part | missing | Needs the action envelope to carry `component_id`, which `core/actions.py` now defines |
+| 2.13 | **Interaction tests**: vary two slots jointly and compare against the sum of the single-slot effects | missing | A large gap means the two have to be researched together |
+| 2.14 | **An ExperimentTracker**: every run findable, comparable and reproducible, with the trial count per idea | missing | `app/store.py` stores runs immutably and versions strategies by content hash — the half that exists |
+| 2.15 | **Baselines**: a delta-equivalent position in the underlying, and random entries with the same structure, delta and days to expiry | missing | The highest-priority gap in this group: one run says whether the option adds anything over the underlying, and whether the timing beats the volatility risk premium |
 
 ---
 

@@ -277,7 +277,53 @@ hard blocker at present.
 
 ---
 
-## 8. Maintenance
+## 8. The four groups of choice, and which may be optimised
+
+> From `Plan/backtest-system-architecture.pdf`, "Research and Trade-off Register". The
+> full register is there; what matters here is the **discipline**, because it decides
+> which of the questions above may be answered by searching for the best value.
+
+| Group | What it holds | How it may be treated |
+|---|---|---|
+| **1 · realism assumptions** | λ (where between mid and ask a buy fills), decision latency, participation cap, marking at bid or mid, stale-quote tolerance, cleaning rules, excluding OCC-adjusted contracts, American against European IV, trading against calendar days, dividend and rate sources, surface smoothing, sticky-strike against sticky-delta, the greeks attribution method | **Sensitivity tests only, never optimised.** Set conservatively. Picking the value that maximises backtest returns optimises an illusion |
+| **2 · engineering trade-offs** | data granularity, check_frequency, event-driven against vectorized, the underlying universe, the shadow-tracking window | Chosen once, for cost and realism. Not a research result |
+| **3 · strategy choices** | the snapshot time, contract delta and days to expiry, the structure, the Take Profit and Stop Loss approaches, headwind sensitivity, the hedge approach, rolling, positioning, the regime model, the lifecycle settings, book limits | **May be optimised**, but only under the protocol in section 9 |
+| **4 · research-method trade-offs** | the walk-forward window, the hold-out length, pooling across underlyings, the number of variants tested, the optimisation objective, the minimum trade count and bootstrap block length | Chosen before the research, not after seeing results |
+
+**The five that move results most**, and so come first: λ, the decision latency and the
+marking method from group 1; the contract choice and the Take Profit approach from group 3.
+
+This is why section 7.4's items have triggers rather than priorities: a binomial tree and a
+real rate curve are group 1, so they are never tuned - they are either accurate enough for
+the question at hand or they are not.
+
+## 9. The research protocol
+
+> Also from the architecture document, 6.4. Seven slots with variants and parameters, plus
+> the lifecycle settings, make a very large search space, and with few trades the main risk
+> is fitting history rather than finding an edge.
+
+1. **Lock a final hold-out period at the start** and use it once, at the end.
+2. **Count every trial** across all slots and settings; the Deflated Sharpe uses the total.
+3. **Research in stages, each on walk-forward folds**: Setup and Entry first, judged by the
+   forward returns of the underlying and of the selected options **with no exits applied**
+   (an event study); then Take Profit and Stop Loss; then Headwind; then Positioning; then
+   Hedge. Finish with interaction tests and a joint re-check.
+4. **Report confidence intervals, not point estimates**: bootstrap by trade and block
+   bootstrap by period. Set a minimum trade count before any conclusion is drawn.
+5. **Pool across underlyings** to gain sample size, but require the effect to hold on each
+   underlying separately.
+6. **A counterfactual exit result is in-sample by construction**; anything it suggests must
+   be confirmed out of sample before adoption.
+7. **Compute return and risk from the book's daily mark-to-market**, not from per-trade
+   returns, so overlapping trades are counted correctly.
+
+Of these seven, **none is enforced by a tool yet** — see requirements.md 1.28 and 2.9 to
+2.15. Until they are, the protocol rests on a person, and saying so is part of it.
+
+---
+
+## 10. Maintenance
 
 This list is **maintained by hand** and cannot be computed the way `tools/status.py` is.
 

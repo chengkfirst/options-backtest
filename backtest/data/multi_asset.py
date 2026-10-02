@@ -22,9 +22,9 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from backtest.data.cache import CacheKey, ParquetCache
-from backtest.data.sources import fetch_close_series
-from backtest.events import EventKind, EventLog
+from backtest.data.store import CacheKey, ParquetCache
+from backtest.data.ingest import fetch_close_series
+from backtest.core.run_log import EventKind, EventLog
 
 #: The cross-market series. ``scale`` says how to get from the raw close to the
 #: quantity actually used.

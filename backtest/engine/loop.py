@@ -1,0 +1,951 @@
+"""The event-driven engine: stepping day by day.
+
+There is exactly one difference from the trade-table engine, and it is the one that
+matters: **it knows how much money is in the account and how many contracts are
+held at any moment.** That is what makes the equity curve, drawdown, capital
+constraints, concurrency limits and hedging possible at all.
+
+Both engines read the **same** ``Strategy`` definition. Not for convenience — so
+they can check each other: with no capital constraint and no concurrency limit, the
+same configuration must produce row-identical trade logs on both sides, and an
+error on either is shown up by the other.
+
+The main loop's order within a day is fixed, and every step's position has a reason:
+
+    1  advance to day T
+    2  load T's data
+    3  fill the intents created on T-1   <- before expiry settlement: a contract
+                                            still trades on its expiry day, so an
+                                            exit placed on T-1 deserves the chance
+    4  settle T's expiries
+    5  mark to market -> write T's snapshot  <- before the strategy callback: the
+                                            strategy must see today's value; and
+                                            steps 6-7 do not change the portfolio,
+                                            so this is the day's final snapshot
+    6  compute signals
+    7  the strategy produces intents
+    8  validate -> queue for T+1        <- separate from producing them: conflicts
+                                            caused by the execution lag have to
+                                            surface at the source
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+
+import pandas as pd
+
+from backtest.core.actions import Action
+from backtest.core.config import BacktestConfig
+from backtest.execution.costs import check_tradable, execute
+from backtest.data.options.chain import ChainSource
+from backtest.data.market import MarketData
+from backtest.signals.plan import Context, Plan
+from backtest.signals.review import Add, Close, PositionView, Reduce
+from backtest.signals.strategy import ExitRule
+from backtest.engine.strategy import Strategy
+from backtest.core.errors import InvariantError, StartupError
+from backtest.core.run_log import EventKind, EventLog
+from backtest.accounting.tradebook import trades_frame
+from backtest.accounting.ledger import Ledger, Position, Snapshot
+from backtest.portfolio.scenarios import aggregate_greeks
+from backtest.signals.contracts import select_contract
+from backtest.signals.registry import SignalSet
+from backtest.core.types import (
+    ContractId,
+    ExitReason,
+    QuoteSource,
+    Right,
+    Side,
+    TradeRecord,
+    resolve_exit_reason,
+)
+
+ENGINE_NAME = "event_driven"
+
+
+#: Which exit reason a review's ``Close.kind`` files under. The statistics group on
+#: this, so the mapping has to be exact.
+REVIEW_EXIT_KIND = {
+    "take_profit": ExitReason.TAKE_PROFIT,
+    "stop_loss": ExitReason.STOP_LOSS,
+    "headwind": ExitReason.RISK_FORCED,
+    "signal": ExitReason.TIME_EXIT,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Intent:
+    """One trade intent. Created on T, executed on T+lag."""
+
+    contract: ContractId
+    side: Side
+    quantity: int
+    created: date
+    execute_on: date
+    trade_id: int
+    #: Which action this intent carries. **An enum, never a string**: using
+    #: human-readable text as a control-flow switch means rewording it executes an entry
+    #: as an exit, and a misspelled string matches no branch and falls through in
+    #: silence. See :mod:`backtest.core.actions` for the shared vocabulary.
+    kind: Action = Action.OPEN
+    reason: str = ""                  # why this order, for a person to read
+    exit_reasons: tuple[ExitReason, ...] = ()
+    #: What a plan carries over: this trade's own exit rule, tag and note.
+    exit_rule: "ExitRule | None" = None
+    tag: str = ""
+    note: str = ""
+
+
+@dataclass
+class OpenTrade:
+    """A logical trade not yet closed. It becomes a TradeRecord on exit."""
+
+    trade_id: int
+    contract: ContractId
+    entry_date: date
+    entry_price: float
+    quantity: int
+    side: Side                        # the entry side: BUY = long, SELL = short
+    fees: float
+    entry_quote: dict
+    entry_signals: dict
+    #: Maximum favourable / adverse excursion while held, for MFE/MAE research
+    mfe: float = 0.0
+    mae: float = 0.0
+    #: **This trade's own** exit rule. Under a plan each can differ — the deep
+    #: drawdown case widens the stop and holds longer. Empty falls back to the
+    #: strategy's global rule.
+    exit_rule: "ExitRule | None" = None
+    #: Gross P&L already banked by reductions. **It has to be recorded separately**:
+    #: the final record computes "remaining quantity x price difference", which
+    #: naturally omits the contracts sold earlier. Omitting it raises nothing and
+    #: simply leaves this trade's P&L quietly short.
+    realised_gross: float = 0.0
+    #: The tag and note attached at order time, from the Plan. They travel into the
+    #: trade log for classified research afterwards.
+    tag: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class EventDrivenResult:
+    records: tuple[TradeRecord, ...]
+    snapshots: tuple[Snapshot, ...]
+    config: BacktestConfig
+    strategy: Strategy
+    events: EventLog
+    ledger: Ledger
+    #: Daily portfolio greeks. It has a default, so it must follow the fields
+    #: that do not.
+    greeks: tuple = ()
+    #: **The daily position trajectory**: every held position's state each day. A
+    #: hard prerequisite for headwind research (5) — with only an entry and an exit
+    #: point there is no way to see what happened in between. It cannot be
+    #: reconstructed afterwards, so it is collected from the start.
+    paths: tuple = ()
+
+    @property
+    def paths_frame(self):
+        """The daily trajectory table. One row = one trade on one day."""
+        import pandas as pd
+
+        if not self.paths:
+            return pd.DataFrame(columns=[
+                "trade_id", "date", "days_held", "dte", "mark", "ratio",
+                "mfe_so_far", "mae_so_far", "underlying", "iv", "delta", "tag"])
+        return pd.DataFrame(list(self.paths))
+
+    @property
+    def trades(self) -> pd.DataFrame:
+        """The same table the trade-table engine produces — the research layer need
+        not know which engine ran."""
+        return trades_frame(self.records)
+
+    @property
+    def greeks_frame(self) -> pd.DataFrame:
+        """Daily portfolio greeks. Flat days are present too, at 0 — a missing row
+        and "no exposure that day" are different things."""
+        if not self.greeks:
+            return pd.DataFrame()
+        return pd.DataFrame([g.as_dict() for g in self.greeks]).set_index("date")
+
+    @property
+    def concurrency(self) -> pd.Series:
+        """Concurrent positions per day. This engine actually knows, where the trade
+        table has to infer it afterwards."""
+        return pd.Series(
+            {s.day: s.n_positions for s in self.snapshots}, name="concurrent_positions"
+        )
+
+    def capital_check(self) -> dict:
+        """Whether capital sufficed. This engine already enforced the constraint, so
+        this is confirmation after the fact."""
+        peak = max((s.n_positions for s in self.snapshots), default=0)
+        peak_deployed = max((s.deployed for s in self.snapshots), default=0.0)
+        return {
+            "peak_positions": peak, "peak_capital": peak_deployed,
+            "notional_capital": self.config.notional_capital,
+            "feasible": peak_deployed <= self.config.notional_capital,
+        }
+
+    @property
+    def equity(self) -> pd.DataFrame:
+        """Both equity curves plus capital utilisation."""
+        return pd.DataFrame(
+            [
+                {
+                    "date": s.day, "cash": s.cash,
+                    "equity_mid": s.equity_mid, "equity_liq": s.equity_liq,
+                    "option_value": s.option_value_mid, "stock_value": s.stock_value,
+                    "positions": s.n_positions, "deployed": s.deployed,
+                }
+                for s in self.snapshots
+            ]
+        ).set_index("date")
+
+
+class EventDrivenEngine:
+    """The backtest engine that steps day by day."""
+
+    def __init__(
+        self,
+        market: MarketData,
+        chain: ChainSource,
+        signals: SignalSet,
+        config: BacktestConfig | None = None,
+        events: EventLog | None = None,
+        *,
+        max_concurrent: int | None = None,
+        enforce_capital: bool = True,
+        limits=None,
+        brake=None,
+    ) -> None:
+        self.market = market
+        self.chain = chain
+        self.signals = signals
+        self.config = config or market.config
+        self.events = events or market.events
+        #: None means no limit. With None and enforce_capital=False, this engine
+        #: should agree with the trade-table engine.
+        self.max_concurrent = max_concurrent
+        self.enforce_capital = enforce_capital
+        #: Portfolio exposure limits (ExposureLimits) and the drawdown brake
+        #: (DrawdownBrake). Both only block new entries; neither reduces an existing
+        #: position — reducing is headwind's job, which is not built.
+        self.limits = limits
+        self.brake = brake
+
+    # ── guards ────────────────────────────────────────────
+    def _guard(self, strategy: Strategy) -> None:
+        self.signals.require(list(strategy.entry.requires))
+        if strategy.exit.hold_days is None and strategy.exit.dte_floor is None:
+            raise StartupError("no time-based exit, so positions get dragged into expiry")
+        lag = self.config.execution_lag_days
+        floor = strategy.exit.dte_floor
+        if floor is not None and floor < lag + 1:
+            raise StartupError(
+                f"the days-to-expiry floor {floor} is too small: with an execution lag "
+                f"of {lag} days it must be at least {lag + 1}"
+            )
+        # When selection is a function it decides direction itself, which cannot and
+        # should not be checked here.
+        if not callable(strategy.select) and strategy.select.right is Right.CALL \
+                and getattr(strategy, "short", False):
+            raise StartupError("a naked short call is not supported: there is no margin "
+                               "model, so any number given would be wrong")
+        if strategy.allow_stacking:
+            # A real account nets positions by contract: buying the same contract
+            # twice is one position at the broker, not two independent ones. The
+            # ledger does this faithfully, but the engine tracks logical trades by
+            # trade_id, so the second one never sees "its" position closed and is
+            # silently dropped. Supporting it needs a lot-tracking layer, which does
+            # not exist — hence a refusal rather than a drop.
+            raise StartupError(
+                "the event-driven engine does not support allow_stacking: a real "
+                "account nets positions by contract, so several entries in the same "
+                "contract merge into one position and cannot be split back into "
+                "several logical trades. That needs a lot-tracking layer, which is "
+                "not implemented. The trade-table engine can take this flag, but "
+                "then the two engines' results are no longer comparable."
+            )
+
+    # ── the main loop ─────────────────────────────────────
+    def run(self, strategy: Strategy) -> EventDrivenResult:
+        self._guard(strategy)
+        cal = self.market.calendar
+        ledger = Ledger(self.config.notional_capital, self.config.contract)
+        queue: list[Intent] = []
+        open_trades: dict[int, OpenTrade] = {}
+        records: list[TradeRecord] = []
+        snapshots: list[Snapshot] = []
+        greeks_daily: list = []
+        next_trade_id = 1
+        self._last_equity = float(self.config.notional_capital)
+        self._peak_equity = float(self.config.notional_capital)
+        self._drawdown = 0.0
+        paths: list[dict] = []
+        self._brake_state = "normal"
+        self._last_greeks = None
+        self._closed_pnl = records          # the same list, referenced not copied
+
+        for day in self.market.sessions():
+            # 3  fill yesterday's intents
+            due, queue = [i for i in queue if i.execute_on == day], [i for i in queue if i.execute_on > day]
+            for intent in due:
+                closed = self._execute(intent, ledger, open_trades, day)
+                if closed is not None:
+                    records.append(closed)
+
+            # 4  settle expiries
+            for pos in list(ledger.positions):
+                if pos.contract.expiry <= day:
+                    rec = self._settle(pos, ledger, open_trades, day)
+                    if rec is not None:
+                        records.append(rec)
+
+            # 5  mark to market
+            quotes = self._quotes(day, ledger.positions)
+            snap = ledger.snapshot(day, quotes, self.market.spot(day))
+            ledger.check_invariant(snap)
+            snapshots.append(snap)
+            self._last_equity = snap.equity_mid
+            self._peak_equity = max(self._peak_equity, snap.equity_mid)
+            # The drawdown is computed unconditionally. Computing it only inside the
+            # brake's branch left a plan function unable to read it — and how deep
+            # the drawdown is happens to be the commonest input to sizing and
+            # reduction decisions.
+            self._drawdown = snap.equity_mid / self._peak_equity - 1.0
+            g = aggregate_greeks(ledger.positions, self.chain, day,
+                                 self.market.spot(day).or_else(float("nan")), snap.equity_mid)
+            greeks_daily.append(g)
+            self._last_greeks = g
+            if self.brake is not None:
+                new_state = self.brake.state(self._drawdown)
+                if new_state != self._brake_state:
+                    self.events.record(
+                        EventKind.CANDIDATE_DROPPED, day,
+                        f"drawdown brake: {self._brake_state} -> {new_state} "
+                        f"(drawdown {self._drawdown:.1%})")
+                    self._brake_state = new_state
+            self._track_excursions(ledger, open_trades, quotes, day, paths)
+
+            # 6-7  signals -> the strategy
+            view = self.signals.on(day)
+            intents: list[Intent] = []
+
+            for pos in ledger.positions:
+                trade = open_trades.get(pos.trade_id)
+                if trade is None or self._already_queued(queue, pos.contract):
+                    continue
+                # The static rules are tested first. They are a **safety net**: the
+                # time-based exits may not be circumvented by a review, or one review
+                # function written wrong quietly drags a position into expiry.
+                reasons = self._exit_reasons(pos, trade, quotes, day, strategy)
+                action = None
+                if not reasons and strategy.review is not None:
+                    action = self._review_action(
+                        strategy, self._market_ctx(day, ledger), pos, trade, quotes, day)
+
+                target = cal.shift(day, self.config.execution_lag_days)
+                if target is None or target > self.config.end:
+                    continue               # end of the range: leave it to expiry
+
+                if reasons or isinstance(action, Close):
+                    if isinstance(action, Close) and not reasons:
+                        reasons = [REVIEW_EXIT_KIND[action.kind]]
+                        self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                                           f"review closed it: {action.reason}",
+                                           str(pos.contract))
+                    intents.append(Intent(
+                        contract=pos.contract,
+                        side=Side.SELL if pos.quantity > 0 else Side.BUY,
+                        quantity=pos.abs_quantity, created=day, execute_on=target,
+                        trade_id=pos.trade_id, kind=Action.CLOSE, reason="exit",
+                        exit_reasons=tuple(reasons),
+                    ))
+                elif isinstance(action, Reduce):
+                    # Round down, and keep at least 1 — reducing to 0 should be
+                    # expressed as Close; letting a reduction quietly become a close
+                    # leaves the statistics unable to tell them apart.
+                    cut = int(pos.abs_quantity * action.fraction)
+                    if cut < 1 or cut >= pos.abs_quantity:
+                        self.events.record(
+                            EventKind.CANDIDATE_DROPPED, day,
+                            f"a {action.fraction:.0%} reduction computes to {cut} "
+                            f"contracts (holding {pos.abs_quantity}), skipped",
+                            str(pos.contract))
+                    else:
+                        intents.append(Intent(
+                            contract=pos.contract,
+                            side=Side.SELL if pos.quantity > 0 else Side.BUY,
+                            quantity=cut, created=day, execute_on=target,
+                            trade_id=pos.trade_id, kind=Action.REDUCE,
+                            reason=action.reason or "reduced by review",
+                        ))
+                elif isinstance(action, Add):
+                    intents.append(Intent(
+                        contract=pos.contract,
+                        side=Side.BUY if pos.quantity > 0 else Side.SELL,
+                        quantity=action.contracts, created=day, execute_on=target,
+                        trade_id=pos.trade_id, kind=Action.ADD,
+                        reason=action.reason or "added by review",
+                    ))
+
+            if strategy.entry.condition(view):
+                intent = self._entry_intent(day, strategy, ledger, queue, next_trade_id)
+                if intent is not None:
+                    intents.append(intent)
+                    next_trade_id += 1
+
+            # 8  validate and queue
+            for intent in intents:
+                if self._validate(intent, ledger, day):
+                    queue.append(intent)
+
+        return EventDrivenResult(
+            paths=tuple(paths),
+            records=tuple(records), snapshots=tuple(snapshots), greeks=tuple(greeks_daily),
+            config=self.config, strategy=strategy, events=self.events, ledger=ledger,
+        )
+
+    # ── the steps ─────────────────────────────────────────
+    def _quotes(self, day: date, positions) -> dict[ContractId, tuple]:
+        out: dict[ContractId, tuple] = {}
+        for pos in positions:
+            frame = self.chain.series(pos.contract, [day])
+            if frame.empty:
+                self.events.record(EventKind.QUOTE_MISSING, day, "no quote to mark against",
+                                   str(pos.contract))
+                continue
+            row = frame.iloc[0]
+            # Carry the whole row: trajectory collection needs iv and delta.
+            # Returning only (bid, ask) would mean querying the chain again to record
+            # one more field, which is a wasted pass.
+            out[pos.contract] = (float(row["bid"]), float(row["ask"]), row)
+        return out
+
+    def _track_excursions(self, ledger, open_trades, quotes, day, paths) -> None:
+        """Collect every held position's state, each day.
+
+        Two uses:
+
+        1. **MFE / MAE** — where the take-profit and the stop belong; reading the
+           distribution is far more direct than sweeping parameters.
+        2. **The daily trajectory** — a **hard prerequisite** for headwind research
+           (5). With only an entry and an exit point there is no way to see what
+           happened in between, and so no way to answer whether the positions that
+           ended badly gave a warning beforehand.
+
+        The data can only be collected while a position is held and **cannot be
+        reconstructed afterwards** — which is why collection comes first, even
+        though the headwind research tools are not written.
+        """
+        for pos in ledger.positions:
+            trade = open_trades.get(pos.trade_id)
+            quote = quotes.get(pos.contract)
+            if trade is None or quote is None:
+                continue
+            mark = (quote[0] + quote[1]) / 2.0
+            ratio = (mark / trade.entry_price - 1.0) * (1 if pos.quantity > 0 else -1)
+            trade.mfe = max(trade.mfe, ratio)
+            trade.mae = min(trade.mae, ratio)
+
+            row = quote[2] if len(quote) > 2 else None
+            paths.append({
+                "trade_id": trade.trade_id,
+                "date": day,
+                "days_held": self.market.calendar.sessions_between(trade.entry_date, day),
+                "dte": self.market.calendar.sessions_between(day, pos.contract.expiry),
+                "mark": mark,
+                "ratio": ratio,              # P&L as a fraction of the entry price
+                "mfe_so_far": trade.mfe,     # best/worst so far, **not looked back on**
+                "mae_so_far": trade.mae,
+                "underlying": self.market.spot(day).or_else(float("nan")),
+                "iv": float(row["iv"]) if row is not None and "iv" in row else float("nan"),
+                "delta": float(row["delta"]) if row is not None and "delta" in row else float("nan"),
+                "tag": trade.tag,
+            })
+
+    def _exit_reasons(self, pos: Position, trade: OpenTrade, quotes, day: date, strategy: Strategy):
+        # This trade's own rule wins. Under a plan each trade's take-profit and stop
+        # can differ — which is where the seven components' coupling actually lands:
+        # one judgement decides both what to buy and how to get out.
+        rule = trade.exit_rule or strategy.exit
+        cal = self.market.calendar
+        reasons: list[ExitReason] = []
+        quote = quotes.get(pos.contract)
+        if quote is not None:
+            exit_price = quote[0] if pos.quantity > 0 else quote[1]
+            ratio = (exit_price / trade.entry_price - 1.0) * (1 if pos.quantity > 0 else -1)
+            if rule.take_profit is not None and ratio >= rule.take_profit:
+                reasons.append(ExitReason.TAKE_PROFIT)
+            if rule.stop_loss is not None and ratio <= -rule.stop_loss:
+                reasons.append(ExitReason.STOP_LOSS)
+        if rule.dte_floor is not None and cal.sessions_between(day, pos.contract.expiry) <= rule.dte_floor:
+            reasons.append(ExitReason.DTE_FLOOR)
+        if rule.hold_days is not None and cal.sessions_between(trade.entry_date, day) >= rule.hold_days:
+            reasons.append(ExitReason.TIME_EXIT)
+        return reasons
+
+    def _entry_intent(self, day, strategy, ledger, queue, trade_id) -> Intent | None:
+        if self.max_concurrent is not None and len(ledger) >= self.max_concurrent:
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               f"at the concurrency limit of {self.max_concurrent}")
+            return None
+        if self.brake is not None and self._brake_state == "halted":
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               "the drawdown brake has halted new entries")
+            return None
+        if self.limits is not None and self._last_greeks is not None:
+            allowed, why = self.limits.check(self._last_greeks, self._last_equity)
+            if not allowed:
+                self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                                   f"exposure limit: {why}")
+                return None
+        target = self.market.calendar.shift(day, self.config.execution_lag_days)
+        if target is None or target > self.config.end:
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               "the execution day falls outside the backtest range")
+            return None
+
+        if strategy.plan is not None:
+            return self._plan_intent(day, target, strategy, ledger, queue, trade_id)
+
+        selection = select_contract(
+            self.chain.snapshot(target), strategy.select, self.config, self.market.calendar, target,
+            # As above: the chain is the execution day's (target), the view is the
+            # decision day's (day).
+            self.signals.on(day),
+        )
+        if not selection.ok:
+            self.events.record(EventKind.SELECTION_FAILED, target, selection.describe())
+            return None
+        # Something was chosen, but a constraint was skipped — that must not stay
+        # only in the trace; a warning the user cannot see is no warning.
+        for why in selection.skipped_filters:
+            self.events.record(EventKind.CANDIDATE_DROPPED, target,
+                               f"selection note: {why}")
+        contract = selection.contract.unwrap()
+        if not strategy.allow_stacking and (
+            ledger.position(contract) is not None or self._already_queued(queue, contract)
+        ):
+            self.events.record(
+                EventKind.CANDIDATE_DROPPED, day,
+                "this contract is already held and allow_stacking is false",
+                str(contract))
+            return None
+        quantity = self._size(strategy, ledger, contract, day, target)
+        if self.brake is not None and self._brake_state == "reduced":
+            quantity = int(quantity * self.brake.scale(
+                self._last_equity / self._peak_equity - 1.0))
+        if quantity <= 0:
+            self.events.record(
+                EventKind.CANDIDATE_DROPPED, day,
+                f"sizing computes to {quantity} contracts (method "
+                f"{strategy.sizing.method}) — less than one means no trade, and it is "
+                f"never rounded up", str(contract))
+            return None
+        return Intent(contract=contract, side=Side.BUY, quantity=quantity,
+                      created=day, execute_on=target, trade_id=trade_id,
+                      kind=Action.OPEN, reason="entry")
+
+    def _market_ctx(self, day, ledger) -> Context:
+        """The market and portfolio context for a review.
+
+        **It carries no candidate chain**: a review looks at a position already held,
+        not at choosing a new contract. Passing an empty frame rather than the day's
+        full chain avoids suggesting that a review could switch contracts — that is a
+        roll, and needs its own support (see review.Roll).
+        """
+        import pandas as pd
+
+        return Context(
+            day=day, chain=pd.DataFrame(), spot=self.market.spot(day).or_else(float("nan")),
+            equity=self._last_equity, cash=ledger.cash, positions=len(ledger),
+            drawdown=self._drawdown, _view=self.signals.on(day),
+        )
+
+    def _review_action(self, strategy, ctx, pos, trade, quotes, day):
+        """Run the user's review function. Exceptions are never swallowed; they are
+        raised with the day and the contract."""
+        quote = quotes.get(pos.contract)
+        if quote is None:
+            return None                     # no quote today: leave it to the static rules
+        row = quote[2] if len(quote) > 2 else None
+        mark = (quote[0] + quote[1]) / 2.0
+        view = PositionView(
+            contract=pos.contract, entry_date=trade.entry_date,
+            entry_price=trade.entry_price, quantity=pos.abs_quantity,
+            days_held=self.market.calendar.sessions_between(trade.entry_date, day),
+            dte=self.market.calendar.sessions_between(day, pos.contract.expiry),
+            mark=mark,
+            ratio=(mark / trade.entry_price - 1.0) * (1 if pos.quantity > 0 else -1),
+            mfe_so_far=trade.mfe, mae_so_far=trade.mae,
+            iv=float(row["iv"]) if row is not None and "iv" in row else float("nan"),
+            delta=float(row["delta"]) if row is not None and "delta" in row else float("nan"),
+            tag=trade.tag,
+        )
+        try:
+            action = strategy.review(ctx, view)
+        except Exception as exc:  # noqa: BLE001
+            raise StartupError(
+                f"the review function raised on {day} handling {pos.contract}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if action is not None and not isinstance(action, (Close, Reduce, Add)):
+            raise StartupError(
+                f"the review function returned {type(action).__name__} on {day}; it "
+                f"must return one of Close / Reduce / Add, or None to keep holding."
+            )
+        return action
+
+    def _plan_intent(self, day, target, strategy, ledger, queue, trade_id) -> Intent | None:
+        """Entry by plan: one function decides what to buy, how much, and how to get
+        out.
+
+        This is where the seven components are coupled — one judgement yields the
+        contract, the size and the exit levels. It is exactly what the parameterised
+        form cannot express.
+        """
+        from backtest.signals.contracts import enrich_chain
+
+        chain = enrich_chain(
+            self.chain.snapshot(target), self.config, self.market.calendar, target
+        )
+        if chain.empty:
+            self.events.record(EventKind.SELECTION_FAILED, target,
+                               "no executable contract that day")
+            return None
+
+        ctx = Context(
+            day=day, chain=chain, spot=self.market.spot(day),
+            equity=self._last_equity, cash=ledger.cash, positions=len(ledger),
+            drawdown=self._drawdown, _view=self.signals.on(day),
+        )
+        try:
+            plan = strategy.plan(ctx)
+        except Exception as exc:  # noqa: BLE001
+            # Never swallowed. An error inside the plan function is raised with the
+            # day it happened on.
+            raise StartupError(
+                f"the plan function raised on {day}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        if plan is None:
+            return None
+        if not isinstance(plan, Plan):
+            raise StartupError(
+                f"the plan function returned {type(plan).__name__} on {day}; it must "
+                f"return a Plan or None."
+            )
+
+        row = plan.contract
+        contract = ContractId(
+            symbol=str(row["symbol"]),
+            expiry=row["expiry"] if isinstance(row["expiry"], date)
+            else pd.Timestamp(row["expiry"]).date(),
+            right=Right(row["right"]),
+            strike=float(row["strike"]),
+        )
+        # The user may have assembled a row elsewhere, or modified the chain before
+        # filtering. Verify it really is on that day's executable chain.
+        key = chain[(chain["symbol"].astype(str) == contract.symbol)
+                    & (chain["strike"].astype(float) == contract.strike)
+                    & (chain["right"].astype(str) == contract.right.value)]
+        if key.empty:
+            raise StartupError(
+                f"the contract the plan chose on {day} is not on that day's "
+                f"executable chain: {contract}. Pick a row from ctx.chain; do not "
+                f"assemble one."
+            )
+
+        if not strategy.allow_stacking and (
+            ledger.position(contract) is not None or self._already_queued(queue, contract)
+        ):
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               "this contract is already held and allow_stacking is "
+                               "false", str(contract))
+            return None
+
+        quantity = self._plan_size(plan, contract, target, strategy)
+        if quantity <= 0:
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               f"the plan computes to 0 contracts "
+                               f"(equity {ctx.equity:,.0f})", plan.tag)
+            return None
+        if self.brake is not None and self._brake_state == "reduced":
+            quantity = int(quantity * self.brake.scale(self._drawdown))
+            if quantity <= 0:
+                self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                                   "0 contracts after the drawdown brake cut the size")
+                return None
+
+        return Intent(
+            contract=contract, side=Side.BUY, quantity=quantity, created=day,
+            execute_on=target, trade_id=trade_id,
+            kind=Action.OPEN, reason=plan.note or plan.tag or "entry by plan",
+            exit_rule=self._plan_exit_rule(plan, strategy),
+            tag=plan.tag, note=plan.note,
+        )
+
+    def _plan_exit_rule(self, plan: Plan, strategy: Strategy) -> ExitRule:
+        """An exit the plan did not give falls back to the strategy's global rule,
+        never to "no limit".
+
+        Falling back to no limit turns "the plan forgot dte_floor" into "this trade
+        got dragged into expiry", and raises nothing. Falling back to the global value
+        at least keeps the time-based-exit guard in force.
+        """
+        base = strategy.exit
+        return ExitRule(
+            hold_days=plan.max_hold if plan.max_hold is not None else base.hold_days,
+            take_profit=plan.take_profit if plan.take_profit is not None else base.take_profit,
+            stop_loss=plan.stop_loss if plan.stop_loss is not None else base.stop_loss,
+            dte_floor=plan.dte_floor if plan.dte_floor is not None else base.dte_floor,
+        )
+
+    def _plan_size(self, plan: Plan, contract, execute_on, strategy) -> int:
+        """Compute the quantity from whichever sizing the plan gave. With none of the
+        three, fall back to the strategy's method.
+
+        Zero contracts means no trade — **never rounded up to 1**, which would
+        quietly turn "1.5% at risk" into "6% at risk".
+        """
+        if plan.contracts is not None:
+            return plan.contracts
+        if plan.risk_pct is None and plan.notional is None:
+            return self._size(strategy, None, contract, execute_on, execute_on)
+
+        frame = self.chain.series(contract, [execute_on])
+        if frame.empty:
+            return 0
+        premium = float(frame.iloc[0]["ask"]) * self.config.contract.multiplier
+        if premium <= 0:
+            return 0
+        budget = (plan.risk_pct * self._last_equity) if plan.risk_pct is not None else plan.notional
+        return int(budget // premium)
+
+    def _size(self, strategy, ledger, contract, day, execute_on) -> int:
+        """Compute the quantity from the configured sizing method.
+
+        For a buyer the maximum loss is the premium, so risk per trade divides
+        directly. Any method computing to 0 means no trade — **never rounded up to
+        1**, which would quietly turn "2% at risk" into "8% at risk".
+        """
+        sizing = strategy.sizing
+        if sizing.method == "fixed":
+            return min(sizing.contracts, sizing.max_contracts)
+
+        frame = self.chain.series(contract, [execute_on])
+        if frame.empty:
+            return 0
+        premium = float(frame.iloc[0]["ask"]) * self.config.contract.multiplier
+        if premium <= 0:
+            return 0
+        equity = self._last_equity
+
+        if sizing.method == "risk_pct":
+            # **Size = risk budget / stop distance.** With the stop at -50%, a
+            # trade's real risk is half the premium, and treating it as a total loss
+            # halves the position. Only without a stop is it a total loss.
+            budget = equity * sizing.risk_pct / self._loss_fraction(strategy)
+        elif sizing.method == "fixed_notional":
+            budget = sizing.notional
+        elif sizing.method == "scale_by_vol":
+            vol = self.market.volatility(day)
+            if vol.is_missing:
+                self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                                   f"scale_by_vol needs a volatility, unavailable "
+                                   f"that day: {vol.reason}")
+                return 0
+            # Buy less when the underlying is more volatile. **This is not a
+            # portfolio volatility target** — that would need a forecast of portfolio
+            # volatility, which for options has to come from the greeks. The name
+            # says what it actually does.
+            budget = (equity * sizing.risk_pct / self._loss_fraction(strategy)
+                      * (sizing.target_vol / max(vol.unwrap(), 1e-6)))
+        else:
+            raise StartupError(f"unimplemented sizing method {sizing.method}")
+
+        return min(int(budget // premium), sizing.max_contracts)
+
+    def _loss_fraction(self, strategy) -> float:
+        """What fraction of the premium a trade loses in the worst case.
+
+        A stop of 0.5 means out at -50%, so the real risk is half the premium. Only
+        with no stop is it the whole premium (a buyer's maximum loss).
+
+        This is where "size = risk budget / stop distance" lands in the code — set
+        the two independently and the computed position no longer matches the risk
+        you think you took.
+        """
+        stop = strategy.exit.stop_loss
+        if stop is None or not 0 < stop <= 1:
+            return 1.0
+        return float(stop)
+
+    @staticmethod
+    def _already_queued(queue, contract) -> bool:
+        return any(i.contract == contract for i in queue)
+
+    def _validate(self, intent: Intent, ledger: Ledger, day: date) -> bool:
+        """Conflicts caused by the execution lag have to surface at the source, not
+        fail at execution time."""
+        if intent.contract.expiry <= intent.execute_on:
+            self.events.record(
+                EventKind.CANDIDATE_DROPPED, day,
+                f"{intent.contract} has expired by its execution day "
+                f"{intent.execute_on}", str(intent.contract))
+            return False
+        # `kind`, never `reason`. `reason` is free text for a person to read, and a
+        # plan sets it to its own note, so testing it here skipped the capital check
+        # for every plan-based entry.
+        if intent.kind is Action.OPEN and self.enforce_capital:
+            frame = self.chain.series(intent.contract, [intent.execute_on])
+            if not frame.empty:
+                need = float(frame.iloc[0]["ask"]) * intent.quantity * self.config.contract.multiplier
+                if need > ledger.cash:
+                    self.events.record(
+                        EventKind.NOT_TRADABLE, day,
+                        f"not enough cash: {need:,.0f} needed, {ledger.cash:,.0f} "
+                        f"available", str(intent.contract))
+                    return False
+        return True
+
+    def _execute(self, intent: Intent, ledger: Ledger, open_trades, day: date) -> TradeRecord | None:
+        frame = self.chain.series(intent.contract, [day])
+        if frame.empty:
+            self.events.record(EventKind.NOT_TRADABLE, day,
+                               "no quote on the execution day", str(intent.contract))
+            return None
+        row = frame.iloc[0]
+        tradable = check_tradable(row["bid"], row["ask"], self.config.costs)
+        if not tradable.ok:
+            self.events.record(EventKind.NOT_TRADABLE, day, tradable.reason or "", str(intent.contract))
+            return None
+
+        price, fees = execute(
+            bid=row["bid"], ask=row["ask"], side=intent.side, quantity=intent.quantity,
+            multiplier=self.config.contract.multiplier, costs=self.config.costs,
+        )
+        ledger.apply_fill(contract=intent.contract, side=intent.side, quantity=intent.quantity,
+                          price=price, fees=fees, when=day, trade_id=intent.trade_id)
+
+        if intent.kind is Action.OPEN:
+            open_trades[intent.trade_id] = OpenTrade(
+                trade_id=intent.trade_id, contract=intent.contract, entry_date=day,
+                entry_price=price, quantity=intent.quantity, side=intent.side,
+                fees=fees.total, entry_quote=row.to_dict(),
+                entry_signals={n: self.signals.on(day)[n] for n in self.signals.names},
+                exit_rule=intent.exit_rule, tag=intent.tag, note=intent.note,
+            )
+            return None
+
+        if intent.kind in (Action.REDUCE, Action.ADD):
+            # **No trade record, and the OpenTrade is not popped.** After a
+            # reduction or an addition it is still one logical trade — counted by
+            # position, one trade becomes several and both the win rate and the
+            # holding period are distorted.
+            trade = open_trades.get(intent.trade_id)
+            if trade is None:
+                raise InvariantError(f"the {intent.kind.value} intent {intent.trade_id} has "
+                                     f"no matching open trade")
+            if intent.kind is Action.ADD:
+                total = trade.entry_price * trade.quantity + price * intent.quantity
+                trade.quantity += intent.quantity
+                trade.entry_price = total / trade.quantity   # weighted average cost
+            else:
+                direction = 1 if trade.side is Side.BUY else -1
+                trade.realised_gross += (
+                    (price - trade.entry_price) * self.config.contract.multiplier
+                    * intent.quantity * direction
+                )
+                trade.quantity -= intent.quantity
+            trade.fees += fees.total
+            self.events.record(
+                EventKind.CANDIDATE_DROPPED, day,
+                f"{'added' if intent.kind is Action.ADD else 'reduced by'} "
+                f"{intent.quantity} contracts: {intent.reason} "
+                f"(now {trade.quantity})", str(intent.contract))
+            return None
+
+        trade = open_trades.pop(intent.trade_id, None)
+        if trade is None:
+            raise InvariantError(f"the exit intent {intent.trade_id} has no matching "
+                                 f"open trade")
+        reason = resolve_exit_reason(list(intent.exit_reasons)) if intent.exit_reasons else ExitReason.TIME_EXIT
+        return self._record(trade, exit_day=day, exit_price=price, exit_fees=fees.total,
+                            exit_quote=row.to_dict(), reason=reason,
+                            suppressed=tuple(r for r in intent.exit_reasons if r is not reason))
+
+    def _settle(self, pos: Position, ledger: Ledger, open_trades, day: date) -> TradeRecord | None:
+        spot = self.market.spot(day)
+        kind = ledger.settle_expiry(pos.contract, spot, day)
+        trade = open_trades.pop(pos.trade_id, None)
+        if trade is None:
+            return None
+        s = spot.unwrap()
+        intrinsic = (max(s - pos.contract.strike, 0.0) if pos.contract.right is Right.CALL
+                     else max(pos.contract.strike - s, 0.0))
+        reason = ExitReason.EXPIRY_OTM if kind == "worthless" else ExitReason.EXPIRY_ITM
+        self.events.record(EventKind.PASSIVE_EXPIRY, day,
+                           f"expired passively ({kind}), intrinsic {intrinsic:.2f}",
+                           str(pos.contract))
+        quote = dict(trade.entry_quote)
+        quote.update({"asof": day, "underlying_price": s, "bid": intrinsic, "ask": intrinsic})
+        return self._record(trade, exit_day=day, exit_price=intrinsic, exit_fees=0.0,
+                            exit_quote=quote, reason=reason, suppressed=())
+
+    def _record(self, trade: OpenTrade, *, exit_day, exit_price, exit_fees, exit_quote, reason, suppressed):
+        mult = self.config.contract.multiplier
+        direction = 1 if trade.side is Side.BUY else -1
+        # The remaining contracts' P&L plus what reductions already banked. Without
+        # the second term, a trade that was reduced reports too little P&L and raises
+        # nothing — the easiest thing to omit in a change like this, and the hardest
+        # to notice.
+        gross = ((exit_price - trade.entry_price) * mult * trade.quantity * direction
+                 + trade.realised_gross)
+        fees = trade.fees + exit_fees
+        ctx_in = self._context(trade.entry_quote, trade.entry_date, trade.contract, trade.entry_signals)
+        ctx_out = self._context(exit_quote, exit_day, trade.contract,
+                                {n: self.signals.on(exit_day)[n] for n in self.signals.names})
+        return TradeRecord(
+            trade_id=trade.trade_id, engine=ENGINE_NAME, symbol=trade.contract.symbol,
+            entry_date=trade.entry_date, exit_date=exit_day, contract=trade.contract,
+            quantity=trade.quantity, entry_price=trade.entry_price, exit_price=exit_price,
+            multiplier=mult, gross_pnl=gross, fees=fees,
+            fee_commission=fees, fee_regulatory=0.0, fee_slippage=0.0,
+            net_pnl=gross - fees, exit_reason=reason, suppressed_reasons=suppressed,
+            holding_days=self.market.calendar.sessions_between(trade.entry_date, exit_day),
+            source=QuoteSource.SYNTHETIC
+            if trade.entry_quote.get("source") == QuoteSource.SYNTHETIC.value else QuoteSource.VENDOR,
+            entry_context=ctx_in, exit_context=ctx_out,
+            mfe=trade.mfe, mae=trade.mae,
+            tag=trade.tag, note=trade.note,
+        )
+
+    def _context(self, quote: dict, day: date, contract: ContractId, signals: dict):
+        import numpy as np
+
+        from backtest.core.maybe import Maybe
+
+        def numeric(key):
+            v = quote.get(key)
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                return Maybe.missing(f"{key} is unavailable")
+            return Maybe.some(float(v))
+
+        spot = numeric("underlying_price")
+        ctx = {
+            "underlying_price": spot, "iv": numeric("iv"), "delta": numeric("delta"),
+            "gamma": numeric("gamma"), "vega": numeric("vega"), "theta": numeric("theta"),
+            "moneyness": Maybe.some(float(spot.unwrap() / contract.strike - 1.0))
+            if spot.is_present else Maybe.missing("the underlying price is unavailable"),
+            "dte_calendar": Maybe.some(float((contract.expiry - day).days)),
+            "dte_trading": Maybe.some(float(self.market.calendar.sessions_between(day, contract.expiry))),
+        }
+        for name, value in signals.items():
+            ctx[f"sig_{name}"] = value
+        return ctx

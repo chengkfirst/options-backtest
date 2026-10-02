@@ -73,12 +73,12 @@ def _tradeoff(q: dict[str, str]) -> dict[str, Any]:
     data is wired in it reflects the real skew and term structure automatically. So what
     it describes is always what you can actually buy.
     """
-    from backtest.api import _as_date
-    from backtest.config import BacktestConfig, ContractSpec, CostConfig, SyntheticChainConfig
-    from backtest.data.chain_registry import build_chain_source
+    from backtest.api.sdk import _as_date
+    from backtest.core.config import BacktestConfig, ContractSpec, CostConfig, SyntheticChainConfig
+    from backtest.data.options.chain_registry import build_chain_source
     from backtest.data.market import MarketData, VOL_PROXY_BY_SYMBOL
     from backtest.research.tradeoff import tradeoff_grid
-    from backtest.selection.rules import enrich_chain
+    from backtest.signals.contracts import enrich_chain
 
     from datetime import timedelta
 
@@ -132,7 +132,7 @@ def _meta_payload() -> dict[str, Any]:
     the front/back contract check has to obtain it without starting the service.
     """
     from backtest.data.market import VOL_PROXY_BY_SYMBOL
-    from backtest.components import COUPLINGS, as_form_spec
+    from backtest.core.slots import COUPLINGS, as_form_spec
     from backtest.signals.registry import DEFAULT_SIGNALS, describe_signals
 
     return {
@@ -227,14 +227,16 @@ def _meta_payload() -> dict[str, Any]:
 def _describe_gaps() -> list[str]:
     """Which of the seven components do not yet stand up.
 
-    **Read from backtest.components, never hand-written here.** A hand-written list goes
+    **Read from backtest.core.slots, never hand-written here.** A hand-written list goes
     stale once the feature lands, leaving a warning on the interface that stopped being
     true long ago — worse than showing nothing, because it looks authoritative.
     """
-    from backtest.components import gaps
+    from backtest.core.slots import gaps
+    from backtest.signals.lifecycle import gaps as lifecycle_gaps
 
-    return gaps() + ["selling: assignment of a cash-secured put is modelled, but orders "
-                     "are still limited to the long side"]
+    return (gaps() + lifecycle_gaps()
+            + ["selling: assignment of a cash-secured put is modelled, but orders are "
+               "still limited to the long side"])
 
 
 def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
@@ -496,7 +498,7 @@ def compile_plan(code: str):
     execution error is raised back to the front end in full.
     """
     namespace: dict[str, Any] = {}
-    from backtest.engine.plan import Plan
+    from backtest.signals.plan import Plan
 
     namespace["Plan"] = Plan
     try:
@@ -519,7 +521,7 @@ def compile_plan(code: str):
 def compile_review(code: str):
     """Compile the user's daily review function. ``Close`` / ``Reduce`` / ``Add`` are put
     straight into its namespace."""
-    from backtest.engine.review import Add, Close, Reduce
+    from backtest.signals.review import Add, Close, Reduce
 
     namespace: dict[str, Any] = {"Close": Close, "Reduce": Reduce, "Add": Add}
     try:

@@ -73,7 +73,7 @@ def main() -> int:
             problems.append(f"the interface needs META.{key}, which /api/meta does "
                             f"not supply")
 
-    from backtest.engine.strategy import Sizing
+    from backtest.portfolio.positioning import Sizing
 
     for method in spec.get("sizing_methods", []):
         try:

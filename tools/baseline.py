@@ -34,17 +34,18 @@ def build_trades() -> pd.DataFrame:
     """Run the baseline strategy's trade log on the offline fixture. The input is
     fixed, so the output should be bit-stable."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from backtest.api import Result
-    from backtest.config import BacktestConfig
+    from backtest.api.sdk import Result
+    from backtest.core.config import BacktestConfig
     from backtest.data.market import MarketData
-    from backtest.data.synthetic.generator import SyntheticChainSource
+    from backtest.data.options.synthetic.generator import SyntheticChainSource
     from backtest.data.underlying import build_bars
-    from backtest.engine.expression import parse_condition
-    from backtest.engine.strategy import EntryRule, ExitRule, Strategy
-    from backtest.engine.trade_table import TradeTableEngine
-    from backtest.selection.rules import SelectionRule
+    from backtest.signals.entry.expression import parse_condition
+    from backtest.signals.strategy import EntryRule, ExitRule
+    from backtest.engine.strategy import Strategy
+    from backtest.engine.vectorized import TradeTableEngine
+    from backtest.signals.contracts import SelectionRule
     from backtest.signals.registry import SignalSet
-    from backtest.types import ContractSpec, Right
+    from backtest.core.types import ContractSpec, Right
     from tests.conftest import END, make_raw_bars
 
     from datetime import date

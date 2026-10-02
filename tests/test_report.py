@@ -9,8 +9,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.report import stats as R
-from backtest.types import TRADE_COLUMNS
+from backtest.research import metrics as R
+from backtest.core.types import TRADE_COLUMNS
 
 
 def make_trades(pnl: list[float], reasons: list[str] | None = None) -> pd.DataFrame:

@@ -6,10 +6,10 @@ from datetime import date
 
 import pytest
 
-from backtest.config import BacktestConfig, CALENDAR_DAYS_PER_YEAR, TimeConventions
-from backtest.errors import StartupError
-from backtest.maybe import Maybe, MissingValueError
-from backtest.types import ContractId, ExitReason, Right, resolve_exit_reason
+from backtest.core.config import BacktestConfig, CALENDAR_DAYS_PER_YEAR, TimeConventions
+from backtest.core.errors import StartupError
+from backtest.core.maybe import Maybe, MissingValueError
+from backtest.core.types import ContractId, ExitReason, Right, resolve_exit_reason
 
 
 class TestMaybe:

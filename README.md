@@ -9,7 +9,8 @@ months). Two uses:
 
 > Where it stands and what is missing → **[requirements.md](requirements.md)**
 > (every criterion with its status)
-> What the system looks like and how things flow → **[ROADMAP.md](ROADMAP.md)**
+> The architecture, and what is built against it → **[ROADMAP.md](ROADMAP.md)**
+> The architecture itself → **`Plan/backtest-system-architecture.pdf`**
 > Which questions the platform is meant to answer → **[research-questions.md](research-questions.md)**
 
 ---
@@ -73,7 +74,7 @@ independent inputs, so they can contradict each other while nothing raises.
 
 ```python
 from backtest import run
-from backtest.engine.plan import Plan
+from backtest.signals.plan import Plan
 
 def plan(ctx):
     rsi = ctx.signal("rsi_14", default=50.0)
@@ -132,7 +133,7 @@ for.
 
 ```python
 from backtest import run
-from backtest.engine.review import Add, Close, Reduce
+from backtest.signals.review import Add, Close, Reduce
 
 def review(ctx, pos):
     # (3) a trailing stop: out after giving back a third of the peak gain
@@ -286,31 +287,45 @@ The checking rules and the bar for a new guard are in [conventions.md](conventio
 
 ## Layout
 
+The tree follows the architecture document's eight layers, and `tools/check_deps.py`
+fails the build on a dependency that points upward. `ROADMAP.md` has the layer-by-layer
+status and says which of the plan's directories do not exist yet, and why.
+
 ```
 backtest/
-  components.py    <- what each component decides in a trade, and how they constrain each
-                      other (**the conceptual base**)
-  maybe.py         values that may be absent — no bare None / NaN / 0 for absence
-  types.py         ContractId, TradeRecord, exit reasons
-  pricing.py       Black-Scholes, greeks, implied volatility (a market model, not part of
-                   the synthetic chain)
-  data/
-    adapters.py       wiring in your own data: the schema, the health check, column mapping
-    chain_registry.py the source registry; a swap changes one argument
-    synthetic/        the synthetic chain generator (a test fixture)
-    multi_asset.py    the cross-market panel (VIX/VXN, term structure, Treasuries, credit)
-  signals/         indicators and signals (each registered with its meaning, unit and traps)
-  selection/       selection: a declarative rule, or a function you write
-  costs/           fill prices, fees, slippage, tradability
-  portfolio/       the ledger, cash, physical settlement, the accounting identity
-  risk/            attribution, portfolio greeks, stress, VaR, exposure limits, the brake
-  engine/
-    plan.py          the trade plan: one function decides what, how much, and how to exit
-    review.py        the daily review: dynamic exits, scaling in and out, headwind
-    trade_table.py / event_driven.py
-  research/        MFE/MAE, regime stratification, the sizing comparison, event studies
-app/               the local web interface (server.py plus static/)
-tools/             the guards and the regression baseline
+  core/         Layer 0 · the contract every layer shares
+                maybe.py     values that may be absent — no bare None / NaN / 0
+                types.py     ContractId, TradeRecord, exit reasons and their precedence
+                actions.py   the nine-action vocabulary, and which six are executable
+                slots.py     the seven slots: what each decides in a trade (the UI's source)
+                clock.py config.py errors.py run_log.py
+  data/         Layer 1 · raw data to data that was genuinely available at t
+                underlying.py  two price sets: adjusted for signals, traded for strikes
+                pipeline.py    nine steps, each with its reason, alternatives and a check
+                ingest.py store.py market.py multi_asset.py
+    options/    chain.py adapters.py (wire in your own data) chain_registry.py
+                pricing.py (a market model, not part of the synthetic chain) synthetic/
+  signals/      Layer 2 · what to buy or sell
+                lifecycle.py   four states, and the five settings still open
+                contracts.py   selection: a feasible region plus a ranking objective
+                plan.py        one function decides contract, size and exits together
+                review.py      the daily review: dynamic exits, scaling in and out
+                strategy.py registry.py indicators.py
+    setup/      slot 1 · regime.py
+    entry/      slot 2 · expression.py
+  portfolio/    Layer 3 · signals to target positions, within limits
+                positioning.py slot 6 · size = risk budget / stop distance
+                scenarios.py   greeks aggregation, the stress grid, VaR, historical replay
+                constraints.py exposure limits and the drawdown brake
+  execution/    Layer 4 · costs.py — buy at the ask, sell at the bid, never the mid
+  engine/       Layer 5 · loop.py (day by day) vectorized.py (screening) strategy.py
+  accounting/   Layer 5 · ledger.py tradebook.py attribution.py
+  research/     Layer 6 · metrics.py excursion.py events.py tradeoff.py investor.py
+                anomaly.py sweep.py positioning.py
+  api/          Layer 7 · sdk.py
+app/            Layer 7 · the local web interface (server.py plus static/)
+tools/          the guards and the regression baseline
+Plan/           the architecture document this tree follows
 ```
 
 `research/` is your local research record (run history, trade logs, notes) and is **not

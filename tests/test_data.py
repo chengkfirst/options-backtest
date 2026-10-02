@@ -9,11 +9,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.data.calendar import TradingCalendar, expiry_dates, third_friday
-from backtest.data.chain import UNAVAILABLE, relative_spread, validate_chain
+from backtest.core.clock import TradingCalendar, expiry_dates, third_friday
+from backtest.data.options.chain import UNAVAILABLE, relative_spread, validate_chain
 from backtest.data.underlying import build_bars, validate_bars
-from backtest.errors import DataQualityError, StartupError
-from backtest.types import CHAIN_COLUMNS, ContractId, Right
+from backtest.core.errors import DataQualityError, StartupError
+from backtest.core.types import CHAIN_COLUMNS, ContractId, Right
 from tests.conftest import make_raw_bars
 
 
@@ -169,7 +169,7 @@ class TestMarketData:
         """Nasdaq volatility runs systematically above the S&P's; sharing one proxy
         understates QQQ option prices across the board."""
         from backtest.data.market import MarketData
-        from backtest.types import ContractSpec
+        from backtest.core.types import ContractSpec
 
         bad = BacktestConfigWithProxy(config, "^VIX")
         with pytest.raises(StartupError, match="volatility proxy"):
@@ -194,7 +194,7 @@ class TestMarketData:
 def BacktestConfigWithProxy(config, proxy):
     import dataclasses
 
-    from backtest.types import ContractSpec
+    from backtest.core.types import ContractSpec
 
     return dataclasses.replace(
         config, contract=ContractSpec(symbol=config.symbol, vol_proxy=proxy)

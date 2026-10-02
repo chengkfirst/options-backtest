@@ -18,8 +18,8 @@ import numpy as np
 import pandas as pd
 
 from backtest.data.underlying import UnderlyingBars
-from backtest.errors import StartupError
-from backtest.maybe import Maybe
+from backtest.core.errors import StartupError
+from backtest.core.maybe import Maybe
 from backtest.signals import indicators
 
 @dataclass(frozen=True, slots=True)
