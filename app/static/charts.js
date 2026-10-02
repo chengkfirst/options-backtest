@@ -217,7 +217,7 @@ function renderCross(rows,a,b,k){
   sec.hidden=false;
   const cells=ga.map(A=>gb.map(B=>stats(A.rows.filter(r=>r[b]>=B.lo&&r[b]<B.hi))));
   const lim=Math.max(...cells.flat().filter(c=>c.n>=15).map(c=>Math.abs(c.mean)),1);
-  $("cross").innerHTML=`<thead><tr><th>${label(a)} ＼ ${label(b)}</th>`+
+  $("cross").innerHTML=`<thead><tr><th>${label(a)} \\ ${label(b)}</th>`+
     gb.map(B=>`<th style="text-align:center">${fmtVal(b,B.lo)}–${fmtVal(b,B.hi)}</th>`).join("")+
     `</tr></thead><tbody>`+ga.map((A,i)=>`<tr><td>${fmtVal(a,A.lo)}–${fmtVal(a,A.hi)}</td>`+
       cells[i].map(c=>{

@@ -1,6 +1,7 @@
-"""美股期权策略回测研究平台 · 阶段 1（地基 + 成交表引擎）。
+"""A research platform for backtesting US equity option strategies.
 
-用法见 :func:`run`。设计与边界见项目根目录的 ``ROADMAP.md``。
+For usage see :func:`run`. For the design and its boundaries see ``ROADMAP.md`` at the
+project root.
 """
 
 from backtest.api import Result, run

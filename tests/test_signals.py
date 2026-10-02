@@ -1,4 +1,5 @@
-"""指标正确性、预热期、以及最重要的一项：无前视。"""
+"""Indicator correctness, the warm-up period, and the most important one: no
+look-ahead."""
 
 from __future__ import annotations
 
@@ -12,7 +13,8 @@ from backtest.errors import StartupError
 from backtest.signals import indicators
 from backtest.signals.registry import SignalSet
 
-#: 截断重算抽查的日期数。前视偏差最致命且最难靠肉眼发现，这是唯一可靠的防线。
+#: How many dates the truncate-and-recompute check samples. Look-ahead is the most fatal
+#: bias and the hardest to see by eye, and this is the only reliable defence against it.
 PROBE_COUNT = 12
 
 
@@ -24,7 +26,8 @@ class TestIndicators:
         assert np.allclose(got, want)
 
     def test_warmup_is_missing_not_filled(self, market):
-        """预热期绝不能用更短窗口或填充值代替——那是另一套参数算出来的。"""
+        """The warm-up is never replaced by a shorter window or a filled value — that
+        would have been computed with different parameters."""
         got = indicators.sma(market.bars.adjusted("close"), 20)
         assert got.iloc[:19].isna().all() and not np.isnan(got.iloc[19])
 
@@ -38,7 +41,8 @@ class TestIndicators:
         assert (atr.dropna() > 0).all()
 
     def test_realized_vol_uses_trading_day_annualisation(self):
-        """波动率按交易日 / 252 年化；定价的日历日口径是另一回事。"""
+        """Volatility is annualised on trading days / 252; pricing's calendar-day
+        convention is a separate thing."""
         idx = pd.date_range("2022-01-03", periods=60, freq="B")
         series = pd.Series(np.exp(np.linspace(0, 0.1, 60)), index=idx)
         manual = np.log(series).diff().rolling(20).std(ddof=1) * np.sqrt(TRADING_DAYS_PER_YEAR)
@@ -82,9 +86,10 @@ class TestSignalSet:
 
 
 class TestNoLookahead:
-    """截断重算：把数据截到 t 重算，日期 t 的每个信号必须逐位一致。
+    """Truncate and recompute: cut the data at t, recompute, and every signal on date t
+    must match bit for bit.
 
-    代码审阅会漏掉前视，这类测试不会。
+    A code review misses look-ahead; a test like this does not.
     """
 
     def test_truncated_recomputation_matches(self, market, signals):
@@ -98,14 +103,16 @@ class TestNoLookahead:
             full_view, part_view = signals.on(t), partial.on(t)
             for name in signals.names:
                 a, b = full_view[name], part_view[name]
-                assert a.is_missing == b.is_missing, f"{name} 于 {t} 缺失状态不一致"
+                assert a.is_missing == b.is_missing, \
+                    f"{name} disagrees on absence at {t}"
                 if a.is_present:
                     assert a.unwrap() == pytest.approx(b.unwrap(), abs=1e-12), (
-                        f"{name} 于 {t} 取值不一致"
+                        f"{name} disagrees in value at {t}"
                     )
 
     def test_detects_injected_lookahead(self, market):
-        """故意引入 shift(-1) 时，同样的检查必须失败——否则这道防线是假的。"""
+        """With a shift(-1) planted deliberately, the same check must fail — otherwise
+        this defence is fake."""
         leaky = {"leak": lambda b: b.adjusted("close").shift(-1)}
         full = SignalSet.from_bars(market.bars, extra=leaky)
         t = market.sessions()[40]

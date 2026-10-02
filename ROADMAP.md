@@ -1,105 +1,124 @@
-# 期权回测系统 · 全貌
+# The options backtest platform · the whole picture
 
-> 验收标准、逐项状态、placeholder 清单在 **[需求.md](需求.md)**。这里只放两样：
-> 系统长什么样，以及东西是怎么流动的。两份文件职责不重叠，避免互相矛盾。
+> The acceptance criteria, each item's status, and the placeholder list are in
+> **[requirements.md](requirements.md)**. This file holds two things only: what the
+> system looks like, and how things flow through it. The two documents do not overlap,
+> so they cannot contradict each other.
 
-## 系统是什么
+## What the system is for
 
-**两个用途，同一套地基，但要的东西不一样。**
+**Two uses, one foundation, and they want different things.**
 
-### 用途一 · 把细节定下来（现在）
+### Use one · settling the details (now)
 
-把七个策略组件的细节研究清楚：
-`1 setup/regime` · `2 entry` · `3 take profit` · `4 stop loss` · `5 headwind` · `6 positioning` · `7 hedge`
+Working out the details of the seven strategy components:
+`1 setup/regime` · `2 entry` · `3 take profit` · `4 stop loss` · `5 headwind` ·
+`6 positioning` · `7 hedge`
 
-这个阶段要的是**探索**——分组、归因、分布、对照，看出规律在哪。
+This stage wants **exploration** — grouping, attribution, distributions, controls — to
+see where the regularities are.
 
-### 用途二 · 长期验证已定型的策略（之后，但现在就得按它设计）
+### Use two · long-term validation of a settled strategy (later, but it has to be designed for now)
 
-策略定型之后，平台转为**证伪工具**：不是再找一遍它为什么行，是**反复尝试证明它不行**。
+Once the strategy is settled, the platform becomes a **falsification tool**: not finding
+again why it works, but **repeatedly trying to show that it does not**.
 
-这个阶段要的是四样东西，和用途一是相反的心态：
+This stage wants four things, in the opposite frame of mind from use one:
 
-| | 要什么 | 心态 |
+| | What it wants | The frame of mind |
 |---|---|---|
-| **优化** | 参数在哪一片区域稳定，而不是哪一个点最高 | 找**平台**，不找尖峰 |
-| **证伪** | 主动构造能杀死这个策略的检验 | 想推翻它，不想确认它 |
-| **多方验证** | 同一个结论要从**互相独立**的角度各自成立 | 一个角度成立不算数 |
-| **统计** | 给判断**方向**和可信度，不替我下裁决 | 弱证据照常呈现、降级标注 |
+| **Optimise** | which *region* of parameters is stable, not which point is highest | find the **plateau**, not the peak |
+| **Falsify** | deliberately construct tests that could kill the strategy | try to overturn it, not confirm it |
+| **Cross-check** | one conclusion holding from **mutually independent** angles | one angle holding does not count |
+| **Statistics** | a **direction** and a confidence for the judgement, not a verdict | weak evidence is shown, and labelled as weak |
 
-**为什么现在就要按它设计**：证伪要的东西（随机对照、反向测试、子区间、扰动、成本敏感性）
-如果不在地基里留好接口，事后加会发现每一项都要改引擎。
+**Why it has to be designed for now**: what falsification needs — random controls, reverse
+tests, sub-periods, perturbations, cost sensitivity — all turns out to require engine
+changes if the interfaces are not left in the foundation.
 
-## 数据怎么流
+## How the data flows
 
 ```
-   你的数据 ──┐
-              ├──▶ ChainSource 协议 ──▶ ┌──────────────────────┐
-   合成链 ────┘   （换源只改一个参数）    │  地基                 │
-   （测试夹具）                          │  标的 · 定价 · 日历    │
-                                        │  信号 · 选约 · 成本    │
-                                        └──────────┬───────────┘
-                              ┌────────────────────┴───────────────────┐
-                              ▼                                        ▼
-                    ┌──────────────────┐                   ┌────────────────────┐
-                    │  成交表引擎        │                   │  事件驱动引擎        │
-                    │  各笔独立，秒级     │                   │  逐日推进，分钟级     │
-                    │  答"有没有 edge"   │                   │  答"能不能跑"        │
-                    │  笔数是**上限**    │                   │  受资金与并发约束     │
-                    │  组件 1-4          │                   │  组件 5-7           │
-                    └─────────┬────────┘                   └─────────┬──────────┘
-                              └────────────────┬───────────────────────┘
-                                               ▼
-                                    ┌──────────────────────┐
-                                    │  同一张交易明细表       │ ← 两引擎必须逐行一致
-                                    │  含每笔的 greeks、IV、  │   （无资金约束时）
-                                    │  以及入场/出场时刻的    │
-                                    │  全部信号快照          │
-                                    └──────────┬───────────┘
-                                               ▼
-                                    ┌──────────────────────┐
-                                    │  研究层                │
-                                    │  分布 · 归因 · 分层     │
-                                    │  风险 · 情景 · 仓位对照  │
-                                    └──────────────────────┘
+   your data ──┐
+               ├──▶ the ChainSource protocol ──▶ ┌──────────────────────┐
+   synthetic ──┘   (a swap changes one argument)  │  the foundation       │
+   (a test fixture)                               │  underlying · pricing │
+                                                  │  calendar · signals   │
+                                                  │  selection · costs    │
+                                                  └──────────┬───────────┘
+                              ┌────────────────────┬─────────┘
+                              ▼                    ▼
+                    ┌──────────────────┐   ┌────────────────────┐
+                    │  trade table      │   │  event driven       │
+                    │  independent,     │   │  day by day,        │
+                    │  seconds          │   │  minutes            │
+                    │  "is there edge"  │   │  "can it be run"    │
+                    │  count is a BOUND │   │  bound by cash and  │
+                    │  components 1-4   │   │  concurrency        │
+                    │                   │   │  components 5-7     │
+                    └─────────┬─────────┘   └─────────┬──────────┘
+                              └────────────┬──────────┘
+                                           ▼
+                                ┌──────────────────────┐
+                                │  one trade log        │ <- the two engines must agree
+                                │  with each trade's    │    row for row (unconstrained)
+                                │  greeks, IV and every │
+                                │  signal at entry and  │
+                                │  at exit              │
+                                └──────────┬───────────┘
+                                           ▼
+                                ┌──────────────────────┐
+                                │  the research layer   │
+                                │  distributions ·      │
+                                │  attribution · strata │
+                                │  risk · scenarios ·   │
+                                │  sizing comparison    │
+                                └──────────────────────┘
 ```
 
-## 三个关键接缝
+## The three seams
 
-系统里只有三处"可替换点"，其余都是实现细节。认准这三处，就知道改什么不会伤到别处。
+There are exactly three replaceable points in the system; everything else is an
+implementation detail. Knowing these three is knowing what can be changed without
+breaking something elsewhere.
 
-| 接缝 | 换法 | 上层受影响吗 |
+| The seam | How to swap it | Does anything above change |
 |---|---|---|
-| **数据源** | `chain="file:/路径"` 或任何实现 `ChainSource` 协议的对象 | 零改动 |
-| **策略的每一段** | 填参数（可扫）或写函数（按当时情况判断） | 零改动 |
-| **引擎** | `engine="trade_table"` / `"event_driven"` | 零改动，但两者能力不同 |
+| **The data source** | `chain="file:/path"`, or any object implementing `ChainSource` | nothing |
+| **Each part of the strategy** | fill in parameters (sweepable) or write a function (judges by the conditions) | nothing |
+| **The engine** | `engine="trade_table"` / `"event_driven"` | nothing, but they can do different things |
 
-## 合成链的位置
+## Where the synthetic chain sits
 
-**它是测试夹具，不是数据源。** 唯一用途是在没有真实数据时让整条管道跑得起来。
+**It is a test fixture, not a data source.** Its only use is getting the whole pipeline to
+run when there is no real data.
 
-- IV 是一个常数，没有偏斜，没有期限结构
-- 所以**标的侧的结论（何时入场）可信，期权侧的结论（选什么 delta、止盈设多少）不可信**
-- 这个边界由 `source` 字段**自动判定**并在报告里标出，不能手工关掉
-- 定价工具在 `backtest/pricing.py`（不在合成链内部）—— 合成链用它造价格，文件源用它
-  在供应商不给 greeks 时补推。拿掉合成链，定价还在
+- Its IV is a constant, with no skew and no term structure
+- So **conclusions about the underlying (when to enter) can be trusted, and option-side
+  conclusions (which delta, where to take profit) cannot**
+- That boundary is **determined automatically** from the `source` column and flagged in
+  the report; it cannot be turned off by hand
+- Pricing lives in `backtest/pricing.py`, not inside the synthetic chain — the synthetic
+  chain uses it to make prices, and the file source uses it to fill in greeks a vendor
+  omits. Remove the synthetic chain and pricing is still there
 
-## 接你自己的数据
+## Wiring in your own data
 
-三步，全程有工具：
+Three steps, with a tool for each:
 
 ```python
 from backtest.data.adapters import describe_schema, check_file
 
-describe_schema()          # 1. 需要哪些列、每列什么含义、缺了会怎样
-check_file("你的路径")      # 2. 跑回测**之前**先体检，分致命/警告两档
+describe_schema()          # 1. which columns, what each means, what absence costs
+check_file("your/path")    # 2. a health check **before** any backtest, fatal vs warning
 ```
 
 ```python
-run(..., chain="file:你的路径")                       # 3. 列名标准时
-run(..., chain={"kind": "file", "path": "你的路径",   #    列名对不上时
+run(..., chain="file:your/path")                      # 3. when the names are standard
+run(..., chain={"kind": "file", "path": "your/path",  #    when they are not
                 "column_map": {"trade_date": "asof"}})
 ```
 
-缺的可选列会自动补齐（IV 按中价反解、greeks 按 BS 推）**并标记来源**——供应商给的
-delta 和推出来的 delta 不是一回事，标记一路带到交易明细里。
+Absent optional columns are filled in automatically (IV solved from the mid, greeks
+derived with Black-Scholes) **and flagged** — a vendor's delta and a derived delta are not
+the same thing, and the flag travels into the trade log.

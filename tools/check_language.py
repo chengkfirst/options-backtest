@@ -1,8 +1,8 @@
 """Language guard: the whole project is written in English.
 
-Mixed-language code fails silently in a specific way. A Chinese dict key is a
-*functional identifier* — the front end reads ``m["夏普"]``, a test asserts on
-``out["笔数"]``. Rename one side and nothing raises: the lookup returns
+Mixed-language code fails silently in a specific way. A non-English dict key is a
+*functional identifier* — the front end reads one spelling of it and a test asserts on
+another. Rename one side and nothing raises: the lookup returns
 ``undefined``/``KeyError`` deep inside rendering, or worse, a ``.get()`` quietly
 yields ``None`` and a metric reads as zero. Encoding, normalisation (NFC vs NFD),
 and full-width punctuation each add a way for two spellings of "the same" key to
@@ -33,7 +33,9 @@ SKIP_DIRS = {".git", ".venv", "__pycache__", ".ipynb_checkpoints", "node_modules
 
 #: Non-ASCII characters that are *not* natural language and stay allowed:
 #: typography, maths, box drawing, arrows, and the status glyphs the CLI prints.
-ALLOWED = set("·—–…×÷±≈≤≥≠∞√∑→←↑↓⇒│─└├┌┐┘•◦○●✓✗⚠✅⚠️“”‘’°%‰")
+#: Greek letters used as mathematical symbols (delta, sigma) are not language either.
+ALLOWED = set("·—–…×÷±≈≤≥≠∞√∑→←↑↓⇒│─└├┌┐┘•◦○●✓✗⚠✅⚠️“”‘’°%‰"
+              "ΔΓΘΛΞΠΣΦΨΩαβγδεζηθικλμνξπρσςτυφχψω")
 
 
 def _offending(text: str) -> list[tuple[int, str]]:
@@ -92,7 +94,7 @@ def main() -> int:
     if len(problems) > len(shown):
         print(f"  ... and {len(problems) - len(shown)} more")
     print(f"\nFAIL  {len(problems)} non-English lines. "
-          "The project is written in English; see 'Language' in docs/conventions.md.")
+          "The project is written in English; see conventions.md.")
     return 1
 
 

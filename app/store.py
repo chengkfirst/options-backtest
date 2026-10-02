@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS strategy (
     name        TEXT NOT NULL,
     version     INTEGER NOT NULL,
     created     TEXT NOT NULL,
-    spec        TEXT NOT NULL,          -- JSON：entry / select / exit / signals
+    spec        TEXT NOT NULL,          -- JSON: entry / select / exit / signals
     spec_hash   TEXT NOT NULL,          -- a content fingerprint, to recognise "nothing actually changed"
     note        TEXT NOT NULL DEFAULT '',
     UNIQUE(name, version)

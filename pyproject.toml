@@ -1,7 +1,7 @@
 [project]
 name = "backtest"
 version = "0.1.0"
-description = "美股期权策略回测研究平台 · 阶段 1（地基 + 成交表引擎）"
+description = "A research platform for backtesting US equity option strategies"
 requires-python = ">=3.11"
 dependencies = [
     "numpy==1.26.4",

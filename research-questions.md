@@ -1,0 +1,286 @@
+# Research questions
+
+> This file records **the questions to answer with the platform**, not the features to build
+> (those are in `requirements.md`).
+>
+> Each one says **whether it can be done now**. Most option-side questions are blocked on the
+> same thing: the synthetic chain's IV is constant, with no skew and no term structure, so no
+> conclusion that depends on any of the three holds.
+
+---
+
+## The status markings
+
+| Marking | Meaning |
+|---|---|
+| **can do** | runnable now, and the conclusion can be trusted |
+| **needs data** | needs a real option chain; the conclusion does not hold on a synthetic one |
+| **needs tooling** | the platform lacks the capability; see `requirements.md` |
+
+---
+
+## 1. Choosing the tenor
+
+### 1.1  Matching the tenor to the strength of the drift view  **can do (underlying side)**
+
+At the same delta, the same holding period, and selling before expiry: short-dated options
+have the higher mean return (more leverage, so they capture more of the drift), and
+long-dated options the higher median and win rate (they survive longer).
+
+**The question**: how strong is my view on QQQ's drift? A strong view takes a short tenor, a
+weak view a long one, and no view means not trading.
+
+**How**: run Monte Carlo under different drift assumptions and see at what drift the ordering
+flips. The underlying's drift distribution can be estimated from real history and does not
+depend on option data.
+
+### 1.2  The term structure of the volatility risk premium  **needs data**
+
+**This is the only place in the choice of tenor where a real edge might exist.** At constant
+IV, changing tenor only slides along one expected-value line (high win rate and low payoff
+against low win rate and high payoff); there is no free edge.
+
+**The question**: is a long-dated option's IV cheaper relative to realised volatility over
+the same period than a short-dated one's?
+
+**How**: subtract each tenor's realised volatility from its IV and look at the term
+structure. This needs a real chain.
+
+### 1.3  Deep in-the-money LEAPS as leveraged long exposure  **needs data**
+
+A two-year call 25% in the money: delta 0.87, down only 4.6% on a 5-point fall in IV, burning
+0.038% a day, 3.1 times leverage. Time value is 29.8% of the premium, which is about 15% a
+year to hold — **almost exactly QQQ's historical annual return**.
+
+**The question**: after the time value and a drawdown three times as deep, is it better than
+buy and hold?
+
+**How**: `investor_view()`'s beta/alpha comparison plus time underwater. The synthetic chain
+reaches 120 days at most, so **LEAPS cannot be run yet**; `max_dte` has to be raised first.
+
+---
+
+## 2. Entry
+
+### 2.1  The edge window after a correction  **can do**
+
+Already measured (QQQ 1999–2026, a 10% correction, 30 episodes):
+
+| Horizon | P(up) | Unconditional baseline | Excess |
+|---|---|---|---|
+| 3 months | 75.9% | 68.3% | +7.6% |
+| **6 months** | **85.7%** | 72.9% | **+12.9%** |
+| 12 months | 78.6% | 78.4% | **+0.2%** |
+
+**The question**: why is the edge concentrated at 6 months and gone by 12? Is that window
+stable, or noise from 30 episodes?
+
+**How**: other thresholds (5% / 15% / 20%), another underlying (SPY), and sub-periods, to see
+whether it is consistent. Note that the 6-month window holds only 21 non-overlapping
+observations.
+
+### 2.2  The IV level as an entry condition  **partly can do**
+
+`iv_rank_252` is computed from a real volatility proxy (VXN), **so this signal itself can be
+trusted**.
+
+**The question**: is performance systematically better entering at a low IV rank? How low is
+low?
+
+**How**: look at performance stratified by iv_rank. Note that exploring strata is
+statistically the same as sweeping parameters, and the trials have to be counted.
+
+### 2.3  The interaction between a correction and IV  **partly can do**
+
+In a sharp fall IV is necessarily high — the moment you want to buy is the moment it is
+dearest.
+
+**The question**: is there a region where that tension resolves? "Fallen far enough **and** IV
+already off its peak", say.
+
+---
+
+## 3. Getting out (3)(4)(5)
+
+### 3.1  Where the stop belongs  **needs data**
+
+The MAE distribution (with active exits off) gives: a -50% stop cuts 129 trades, of which
+**14 would have been profitable**, losing 9,145 in profit to avoid 113,025 in losses; at -20%
+it loses 41,825 in profit and the losses avoided are barely larger.
+
+**The question**: is -40% to -50% the right region for this strategy?
+
+**What blocks it**: this is a distribution of option prices, which cannot be trusted on a
+synthetic chain.
+
+### 3.2  A fixed ratio against a trailing stop  **needs data**
+
+A fixed +100% take-profit is reached by only about 16% of trades; +30% by 49%. A trailing stop
+(out after giving back a third of the gain) catches the class that ran up and came back.
+
+**The question**: which is better for this strategy?
+
+### 3.3  The **discovery procedure** for (5) headwind  **needs tooling and data**
+
+**The core question: for the positions that ended badly, was there an observable warning
+beforehand.**
+
+How (the mechanism exists, the procedure does not):
+
+1. Daily position trajectories are already being collected — a hard prerequisite that cannot
+   be reconstructed afterwards
+2. Split by final outcome and look at whether the two groups' state on holding day k separates
+3. Of each candidate warning signal ask: how early it fires · its hit rate · its false-alarm
+   rate · what acting on it would have done
+4. **The trap**: a stop censors the data. Studying headwind requires first running a version
+   with active exits off
+
+---
+
+## 4. The market regime (1)
+
+### 4.1  The **discovery procedure** for the regime dimensions  **can do**
+
+Do not pick the cut and then validate it — that is drawing the target around the arrow. The
+right order:
+
+1. Run a version with no regime condition at all
+2. Stratify on each candidate dimension (VIX level, term structure, trend, credit spreads,
+   realised volatility)
+3. Ask three questions at once: **did it separate** (effect size) · **is each bucket big
+   enough** · **does it hold on another sub-period**
+4. **Write down how many dimensions were tried** — exploring strata is statistically the same
+   as sweeping parameters
+
+---
+
+## 5. Falsification (goal two; 1 of 24 done)
+
+**This group has the highest priority**: one run says whether the strategy is worth
+researching further, before any statistical inference is finished.
+
+### 5.1  A random-entry control  **needs tooling**
+Can random entries at the same frequency do as well? If so the signal does nothing and the
+return is the underlying's drift.
+
+### 5.2  A reverse test  **needs tooling**
+Does doing the opposite also make money? Both directions making money means the return is
+beta, not the signal.
+
+### 5.3  Shuffling the signal (a permutation test)  **needs tooling**
+Keep the distribution, shuffle the timing. Does the timing actually do anything.
+
+### 5.4  Removing the head  **partly can do**
+What is left without the best N trades. `investor_view()` gives the top-5 share; the
+systematic curve is not built.
+
+### 5.5  Sensitivity to costs and to execution delay  **can do**
+`cost_sensitivity()` exists. What one more day's delay does is not built.
+
+### 5.6  Selection perturbation  **needs data**
+The adjacent strike, the adjacent expiry — does it still hold? Holding on one contract only
+means it was fitted to the chain's noise.
+
+---
+
+## 6. Research known to be invalid here
+
+Recorded so that **no time is spent on it**.
+
+| What one might do | Why it cannot be done now |
+|---|---|
+| Anything depending on skew | every strike on the synthetic chain has identical IV |
+| Anything depending on the term structure | as above |
+| Selecting by greek ratios | with no skew these are monotonic in the strike, so the ranking must land on the edge of the feasible region |
+| Selling strategies | needs a margin model (not built) |
+| Spreads / multi-leg | architectural: `TradeRecord` holds one contract per row |
+| Capacity | the current size is three orders of magnitude below QQQ's liquidity, and volume data is absent |
+
+---
+
+## 7. The known limitations
+
+**Not bugs — explicit approximations.** They are listed here so it is clear when they affect a
+conclusion and when they can be ignored. They can be improved later; none of them is the
+bottleneck now.
+
+### 7.1  Greeks come from Black-Scholes, with no early exercise
+
+The measured early-exercise premium (QQQ parameters: a 0.6% dividend yield, a 4% rate, 22% IV):
+
+| | 90 days | 1 year | 2 years |
+|---|---|---|---|
+| **call** | −0.04% | −0.03% | −0.03% |
+| **put (at the money)** | +1.7% | **+4.9%** | **+8.8%** |
+| put (20% in the money) | — | — | **+12.5%** |
+
+**When it does not matter**
+
+- **A buyer's call strategy** (the current line): the error is 0.03% and can be ignored
+  outright. With a 0.6% dividend, early exercise is worth almost nothing.
+- **A LEAP call**: a longer tenor does not make this error larger — the table is still 0.03%
+  at 730 days.
+
+**When it does matter**
+
+- **Any strategy that sells puts**: Black-Scholes understates by 2% to 12%, worse the longer
+  and the deeper in the money. A binomial tree is required before selling.
+- A deep in-the-money call before an ex-dividend date: the system flags it in
+  `quality_flags` but does not reprice it.
+
+### 7.2  The precision of the greeks is not the bottleneck
+
+The greeks **take no part in the P&L** — that comes from real bid/ask. They are used only for
+selection, attribution and risk measurement.
+
+The measured sensitivity of selection: a target delta from 0.31 to 0.39 (a span of ±0.04, far
+larger than any plausible model error) moves net P&L from −81,114 to −69,801. **The direction,
+the magnitude and the conclusion are unchanged**; adjacent steps differ by about 4%.
+
+So **do not spend money or time on the precision of the greeks**. What would change a
+conclusion is whether IV has skew (a structural problem, not a precision one) · real bid/ask ·
+American pricing for selling.
+
+### 7.3  The rate is a constant fallback and the dividend is estimated from history
+
+**This is where long tenors are genuinely sensitive.** Measured on an at-the-money call:
+
+| Tenor | Rate wrong by 1% | Dividend yield wrong by 0.5% | Change in delta (rate wrong by 1%) |
+|---|---|---|---|
+| 30 days | +1.6% | −0.8% | +0.005 |
+| 1 year | +4.9% | −2.9% | +0.017 |
+| **2 years** | **+6.4%** | **−4.1%** | **+0.023** |
+
+**When it does not matter**: an ordinary 21–45 day position, where 1.6% is swamped by the
+spread.
+
+**When it does matter**: **LEAPS**. At two years, a rate wrong by one percentage point is
+6.4% — and a LEAP's time value is itself about 30% of the premium, so this error is a fifth
+of it. A real rate curve should be wired in before researching LEAPS.
+
+### 7.4  What to improve (low priority, with explicit triggers)
+
+None of these is a bottleneck now; do not go after them. **Each one's trigger is stated** —
+at that point it stops being optional.
+
+| What | Its effect now | When it becomes required |
+|---|---|---|
+| A binomial tree (American pricing) | a buyer's call error is 0.03%, negligible | **when selling puts** |
+| A real rate curve | 30 days differs by 1.6%, swamped by the spread | **when researching LEAPS** (two years differs by 6.4%) |
+| Dividend forecasting (currently from history) | the same magnitude | as above, or for deep in-the-money calls (early exercise before an ex-date) |
+| Handling settlement at expiry | none — we are a buyer, and `dte_floor` means nothing is held to exercise | **when researching holding to expiry** |
+
+### 7.5  The synthetic chain has no skew and no term structure
+
+This is not a precision problem, it is a **structural absence**; see section 6. It is the only
+hard blocker at present.
+
+---
+
+## 8. Maintenance
+
+This list is **maintained by hand** and cannot be computed the way `tools/status.py` is.
+
+When one is finished, change its status and say where the conclusion lives; when a new question
+appears, add it. **Do not let this become a wish list that only grows** — delete what will not
+be done, or move it to section 6 with the reason.
