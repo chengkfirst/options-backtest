@@ -1,7 +1,8 @@
-"""全局配置。各模块从此读取，禁止在模块内硬编码这些常数。
+"""Global configuration. Every module reads these; none hard-codes them.
 
-默认值即 design.md 的「基准配置」。它不是"正确参数"，而是**基线**——研究时每一次
-变体对比都相对它而言；没有稳定基线，"改了一处之后差多少"这个问题无法回答。
+The defaults are the **baseline**, not "the right parameters". Every variant
+studied is measured against them; without a stable baseline, the question
+"how much did that one change move the result" has no answer.
 """
 
 from __future__ import annotations
@@ -12,26 +13,31 @@ from datetime import date
 
 from backtest.types import ContractSpec, Right, require
 
-#: 波动率年化用的每年交易日数。只用于波动率，不用于定价（见 TimeConventions）。
+#: Trading days per year, for annualising volatility only — never for pricing
+#: (see TimeConventions).
 TRADING_DAYS_PER_YEAR = 252
 
-#: 定价与 theta 衰减用的每年日历日数。期权在周末照常衰减。
+#: Calendar days per year, for pricing and theta decay. Options decay over
+#: weekends too.
 CALENDAR_DAYS_PER_YEAR = 365.0
 
 
 @dataclass(frozen=True, slots=True)
 class TimeConventions:
-    """两个各司其职的时间口径，强行统一必错其一。
+    """Two time conventions with different jobs; forcing them into one makes
+    one of them wrong.
 
-    - 定价的到期时间 T 与 theta：**日历日 / 365**。期权在非交易日同样衰减。
-    - 波动率年化：**交易日 / 252**。波动只在交易日产生。
+    - Time to expiry and theta, for pricing: **calendar days / 365**. An option
+      decays on non-trading days as well.
+    - Annualising volatility: **trading days / 252**. Volatility is only
+      realised on trading days.
     """
 
     pricing_basis: str = "calendar/365"
     vol_annualization_basis: str = "trading/252"
 
     def year_fraction(self, start: date, end: date) -> float:
-        """定价口径的年化到期时间。"""
+        """Time to expiry in years, on the pricing convention."""
         return max((end - start).days, 0) / CALENDAR_DAYS_PER_YEAR
 
     def describe(self) -> dict[str, str]:
@@ -43,24 +49,25 @@ class TimeConventions:
 
 @dataclass(frozen=True, slots=True)
 class CostConfig:
-    """成本假设。两条引擎共用，不可分叉。"""
+    """Cost assumptions. Shared by both engines; these must not diverge."""
 
-    #: 成交价在中价与不利端之间的位置：0 = 中价，1 = 不利端（买 ask / 卖 bid）。
+    #: Where the fill sits between mid and the adverse side: 0 = mid,
+    #: 1 = fully adverse (pay the ask, receive the bid).
     adverse_fraction: float = 1.0
     commission_per_contract: float = 0.65
     min_commission_per_order: float = 1.00
     regulatory_fee_per_contract: float = 0.05
     exercise_fee: float = 0.0
     slippage_per_contract: float = 0.0
-    #: 相对买卖价差上限，超过即判定为不可成交。
+    #: Maximum relative bid/ask spread; wider than this counts as untradable.
     max_relative_spread: float = 0.20
 
     def __post_init__(self) -> None:
         require(
             0.0 <= self.adverse_fraction <= 1.0,
-            f"adverse_fraction 须在 0 与 1 之间，当前 {self.adverse_fraction}",
+            f"adverse_fraction must lie between 0 and 1, got {self.adverse_fraction}",
         )
-        require(self.max_relative_spread > 0, "max_relative_spread 须为正")
+        require(self.max_relative_spread > 0, "max_relative_spread must be positive")
         for name in (
             "commission_per_contract",
             "min_commission_per_order",
@@ -68,51 +75,59 @@ class CostConfig:
             "exercise_fee",
             "slippage_per_contract",
         ):
-            require(getattr(self, name) >= 0, f"{name} 不得为负")
+            require(getattr(self, name) >= 0, f"{name} must not be negative")
 
 
 @dataclass(frozen=True, slots=True)
 class SyntheticChainConfig:
-    """合成链生成参数。
+    """Parameters of the synthetic chain.
 
-    刻意保持粗糙：不建模波动率偏斜、不建模期限结构。一个粗糙且标注清晰的模型，
-    比一个看起来精细、实则仍然错误的模型更安全——后者会诱使人相信回测结论。
+    Deliberately crude: no volatility skew, no term structure. A crude model
+    that says so is safer than a model that looks refined and is still wrong —
+    the latter invites belief in the backtest's conclusions.
     """
 
-    #: 行权价覆盖标的价的上下比例。
+    #: How far above and below spot the strikes reach, as a fraction.
     strike_range: float = 0.20
-    #: 买卖价差为理论价的比例。
+    #: Bid/ask spread as a fraction of the theoretical price.
     spread_pct: float = 0.02
-    #: 买卖价差的绝对下限。
+    #: Absolute floor on the bid/ask spread.
     spread_floor: float = 0.05
-    #: 生成的到期节奏。
+    #: Which expiry cadences to generate.
     include_monthly: bool = True
     include_weekly: bool = True
-    #: 周度到期在该日期之后才存在（周度期权是逐步推出的）。
+    #: Weekly expiries only exist after this date (they were rolled out
+    #: gradually).
     weekly_start: date = date(2010, 6, 4)
     max_dte: int = 120
 
     def __post_init__(self) -> None:
-        require(0 < self.strike_range < 1, "strike_range 须在 0 与 1 之间")
-        require(self.spread_pct > 0 and self.spread_floor > 0, "价差参数须为正")
-        require(self.max_dte > 0, "max_dte 须为正")
+        require(0 < self.strike_range < 1, "strike_range must lie between 0 and 1")
+        require(self.spread_pct > 0 and self.spread_floor > 0,
+                "the spread parameters must be positive")
+        require(self.max_dte > 0, "max_dte must be positive")
 
 
 @dataclass(frozen=True, slots=True)
 class BacktestConfig:
-    """一次回测的完整配置。随报告留存，使结果可被重新执行。"""
+    """The full configuration of one run. Kept with the report so the result
+    can be re-executed."""
 
     symbol: str = "QQQ"
     start: date = date(2015, 1, 1)
     end: date = date(2024, 12, 31)
-    #: 名义资金。成交表引擎不做资金约束，该值仅用于把盈亏折算为比例、
-    #: 以及判断并发持仓的资金可行性。
+    #: Notional capital. The trade-table engine applies no capital constraint;
+    #: this only converts P&L into fractions and checks whether concurrent
+    #: positions would have been affordable.
     notional_capital: float = 100_000.0
-    #: 无风险利率序列不可得时的回退常数。回退会被记入事件流并在报告中标注。
+    #: Constant fallback when no risk-free rate series is available. Every
+    #: fallback is recorded in the event stream and flagged in the report.
     fallback_risk_free_rate: float = 0.02
-    #: 执行延迟（交易日）。T 日收盘产生意图，T+delay 收盘执行。
+    #: Execution lag in trading days. The intent forms at the close of T and is
+    #: executed at the close of T + lag.
     execution_lag_days: int = 1
-    #: 合约选择的最小剩余期限（交易日），不得小于执行延迟。
+    #: Minimum remaining life (trading days) for a contract to be selected;
+    #: must not be below the execution lag.
     min_days_to_expiry: int = 5
     random_seed: int = 20260917
 
@@ -122,21 +137,24 @@ class BacktestConfig:
     time: TimeConventions = field(default_factory=TimeConventions)
 
     def __post_init__(self) -> None:
-        require(self.start < self.end, "回测起始日须早于结束日")
-        require(self.notional_capital > 0, "名义资金须为正")
-        require(self.execution_lag_days >= 1, "执行延迟至少为一个交易日")
+        require(self.start < self.end, "the start date must precede the end date")
+        require(self.notional_capital > 0, "notional capital must be positive")
+        require(self.execution_lag_days >= 1, "the execution lag is at least one day")
         require(
             self.contract.symbol == self.symbol,
-            f"合约规格的标的 {self.contract.symbol} 与回测标的 {self.symbol} 不一致",
+            f"the contract spec's symbol {self.contract.symbol} does not match "
+            f"the backtest symbol {self.symbol}",
         )
-        # 执行延迟一天意味着：T 日下的了结意图在 T+1 执行，合约届时必须仍可交易。
-        # 下限小于 lag+1 时，仓位会被静默拖到到期结算，而报告看上去一切正常。
+        # A one-day lag means an exit decided on T is executed on T+1, and the
+        # contract has to still be tradable then. Below lag+1 a position is
+        # silently dragged into expiry settlement while the report looks fine.
         require(
             self.min_days_to_expiry >= self.execution_lag_days + 1,
-            f"min_days_to_expiry 至少为 {self.execution_lag_days + 1}"
-            f"（执行延迟 {self.execution_lag_days} 加一），当前 {self.min_days_to_expiry}",
+            f"min_days_to_expiry must be at least {self.execution_lag_days + 1} "
+            f"(execution lag {self.execution_lag_days} plus one), "
+            f"got {self.min_days_to_expiry}",
         )
 
     def describe(self) -> dict[str, object]:
-        """完整配置的可打印形式，随报告留存。"""
+        """The whole configuration in printable form, kept with the report."""
         return dataclasses.asdict(self)

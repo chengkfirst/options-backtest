@@ -1,7 +1,9 @@
-"""跨模块传递的核心类型。全部不可变。
+"""The core types that cross module boundaries. All immutable.
 
-`TradeRecord` 是本项目最重要的一个契约：成交表引擎与日后的事件驱动引擎都产出
-这一种记录，研究层与报告层因此对两条路径完全通用，两者的结果也可以直接逐行比对。
+``TradeRecord`` is this project's most important contract: both the trade-table
+engine and the event-driven engine emit this one record, which is what lets the
+research and report layers work against either path, and lets the two engines'
+results be compared row by row.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ class Side(str, Enum):
 
 
 class ExitReason(str, Enum):
-    """了结原因的统一取值集合；两条引擎必须使用同一套取值与同一优先级。"""
+    """The one set of exit reasons; both engines use these values and this order."""
 
     RISK_FORCED = "risk_forced"
     STOP_LOSS = "stop_loss"
@@ -53,10 +55,12 @@ class ExitReason(str, Enum):
     EXPIRY_OTM = "expiry_otm"
 
 
-#: 同日多条件成立时的确定性优先级，越靠前越优先。
+#: Deterministic precedence when several conditions hold on the same day;
+#: earlier wins.
 #:
-#: 止损排在止盈之前是有意的保守选择：日线数据看不到盘中先后，两者同日触及时
-#: 假定先触及的是亏损一侧，不会高估策略表现。
+#: Stop-loss ahead of take-profit is a deliberately conservative choice: daily
+#: bars do not show which came first intraday, so when both are touched on one
+#: day we assume the losing side came first. That cannot flatter the strategy.
 EXIT_PRIORITY: tuple[ExitReason, ...] = (
     ExitReason.RISK_FORCED,
     ExitReason.STOP_LOSS,
@@ -73,18 +77,18 @@ _EXIT_RANK: Mapping[ExitReason, int] = MappingProxyType(
 
 
 def resolve_exit_reason(reasons: "list[ExitReason] | tuple[ExitReason, ...]") -> ExitReason:
-    """多个了结原因同日成立时，按固定优先级取一个。"""
+    """Pick one reason when several hold on the same day, by fixed precedence."""
     if not reasons:
-        raise ValueError("至少需要一个了结原因")
+        raise ValueError("at least one exit reason is required")
     return min(reasons, key=lambda r: _EXIT_RANK[r])
 
 
 @dataclass(frozen=True, slots=True, order=True)
 class ContractId:
-    """可读且确定的合约标识，例如 ``QQQ_20240315_C_00400000``。
+    """A readable, deterministic contract id, e.g. ``QQQ_20240315_C_00400000``.
 
-    可读是为了在交易明细里能肉眼核对；确定是为了跨运行可复现（见 design.md
-    「确定性作为硬约束」）；不依赖外部代码表是为了离线可用。
+    Readable so a trade row can be checked by eye; deterministic so runs
+    reproduce; free of any external symbol table so it works offline.
     """
 
     symbol: str
@@ -94,12 +98,13 @@ class ContractId:
 
     def __post_init__(self) -> None:
         if not self.symbol or not self.symbol.isupper():
-            raise ValueError(f"标的代码须为大写非空：{self.symbol!r}")
+            raise ValueError(f"symbol must be non-empty upper case: {self.symbol!r}")
         if self.strike <= 0:
-            raise ValueError(f"行权价须为正：{self.strike}")
-        # 行权价按千分位定宽编码，1/1000 以下的精度无法表达
+            raise ValueError(f"strike must be positive: {self.strike}")
+        # The strike is encoded at fixed width in thousandths; finer precision
+        # than 1/1000 cannot be represented.
         if abs(round(self.strike * 1000) - self.strike * 1000) > 1e-6:
-            raise ValueError(f"行权价精度超出千分位：{self.strike}")
+            raise ValueError(f"strike is finer than a thousandth: {self.strike}")
 
     def __str__(self) -> str:
         return (
@@ -118,16 +123,19 @@ class ContractId:
                 strike=round(int(strike) / 1000, 3),
             )
         except (ValueError, KeyError) as exc:
-            raise ValueError(f"无法解析合约标识：{text!r}") from exc
+            raise ValueError(f"cannot parse contract id: {text!r}") from exc
 
 
 @dataclass(frozen=True, slots=True)
 class ContractSpec:
-    """合约规格。交割方式来自这里，而非系统的统一假设。
+    """Contract specification. Settlement comes from here, not from one
+    system-wide assumption.
 
-    QQQ / SPY 期权是美式、实物交割：实值到期拿到 100 股股票，需要现金接货；
-    指数期权（SPX）是欧式、现金交割。把它当配置而不是默认值，是因为按现金结算
-    给实物交割的标的建模会系统性高估绩效。
+    QQQ / SPY options are American and physically settled: held to expiry in the
+    money they deliver 100 shares, which has to be paid for. Index options (SPX)
+    are European and cash settled. This is configuration rather than a default
+    because modelling a physically settled underlying as cash settled flatters
+    performance systematically.
     """
 
     symbol: str
@@ -139,13 +147,15 @@ class ContractSpec:
 
     def __post_init__(self) -> None:
         if self.multiplier <= 0:
-            raise ValueError("合约乘数须为正")
+            raise ValueError("the contract multiplier must be positive")
         if self.strike_step <= 0:
-            raise ValueError("行权价步长须为正")
+            raise ValueError("the strike step must be positive")
 
 
-#: 期权链长表的字段集。按商业数据源的通用输出定义，而非按合成链能提供什么裁剪；
-#: 某个实现提供不了的字段以缺失标记表达，MUST NOT 从接口中移除（design.md 决策 5）。
+#: The columns of the long-form option chain. Defined after what commercial
+#: vendors generally supply, not trimmed to what the synthetic chain can produce.
+#: A field one implementation cannot fill is marked missing; it MUST NOT be
+#: dropped from the interface.
 CHAIN_COLUMNS: tuple[str, ...] = (
     "asof",
     "symbol",
@@ -168,16 +178,17 @@ CHAIN_COLUMNS: tuple[str, ...] = (
     "greeks_model_derived",
 )
 
-#: 主键。
+#: Primary key.
 CHAIN_KEY: tuple[str, ...] = ("asof", "symbol", "expiry", "strike", "right")
 
 
 @dataclass(frozen=True, slots=True)
 class TradeRecord:
-    """一笔逻辑交易：从首次建仓到彻底了结的完整过程。
+    """One logical trade: from the first fill to being fully closed.
 
-    统计单位是逻辑交易而非单个持仓——展期三次的头寸按持仓统计会变成四笔，
-    胜率与持有期全部失真。
+    The unit of statistics is the logical trade, not the individual position —
+    counted by position, something rolled three times becomes four trades, and
+    both win rate and holding period are distorted.
     """
 
     trade_id: int
@@ -204,21 +215,24 @@ class TradeRecord:
     exit_context: Mapping[str, Maybe[float]]
     quote_gaps: int = 0
     deferred_days: int = 0
-    #: 持有期内的最大有利/最大不利偏移（相对入场价的比例）。
-    #: 只有事件驱动引擎采得到——成交表不逐日推进。成交表产出的记录里是 NaN，
-    #: 下游据此报错而不是当成 0。
+    #: Maximum favourable / adverse excursion over the holding period, as a
+    #: fraction of the entry price. Only the event-driven engine can observe
+    #: these — the trade table does not step day by day. Records from the trade
+    #: table carry NaN, so downstream code raises rather than reading them as 0.
     mfe: float = float("nan")
     mae: float = float("nan")
-    #: 下单时打的分组标签与备注（来自 Plan）。**分类口径来自当时的真实判断**，
-    #: 不是事后按结果硬分的——后者会把结论分析成自己想要的样子。
+    #: The grouping tag and note attached at order time (from the Plan). The
+    #: classification reflects the judgement actually made that day; it is not
+    #: assigned afterwards from the outcome, which would let the analysis
+    #: conclude whatever it set out to.
     tag: str = ""
     note: str = ""
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:
-            raise ValueError("数量须为正")
+            raise ValueError("quantity must be positive")
         if self.exit_date < self.entry_date:
-            raise ValueError("了结日不得早于入场日")
+            raise ValueError("the exit date must not precede the entry date")
         object.__setattr__(self, "entry_context", MappingProxyType(dict(self.entry_context)))
         object.__setattr__(self, "exit_context", MappingProxyType(dict(self.exit_context)))
 
@@ -227,7 +241,7 @@ class TradeRecord:
         return self.net_pnl > 0
 
 
-#: 交易明细导出时的列顺序；两条引擎必须一致。
+#: Column order when exporting trades; both engines must agree.
 TRADE_COLUMNS: tuple[str, ...] = (
     "trade_id",
     "engine",
@@ -259,6 +273,6 @@ TRADE_COLUMNS: tuple[str, ...] = (
 
 
 def require(condition: bool, message: str) -> None:
-    """启动期校验：不满足即抛 :class:`StartupError`。"""
+    """A startup check: raise :class:`StartupError` when it does not hold."""
     if not condition:
         raise StartupError(message)

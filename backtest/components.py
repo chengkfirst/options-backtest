@@ -1,37 +1,46 @@
-"""七个策略组件：各自在交易里起什么作用，以及它们怎么互相牵制。
+"""The seven strategy components: what each one decides in a trade, and how they
+constrain one another.
 
-**这个模块是整个项目的概念底座。** 界面怎么分区、引擎在哪里留钩子、研究工具该
-回答什么问题，都从这里推出来，而不是反过来。
+**This module is the project's conceptual base.** How the interface is divided,
+where the engine leaves hooks, what the research tools have to answer — all of
+it follows from here, not the other way round.
 
-## 为什么不是"七个平等的模块"
+## Why they are not "seven equal modules"
 
-按组件表把它们并排列出来，会看不见最要紧的东西：**它们互相决定**。
+Listing them side by side as a table of components hides the thing that matters
+most: **they decide one another.**
 
-最典型的是 ④ 止损和 ⑥ 仓位。真实交易里：
+The clearest case is (4) stop loss and (6) positioning. In a real trade:
 
-    仓位规模 = 风险预算 ÷ 止损距离
+    position size = risk budget / stop distance
 
-三个量里定了两个，第三个就定了。把"止损 0.5"和"1 张"做成两个独立输入框，等于
-让使用者填一组自相矛盾的数——而且系统不会报错，因为它根本不知道这两个数有关系。
+Fix two of the three quantities and the third is fixed. Offering "stop 0.5" and
+"1 contract" as two independent inputs asks the user to enter a contradiction —
+and nothing raises, because the system does not know the two numbers are related.
 
-写清楚每个组件在交易里干什么之后，联动是自己冒出来的，见 :data:`COUPLINGS`。
+Once each component's job in a trade is written down, the couplings surface on
+their own; see :data:`COUPLINGS`.
 
-## 四层，不是七块
+## Four layers, not seven boxes
 
-按**交易里发生的顺序**分，七个组件落在四层上：
+Ordered by **when they happen in a trade**, the seven components fall on four
+layers:
 
-===========  ===========================  ==========================================
-层            组件                          为什么单独成一层
-===========  ===========================  ==========================================
-决定之前      ①                            它不下单，只决定「今天做不做、用哪一档」
-一笔的决定    ② ②b ③ ④ ⑥                  这几件事是**同一个判断**的几个侧面
-持仓期间      ⑤                            论据部分失效时的中间地带，止损是非黑即白
-组合层        ⑦                            不属于任何单笔
-===========  ===========================  ==========================================
+================  ===========================  =====================================
+Layer              Components                    Why it is a layer of its own
+================  ===========================  =====================================
+before deciding    (1)                           places no order; decides whether to
+                                                 trade today at all, and at what size
+one trade          (2) (2b) (3) (4) (6)          these are facets of a single judgement
+while holding      (5)                           the middle ground when the thesis is
+                                                 partly broken; a stop is all or nothing
+portfolio          (7)                           belongs to no individual trade
+================  ===========================  =====================================
 
-这个分层直接决定了代码结构：「一笔的决定」那层对应 :class:`backtest.engine.plan.Plan`
-（一个函数同时产出合约、仓位、了结点）；「持仓期间」需要的是另一种钩子——
-逐日复查，目前还没有。
+This layering decides the code structure directly. The "one trade" layer is
+:class:`backtest.engine.plan.Plan` — one function yields the contract, the size
+and the exit points together. The "while holding" layer needs a different hook:
+a daily review.
 """
 
 from __future__ import annotations
@@ -39,41 +48,46 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-Layer = Literal["决定之前", "一笔的决定", "持仓期间", "组合层"]
+Layer = Literal["before deciding", "one trade", "while holding", "portfolio"]
 Status = Literal["done", "partial", "missing"]
 
 
-#: 一个组件的细节是怎么定下来的。这个区分决定了平台该给什么工具。
+#: How a component's details get settled. The distinction decides what kind of
+#: tool the platform owes you.
 #:
 #: ``"configured"``
-#:     直接填就行。你已经知道要什么，系统照做。② 选约、③④ 的数值属于这类
-#:     （前提是有真实数据）。
+#:     Just fill it in. You already know what you want and the system complies.
+#:     Contract selection (2b) and the levels in (3)/(4) are of this kind,
+#:     given real data.
 #: ``"discovered"``
-#:     **填不出来，得先研究**。你不可能先验地知道"VIX>25 且期限结构<1"是对的切法，
-#:     也不知道什么信号代表"论据开始失效"。这类组件需要的是**发现流程**，
-#:     不是配置框——给个输入框反而有害，因为它暗示你本该知道答案。
+#:     **Cannot be filled in; has to be researched first.** There is no way to
+#:     know a priori that "VIX > 25 and term structure < 1" is the right cut, or
+#:     which signal means "the thesis is starting to fail". These components need
+#:     a **discovery procedure**, not an input box — an input box is actively
+#:     harmful here, because it implies you ought to have known the answer.
 Origin = Literal["configured", "discovered"]
 
 
 @dataclass(frozen=True, slots=True)
 class Field:
-    """一个组件要录入的一个字段。
+    """One field a component asks for.
 
-    **界面从这里生成，不手写 HTML。** 手写的话，这份定义和界面会各说各的：
-    改了组件的含义却忘了改界面，或者反过来。界面上挂着一条早已不成立的说明，
-    看起来仍然权威。
+    **The interface is generated from here; the HTML is not hand-written.**
+    Hand-written, this definition and the interface drift apart: the meaning of a
+    component changes and the interface does not, or the reverse. A caption that
+    stopped being true still looks authoritative on screen.
     """
 
-    name: str                       # 表单字段名，要与后端 payload 对得上
+    name: str                       # form field name; must match the backend payload
     label: str
     kind: str                       # number / ratio / int / select / text / code
     default: Any = None
     unit: str = ""
     help: str = ""
-    options: tuple[tuple[str, str], ...] = ()     # select：(值, 显示文字)
-    #: 仅当另一字段取某值时才显示，写成 "字段名=值"。
+    options: tuple[tuple[str, str], ...] = ()     # select: (value, display text)
+    #: Shown only when another field holds a given value, written "field=value".
     depends: str = ""
-    #: 取值范围，用于校验与 number 控件。
+    #: Permitted range, for validation and for number controls.
     lo: float | None = None
     hi: float | None = None
 
@@ -83,224 +97,289 @@ class Component:
     key: str
     name: str
     layer: Layer
-    #: **在一笔真实交易里，这个组件到底决定什么。** 这一句是全模块的重点。
+    #: **What this component actually decides in one real trade.** This single
+    #: sentence is the point of the whole module.
     role: str
-    #: 它输出什么（不是「它怎么算」，是「它给出什么」）。
+    #: What it emits — not how it computes, what it hands over.
     output: str
     status: Status
-    #: 这个组件的细节是填出来的还是研究出来的。见 :data:`Origin`。
+    #: Whether this component's details are configured or discovered.
+    #: See :data:`Origin`.
     origin: Origin = "configured"
-    #: 当前欠什么。``status`` 为 done 时为空。
+    #: What is missing right now. Empty when ``status`` is done.
     gap: str = ""
-    #: ``origin`` 为 discovered 时：**怎么找**。没有这个，组件就只能靠拍脑袋。
+    #: When ``origin`` is discovered: **how to find it**. Without this, the
+    #: component can only be guessed at.
     how_to_find: str = ""
-    #: 这个组件要录入什么。界面按它生成表单。空元组表示这个组件当前无法配置。
+    #: What this component asks for. The interface builds its form from this.
+    #: An empty tuple means the component cannot currently be configured.
     inputs: tuple[Field, ...] = ()
-    #: 这个组件在「交易计划」模式下由计划函数的哪一部分决定。
-    #: 有值就说明它和别的组件是联动的，分开填会打架。
+    #: Which part of the plan function decides this component in plan mode.
+    #: A value here means it is coupled to other components, and filling them in
+    #: separately makes them fight.
     in_plan: str = ""
 
 
 COMPONENTS: tuple[Component, ...] = (
     Component(
-        "setup", "① setup / regime", "决定之前",
-        role="决定现在该不该做这类交易、以及用哪一套参数。**它自己不产生交易。**",
-        output="开关 + 倍率",
+        "setup", "(1) setup / regime", "before deciding",
+        role="Decides whether this kind of trade should be on right now, and "
+             "under which set of parameters. **It produces no trade itself.**",
+        output="an on/off switch and a multiplier",
         status="partial",
         origin="discovered",
-        gap="规则型分类（VIX / 期限结构 / 趋势）已有，但没接成调制器；统计型（HMM）不做，见 placeholder",
+        gap="rule-based classification (VIX / term structure / trend) exists but "
+            "is not wired up as a modulator; statistical regimes (HMM) are out of "
+            "scope, see the placeholder",
         how_to_find=(
-            "不要先定切法再验证——那是先射箭后画靶。正确顺序是：\n"
-            "1. 先跑一版**不做任何 regime 条件**的策略，拿到全部交易\n"
-            "2. 对每个候选维度（VIX 水平、期限结构、趋势、信用利差、已实现波动…）"
-            "分层看表现\n"
-            "3. 三个问题同时问：分开了吗（效应量）· 每档样本够吗 · 换个子区间还成立吗\n"
-            "4. **试了几个维度必须记下来**——分层探索在统计上等同扫参数，"
-            "试十个挑最好的，那个'最好'里有多少是运气\n"
-            "5. 只有三个问题都过关的维度才值得做成条件\n"
-            "工具：backtest.research.discovery.regime_candidates()"
+            "Do not pick the cut first and validate it after — that is drawing "
+            "the target around the arrow. The right order is:\n"
+            "1. Run a version with **no regime condition at all** and keep every "
+            "trade\n"
+            "2. For each candidate dimension (VIX level, term structure, trend, "
+            "credit spreads, realised volatility) look at performance by bucket\n"
+            "3. Ask three questions at once: did it separate (effect size) - is "
+            "each bucket big enough - does it hold on another sub-period\n"
+            "4. **Write down how many dimensions you tried** - exploring buckets "
+            "is statistically the same as sweeping parameters; try ten and keep "
+            "the best and some of that best is luck\n"
+            "5. Only a dimension that passes all three is worth making a "
+            "condition\n"
+            "Tool: backtest.research.discovery.regime_candidates()"
         ),
     ),
     Component(
-        "entry", "② entry", "一笔的决定",
-        role="决定时点——就是今天，不是上周也不是下周。",
-        output="做 / 不做",
+        "entry", "(2) entry", "one trade",
+        role="Decides the timing — today, not last week and not next week.",
+        output="trade / do not trade",
         status="done",
-        in_plan="return None 之前的那段判断",
+        in_plan="the test above the `return None`",
         inputs=(
-            # 同一件事两种填法，二选一。两个框同时摆出来的话，使用者不知道
-            # 哪个生效，而后端只能猜——猜错就是跑了另一个策略。
-            Field("entry_mode", "怎么写", "select", "expr", options=(
-                ("expr", "表达式"), ("code", "代码"))),
-            Field("entry", "入场条件", "text", "close < sma_20 * 0.98",
+            # The same thing, two ways to express it; pick one. With both boxes
+            # on screen the user cannot tell which one applies, and the backend
+            # can only guess — and a wrong guess runs a different strategy.
+            Field("entry_mode", "how to write it", "select", "expr", options=(
+                ("expr", "expression"), ("code", "code"))),
+            Field("entry", "entry condition", "text", "close < sma_20 * 0.98",
                   depends="entry_mode=expr",
-                  help="只支持比较、and/or/not 与四则运算"),
+                  help="comparisons, and/or/not, and arithmetic only"),
             Field("entry_code", "entry(view)", "code", "",
                   depends="entry_mode=code",
-                  help="返回 True 就入场。缺失信号一律不入场"),
+                  help="return True to enter. A missing signal never enters"),
         ),
     ),
     Component(
-        "select", "②b 选合约", "一笔的决定",
-        role="把「我看多」落成「具体哪一张」。方向之外还决定了这笔的希腊字母暴露。"
-             "IV 高低决定的是**该不该买权利金**，属于入场判断（用 iv_rank_252 信号），"
-             "不在这一步。",
-        output="一张合约",
+        "select", "(2b) contract selection", "one trade",
+        role="Turns 'I am bullish' into 'this particular contract'. Beyond "
+             "direction it also fixes this trade's greek exposure. The level of "
+             "IV decides **whether premium is worth buying at all**, which "
+             "belongs to the entry judgement (via the iv_rank_252 signal), not "
+             "to this step.",
+        output="one contract",
         status="done",
-        in_plan="Plan(contract=…)",
+        in_plan="Plan(contract=...)",
         inputs=(
-            # 专业做法是「可行域 + 排序目标」，不是盯死一个点。盯死 delta=0.30
-            # 有两个问题：链上未必有那一张，以及只在那一个点成立的结论是噪音。
-            Field("right", "类型", "select", "call",
-                  options=(("call", "看涨 call"), ("put", "看跌 put"))),
-            Field("dte_lo", "剩余天数 从", "int", 21, unit="日历日", lo=3, hi=400),
-            Field("dte_hi", "到", "int", 45, unit="日历日", lo=3, hi=400),
-            Field("delta_lo", "delta 从", "ratio", 0.25, lo=0.01, hi=0.99),
-            Field("delta_hi", "到", "ratio", 0.45, lo=0.01, hi=0.99),
-            Field("max_spread", "买卖价差上限", "ratio", 0.08, lo=0.001, hi=1,
-                  unit="× 中价", help="实盘里这常常是真正的绑定条件"),
-            Field("min_open_interest", "未平仓下限", "int", None, lo=0,
-                  help="留空表示不限。数据源不提供时会跳过并标明"),
-            Field("delta", "目标 delta", "ratio", 0.35, lo=0.05, hi=0.95,
-                  help="可行域里离它最近的那张"),
+            # The professional form is "feasible region plus a ranking
+            # objective", not a single pinned point. Pinning delta = 0.30 has two
+            # problems: the chain may not hold that contract, and a conclusion
+            # that only holds at one point is noise.
+            Field("right", "type", "select", "call",
+                  options=(("call", "call"), ("put", "put"))),
+            Field("dte_lo", "days to expiry from", "int", 21,
+                  unit="calendar days", lo=3, hi=400),
+            Field("dte_hi", "to", "int", 45, unit="calendar days", lo=3, hi=400),
+            Field("delta_lo", "delta from", "ratio", 0.25, lo=0.01, hi=0.99),
+            Field("delta_hi", "to", "ratio", 0.45, lo=0.01, hi=0.99),
+            Field("max_spread", "max bid/ask spread", "ratio", 0.08, lo=0.001, hi=1,
+                  unit="x mid",
+                  help="in live trading this is often the real binding constraint"),
+            Field("min_open_interest", "min open interest", "int", None, lo=0,
+                  help="blank means no limit. Skipped and flagged when the data "
+                       "source does not supply it"),
+            Field("delta", "target delta", "ratio", 0.35, lo=0.05, hi=0.95,
+                  help="the contract in the feasible region closest to this"),
         ),
     ),
     Component(
-        "take_profit", "③ take profit", "一笔的决定",
-        role="决定「赚到什么程度算兑现了」。**它的位置由入场理由决定**——"
-             "你为什么进，决定了什么算「这事发生了」。",
-        output="兑现点",
+        "take_profit", "(3) take profit", "one trade",
+        role="Decides what counts as having been paid. **Its level follows from "
+             "the reason for entering** — why you went in decides what counts as "
+             "'the thing happened'.",
+        output="a realisation point",
         status="partial",
-        in_plan="Plan(take_profit=…)",
+        in_plan="Plan(take_profit=...)",
         inputs=(
-            # 固定比例在入场那刻就定死了。跟踪止盈、按论据失效了结、按时间衰减
-            # 调整目标，都要每天重算——那是「持仓期间」那一层的 review() 钩子。
-            Field("exit_mode", "怎么定", "select", "fixed", options=(
-                ("fixed", "固定比例"), ("rule", "写规则（逐日复查）"))),
-            Field("take_profit", "止盈", "ratio", 1.0, unit="×", lo=0,
+            # A fixed ratio is settled at the moment of entry. A trailing stop,
+            # exiting because the thesis broke, adjusting the target as time
+            # decay bites — all of those have to be recomputed daily, which is
+            # the review() hook on the "while holding" layer.
+            Field("exit_mode", "how it is set", "select", "fixed", options=(
+                ("fixed", "fixed ratio"), ("rule", "a rule, reviewed daily"))),
+            Field("take_profit", "take profit", "ratio", 1.0, unit="x", lo=0,
                   depends="exit_mode=fixed",
-                  help="相对入场价。1.0 = 赚 100% 才走，历史上只有约 16% 的交易能触及"),
+                  help="relative to the entry price. 1.0 means leave only after "
+                       "doubling, which historically only about 16% of trades "
+                       "ever reach"),
         ),
-        gap="逻辑完整，但数值在合成链上不可信；MFE 分布可用于定档",
+        gap="the logic is complete, but the levels cannot be trusted on a "
+            "synthetic chain; the MFE distribution is what sets them",
     ),
     Component(
-        "stop_loss", "④ stop loss", "一笔的决定",
-        role="决定「什么情况说明我错了」。**止损不是「亏了多少」，是「论据失效」**——"
-             "这个区别决定了它该放在哪里。",
-        output="论据失效点",
+        "stop_loss", "(4) stop loss", "one trade",
+        role="Decides what would mean you were wrong. **A stop is not 'how much "
+             "I lost', it is 'the thesis failed'** — and that difference decides "
+             "where it belongs.",
+        output="the point at which the thesis has failed",
         status="partial",
-        in_plan="Plan(stop_loss=…)",
+        in_plan="Plan(stop_loss=...)",
         inputs=(
-            Field("stop_loss", "止损", "ratio", 0.5, unit="×", lo=0, hi=1,
+            Field("stop_loss", "stop loss", "ratio", 0.5, unit="x", lo=0, hi=1,
                   depends="exit_mode=fixed",
-                  help="相对入场价。0.5 = 亏 50% 就走"),
-            # 时间类了结是**安全网**，两种模式下都生效：写错的规则不该把仓位
-            # 拖到到期。所以它们不挂 depends。
-            Field("hold_days", "最多持有", "int", 10, unit="交易日", lo=1, hi=120,
-                  help="安全网，规则模式下同样生效"),
-            Field("dte_floor", "剩余到期下限", "int", 5, unit="交易日", lo=2, hi=60,
-                  help="到这个剩余期限强制了结，避免被拖到到期"),
+                  help="relative to the entry price. 0.5 means leave after "
+                       "losing 50%"),
+            # Time-based exits are a **safety net** and apply in both modes: a
+            # rule written wrong must not be able to drag a position into
+            # expiry. So they carry no `depends`.
+            Field("hold_days", "max holding period", "int", 10,
+                  unit="trading days", lo=1, hi=120,
+                  help="a safety net; applies in rule mode too"),
+            Field("dte_floor", "minimum days to expiry", "int", 5,
+                  unit="trading days", lo=2, hi=60,
+                  help="force an exit at this remaining life, so nothing gets "
+                       "dragged into expiry"),
         ),
-        gap="逻辑完整，但数值在合成链上不可信；MAE 分布可用于定档，注意截断",
+        gap="the logic is complete, but the levels cannot be trusted on a "
+            "synthetic chain; the MAE distribution is what sets them, with "
+            "censoring in mind",
     ),
     Component(
-        "headwind", "⑤ headwind", "持仓期间",
-        role="论据**部分**失效时怎么办。止损是非黑即白，这里是中间地带："
-             "减仓、展期、对冲掉某一段风险。",
-        output="减仓 / 展期 / 维持",
+        "headwind", "(5) headwind", "while holding",
+        role="What to do when the thesis is **partly** broken. A stop is all or "
+             "nothing; this is the middle ground: reduce, roll, hedge off one "
+             "slice of the risk.",
+        output="reduce / roll / hold",
         status="partial",
         inputs=(
-            Field("review_code", "逐日复查", "code", "",
+            Field("review_code", "daily review", "code", "",
                   depends="exit_mode=rule",
-                  help="定义 review(ctx, pos)。③止盈 ④止损 ⑤减仓展期 都写在这里——"
-                       "它们本来就是同一个机制：每天对每个持仓问一遍。"
-                       "返回 Close / Reduce / Add 或 None。"),
+                  help="define review(ctx, pos). Take profit (3), stop loss (4) "
+                       "and reduce/roll (5) all live here — they were always one "
+                       "mechanism: ask the question of every position, every "
+                       "day. Return Close / Reduce / Add, or None."),
         ),
         origin="discovered",
-        gap="机制有了（逐日复查可以减仓 / 动态平仓），但**怎么找**还没有——"
-            "哪些信号代表论据开始失效，得从轨迹数据里研究出来；展期未实现",
+        gap="the mechanism exists (a daily review can reduce or close "
+            "dynamically) but **how to find the signals** does not — which "
+            "signals mean the thesis is starting to fail has to be researched "
+            "out of the trajectory data; rolling is unimplemented",
         how_to_find=(
-            "核心问题：**结果不好的那些持仓，事前有没有可观察的预警。**\n"
-            "1. 需要**逐日持仓轨迹**——只有入场和出场两个点，看不出中间发生了什么。"
-            "这是硬前置，没有它这项研究做不了\n"
-            "2. 把交易按最终结果分成两组，看持有第 k 天时两组的状态有没有分开："
-            "标的走势、IV 变化、delta 漂移、距止损多远、至今的 MFE/MAE\n"
-            "3. 对每个候选预警信号问：多早触发 · 命中率 · 误报率 · "
-            "照它做会怎样（对照不做）\n"
-            "4. **陷阱：止损会截断数据。** 止损设在 -50%，你永远看不到那些"
-            "本来会跌到 -80% 再反弹的路径。研究 headwind 必须先跑一版"
-            "**关掉主动出场**的，才能观察完整轨迹\n"
-            "工具：backtest.research.discovery.headwind_signals()（未实现，前置数据已就绪）"
+            "The core question: **for the positions that ended badly, was there "
+            "an observable warning beforehand.**\n"
+            "1. This needs **daily position trajectories** — with only an entry "
+            "and an exit point there is no way to see what happened in between. "
+            "It is a hard prerequisite; without it the study cannot be done\n"
+            "2. Split trades into two groups by final outcome and look at "
+            "whether their state on holding day k separates: the underlying's "
+            "path, the change in IV, delta drift, distance to the stop, MFE and "
+            "MAE so far\n"
+            "3. Of each candidate warning signal ask: how early does it fire - "
+            "hit rate - false-alarm rate - what acting on it would have done "
+            "(against not acting)\n"
+            "4. **The trap: a stop censors the data.** With the stop at -50% you "
+            "never see the paths that would have fallen to -80% and come back. "
+            "Studying headwind requires first running a version with **active "
+            "exits turned off**, to observe the complete trajectory\n"
+            "Tool: backtest.research.discovery.headwind_signals() "
+            "(unimplemented; the data it needs is already collected)"
         ),
     ),
     Component(
-        "position", "⑥ positioning", "一笔的决定",
-        role="决定「这个判断值多少钱」。**与 ④ 是同一个数的两面**："
-             "风险预算 ÷ 止损距离 = 规模。",
-        output="张数",
+        "position", "(6) positioning", "one trade",
+        role="Decides what this judgement is worth. **It is the same number as "
+             "(4) seen from the other side**: risk budget / stop distance = size.",
+        output="a number of contracts",
         status="partial",
         in_plan="Plan(risk_pct / notional / contracts)",
         inputs=(
-            Field("sizing_method", "怎么定规模", "select", "risk_pct", options=(
-                ("risk_pct", "每笔风险占权益固定比例"),
-                ("fixed", "固定张数"),
-                ("fixed_notional", "每笔固定金额"),
-                ("scale_by_vol", "按标的波动缩放"),
+            Field("sizing_method", "how size is set", "select", "risk_pct", options=(
+                ("risk_pct", "a fixed fraction of equity at risk per trade"),
+                ("fixed", "a fixed number of contracts"),
+                ("fixed_notional", "a fixed amount per trade"),
+                ("scale_by_vol", "scaled by the underlying's volatility"),
             )),
-            Field("risk_pct", "每笔风险", "ratio", 0.02, unit="× 权益", lo=0.001, hi=1,
-                  depends="sizing_method=risk_pct",
-                  help="止损被打掉时亏掉权益的这个比例。规模 = 风险预算 ÷ 止损距离"),
-            Field("quantity", "张数", "int", 1, lo=1, hi=50, depends="sizing_method=fixed",
-                  help="最好懂也最差：权益变化后风险占比会漂移，而你不会察觉"),
-            Field("notional", "每笔投入", "number", 5000, unit="美元", lo=100,
-                  depends="sizing_method=fixed_notional",
-                  help="投入固定但风险不固定——便宜的合约会买到很多张"),
-            Field("target_vol", "参照年化波动", "ratio", 0.20, lo=0.01, hi=2,
-                  depends="sizing_method=scale_by_vol",
-                  help="标的波动高于它就少买、低于它就多买"),
+            Field("risk_pct", "risk per trade", "ratio", 0.02, unit="x equity",
+                  lo=0.001, hi=1, depends="sizing_method=risk_pct",
+                  help="the fraction of equity lost if the stop is hit. "
+                       "Size = risk budget / stop distance"),
+            Field("quantity", "contracts", "int", 1, lo=1, hi=50,
+                  depends="sizing_method=fixed",
+                  help="the easiest to understand and the worst: as equity "
+                       "moves, the fraction at risk drifts and you will not "
+                       "notice"),
+            Field("notional", "amount per trade", "number", 5000, unit="USD",
+                  lo=100, depends="sizing_method=fixed_notional",
+                  help="the amount is fixed but the risk is not — a cheap "
+                       "contract buys a great many of them"),
+            Field("target_vol", "reference annual volatility", "ratio", 0.20,
+                  lo=0.01, hi=2, depends="sizing_method=scale_by_vol",
+                  help="buy less when the underlying is more volatile than "
+                       "this, more when it is less"),
         ),
-        gap="计划式下可按 risk_pct / notional 定；参数模式仍是独立的固定张数，会与止损打架",
+        gap="in plan mode size can follow risk_pct / notional; in parameter mode "
+            "it is still an independent fixed count, which fights the stop",
     ),
     Component(
-        "hedge", "⑦ hedge", "组合层",
-        role="决定「我不想承担的那部分风险怎么剥离」。**不属于任何单笔。**",
-        output="组合层的限额与对冲头寸",
+        "hedge", "(7) hedge", "portfolio",
+        role="Decides how to strip off the risk you do not want to carry. "
+             "**Belongs to no individual trade.**",
+        output="portfolio limits and hedge positions",
         status="partial",
-        gap="敞口限额、回撤熔断、压力测试、剔除对冲对照已有；界面未接；多腿未做",
+        gap="exposure limits, a drawdown circuit breaker, stress tests and a "
+            "hedge-excluded control all exist; none is wired to the interface; "
+            "multi-leg is not built",
     ),
 )
 
-#: 组件之间的牵制关系。**这些不是"设计上的耦合"，是交易本身就有的关系**——
-#: 系统把它们拆开，不代表它们真的独立。
+#: How the components constrain one another. **These are not couplings of the
+#: design, they are relationships the trade itself has** — the system splitting
+#: them apart does not make them independent.
 COUPLINGS: tuple[tuple[str, str, str], ...] = (
     ("stop_loss", "position",
-     "风险预算 ÷ 止损距离 = 规模。三个量定了两个，第三个就定了——分开填必然打架"),
+     "risk budget / stop distance = size. Fix two of the three and the third is "
+     "fixed; filling them in separately must produce a contradiction"),
     ("entry", "take_profit",
-     "入场理由决定什么算「兑现了」。理由换了，止盈位置跟着换"),
+     "the reason for entering decides what counts as paid. Change the reason and "
+     "the take-profit level moves with it"),
     ("entry", "stop_loss",
-     "入场理由决定什么算「我错了」。止损该放在论据失效的地方，不是某个固定百分比"),
+     "the reason for entering decides what counts as being wrong. A stop belongs "
+     "where the thesis fails, not at some fixed percentage"),
     ("setup", "position",
-     "regime 调制规模：同一个信号在不同环境下不该下一样的注"),
+     "regime modulates size: the same signal should not get the same bet in "
+     "different environments"),
     ("setup", "select",
-     "regime 调制选约：高波动环境下该选更久、更实值的合约"),
+     "regime modulates selection: a high-volatility environment calls for longer "
+     "and deeper in-the-money contracts"),
     ("stop_loss", "headwind",
-     "headwind 是止损的连续版本。只有止损意味着只能非黑即白地处理论据失效"),
+     "headwind is the continuous version of a stop. Having only a stop means a "
+     "failing thesis can only be handled as all or nothing"),
 )
 
-#: 四层的顺序与它们各自要什么。
+#: The four layers in order, and what each one is for.
 LAYERS: tuple[tuple[Layer, str], ...] = (
-    ("决定之前", "开关和倍率。不下单。"),
-    ("一笔的决定", "一个判断同时产出：买什么、买多少、怎么了结。"),
-    ("持仓期间", "逐日复查：论据还成立吗？不成立到什么程度？"),
-    ("组合层", "跨头寸的限额与对冲。"),
+    ("before deciding", "A switch and a multiplier. Places no order."),
+    ("one trade", "One judgement yields all of: what to buy, how much, how to exit."),
+    ("while holding", "A daily review: does the thesis still hold, and how far not?"),
+    ("portfolio", "Limits and hedges across positions."),
 )
 
 
 def as_form_spec() -> list[dict]:
-    """界面要的那份定义：四层、每层的组件、每个组件的录入字段。
+    """The definition the interface needs: four layers, their components, and
+    each component's input fields.
 
-    **界面从这里生成，不手写。** 这样"这个组件是干什么的"只有一处定义，
-    改了自然同步；手写的话两边一定会走样。
+    **The interface is generated from here, not hand-written.** That way "what
+    this component is for" is defined in exactly one place and stays in step;
+    hand-written, the two sides are certain to drift.
     """
     from dataclasses import asdict
 
@@ -324,31 +403,36 @@ def by_layer(layer: Layer) -> tuple[Component, ...]:
 
 
 def gaps() -> list[str]:
-    """当前撑不起来的组件。界面要让缺口一眼可见，而不是假装完整。
+    """The components that do not yet stand up. The interface has to make the
+    gaps visible rather than feign completeness.
 
-    从 :data:`COMPONENTS` 生成，不手写——手写的清单会在功能补上之后忘了改，
-    于是界面长期显示一条早就不成立的警告。
+    Generated from :data:`COMPONENTS`, not hand-written — a hand-written list
+    goes stale once the feature lands, and the interface then shows a warning
+    that stopped being true long ago.
     """
-    return [f"{c.name}：{c.gap}" for c in COMPONENTS if c.status != "done" and c.gap]
+    return [f"{c.name}: {c.gap}" for c in COMPONENTS if c.status != "done" and c.gap]
 
 
 def describe():
-    """七个组件的职责表。界面、文档、notebook 都读这一份。"""
+    """What each of the seven components is responsible for. The interface, the
+    docs and the notebook all read this one table."""
     import pandas as pd
 
     return pd.DataFrame([{
-        "组件": c.name, "层": c.layer, "在交易里决定什么": c.role,
-        "输出": c.output,
-        "状态": {"done": "✅", "partial": "⚠️", "missing": "○"}[c.status],
-        "欠什么": c.gap,
-    } for c in COMPONENTS]).set_index("组件")
+        "component": c.name, "layer": c.layer, "decides": c.role,
+        "output": c.output,
+        "status": {"done": "done", "partial": "partial", "missing": "missing"}[c.status],
+        "missing": c.gap,
+    } for c in COMPONENTS]).set_index("component")
 
 
 def describe_couplings():
-    """组件之间的牵制关系。看这张表就知道哪些参数不该分开填。"""
+    """How the components constrain one another. This table says which
+    parameters must not be filled in separately."""
     import pandas as pd
 
     names = {c.key: c.name for c in COMPONENTS}
     return pd.DataFrame([
-        {"甲": names[a], "乙": names[b], "关系": why} for a, b, why in COUPLINGS
+        {"one": names[a], "other": names[b], "relationship": why}
+        for a, b, why in COUPLINGS
     ])

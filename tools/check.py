@@ -1,28 +1,32 @@
-"""一条命令跑完所有守卫。
+"""Run every guard with one command.
 
-    python -m tools.check          # 全部
-    python -m tools.check --fast   # 跳过耗时的（测试套件、文档代码）
+    python -m tools.check          # all of them
+    python -m tools.check --fast   # skip the slow ones (test suite, doc examples)
 
-## 这个项目的规范只有一条
+## This project has exactly one convention
 
-**能被工具检查的才叫规范，写在文档里的只是愿望。**
+**A convention a tool can check is a convention. One that only lives in a
+document is a wish.**
 
-每一道守卫对应一类**静默失败**——跑完了、有结果、不报错，但结果是错的：
+Each guard answers to one shape of **silent failure** — it ran, it produced a
+result, it raised nothing, and the result is wrong:
 
 =====================  ====================================================
-守卫                    对应的失败形态
+Guard                   The failure shape it answers to
 =====================  ====================================================
-测试套件                行为回归
-依赖方向                定价越过数据层；未登记的模块绕过检查
-回归基线                改动带来的非预期结果变化
-发布完整性              本地有、git 里没有——别人 clone 下来缺文件
-前后端契约              界面要的字段后端不给；界面发的值后端不认
-文档代码                README 里的示例跑不通
-组件定义                表单字段不是 run() 的参数，填了没效果也不报错
+test suite              behavioural regression
+dependency direction    pricing escaping the data layer; unregistered modules
+regression baseline     an unintended change in results
+shipped completeness    present locally, absent from git — a clone is broken
+front/back contract     the UI needs a field the server never sends
+doc examples            the snippets in the README do not run
+component definitions   a form field that is not a run() parameter: no effect
+language                mixed-language identifiers that stop matching
 =====================  ====================================================
 
-新增一条规范的标准：**先有一个具体的错，再有守卫**。未发生过的风险不设防，
-否则守卫本身会变成没人看的噪音。
+The bar for a new convention: **a concrete failure first, then the guard.**
+Risks that have never materialised get no defence, or the guard itself becomes
+noise nobody reads.
 """
 
 from __future__ import annotations
@@ -35,21 +39,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: (名字, 命令, 是不是耗时)
+#: (name, command, is it slow)
 GUARDS: tuple[tuple[str, list[str], bool], ...] = (
-    ("依赖方向",   [sys.executable, "tools/check_deps.py"], False),
-    ("发布完整性", [sys.executable, "tools/check_shipped.py"], False),
-    ("组件定义",   [sys.executable, "-m", "pytest", "tests/test_components.py", "-q"], False),
-    ("前后端契约", [sys.executable, "tools/check_wiring.py"], False),
-    ("回归基线",   [sys.executable, "-m", "tools.baseline", "check"], False),
-    ("测试套件",   [sys.executable, "-m", "pytest", "tests", "-q"], True),
-    ("文档代码",   [sys.executable, "tools/check_docs.py"], True),
+    ("dependencies", [sys.executable, "tools/check_deps.py"], False),
+    ("shipped",      [sys.executable, "tools/check_shipped.py"], False),
+    ("language",     [sys.executable, "tools/check_language.py"], False),
+    ("components",   [sys.executable, "-m", "pytest", "tests/test_components.py", "-q"], False),
+    ("wiring",       [sys.executable, "tools/check_wiring.py"], False),
+    ("baseline",     [sys.executable, "-m", "tools.baseline", "check"], False),
+    ("test suite",   [sys.executable, "-m", "pytest", "tests", "-q"], True),
+    ("doc examples", [sys.executable, "tools/check_docs.py"], True),
 )
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="跑完所有守卫")
-    ap.add_argument("--fast", action="store_true", help="跳过耗时的守卫")
+    ap = argparse.ArgumentParser(description="run every guard")
+    ap.add_argument("--fast", action="store_true", help="skip the slow guards")
     args = ap.parse_args()
 
     results: list[tuple[str, bool, float, str]] = []
@@ -62,18 +67,19 @@ def main() -> int:
         tail = ""
         if not ok:
             lines = [x for x in (r.stdout + r.stderr).strip().splitlines() if x.strip()]
-            tail = lines[-1] if lines else "(无输出)"
+            tail = lines[-1] if lines else "(no output)"
         results.append((name, ok, time.time() - t0, tail))
-        print(f"  {'✓' if ok else '✗'} {name:10s} {time.time() - t0:5.1f}s"
+        print(f"  {'OK  ' if ok else 'FAIL'} {name:13s} {time.time() - t0:5.1f}s"
               + (f"   {tail[:70]}" if tail else ""))
 
     bad = [n for n, ok, _, _ in results if not ok]
     print()
     if bad:
-        print(f"✗ {len(bad)} 道守卫没过：{'、'.join(bad)}")
-        print("  看上面的提示；要看完整输出就单独跑那一条。")
+        print(f"FAIL  {len(bad)} guard(s) did not pass: {', '.join(bad)}")
+        print("  See the hints above; run one on its own for its full output.")
         return 1
-    print(f"✓ {len(results)} 道守卫全过" + ("（--fast，跳过了耗时的）" if args.fast else ""))
+    print(f"OK  all {len(results)} guards passed"
+          + ("  (--fast: slow ones skipped)" if args.fast else ""))
     return 0
 
 

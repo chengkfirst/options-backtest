@@ -1,17 +1,21 @@
-"""Black-Scholes 定价与希腊字母。
+"""Black-Scholes prices and greeks.
 
-**这是合成链的脚手架，不是回测系统的一层。** 它存在的理由几乎全是"没有真实期权
-数据"：商业数据源直接提供报价与希腊字母，届时这里只剩盈亏归因在数据商缺字段时的
-回退用途。因此它位于 ``data/synthetic/`` 之下，``selection`` 与 ``engine``
-不得直接导入——上层消费的是链上的字段，不关心那些数字是观测还是模型生成。
+**This is a substitute for data, not a layer of the backtest.** Nearly its whole
+reason to exist is the absence of real option data: a commercial vendor supplies
+quotes and greeks directly, and what remains here is a fallback for the fields a
+vendor does not fill. Hence the rule that ``selection`` and ``engine`` must not
+import it — the layers above consume the chain's columns and do not care whether
+those numbers were observed or modelled.
 
-到期时间 ``t`` 一律是**日历日 / 365** 的年化值（见 config.TimeConventions）。
+Time to expiry ``t`` is always in years on the **calendar/365** convention
+(see config.TimeConventions).
 
-
-**它为什么不在 ``data/synthetic/`` 里**：定价是市场模型，不是合成链的私产。
-合成链用它造价格，文件源用它在供应商不给 greeks 时补推，归因用它校验。
-放进合成链内部会暗示"拿掉合成链就没有定价"——那是错的，也会让替换数据源
-这件事看起来比实际更危险。
+**Why it is not inside ``data/synthetic/``**: pricing is a market model, not the
+synthetic chain's private property. The synthetic chain uses it to make prices,
+the file source uses it to fill in greeks a vendor omits, attribution uses it to
+cross-check. Putting it inside the synthetic chain would imply that removing the
+synthetic chain removes pricing — which is false, and would make swapping the
+data source look riskier than it is.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from backtest.maybe import Maybe
 from backtest.types import Right
 
 _EPS = 1e-12
-#: 隐含波动率反解的搜索区间。
+#: Search interval when solving for implied volatility.
 IV_BOUNDS = (1e-6, 5.0)
 
 
@@ -39,16 +43,19 @@ def _intrinsic(s, k, right: Right):
 
 
 def bs_price(s, k, t, r, sigma, q=0.0, right: Right = Right.CALL):
-    """欧式期权理论价。支持标量与数组。
+    """Theoretical price of a European option. Scalars and arrays both work.
 
-    两个边界情形被显式处理，而不是任其产生 NaN 或除零：
+    Two boundary cases are handled explicitly rather than left to produce NaN or
+    divide by zero:
 
-    - ``t == 0``：退化为内在价值。
-    - ``sigma == 0``：退化为按无风险利率贴现的确定性收益。
+    - ``t == 0``: collapses to intrinsic value.
+    - ``sigma == 0``: collapses to the certain payoff discounted at the
+      risk-free rate.
     """
     s, k, t, r, sigma, q = map(np.asarray, (s, k, t, r, sigma, q))
     degenerate = (t <= _EPS) | (sigma <= _EPS)
-    # 在退化处填入安全值再计算，避免 log/除零产生警告；结果随后被 where 丢弃
+    # Substitute safe values at the degenerate points so log and division do
+    # not warn; those results are discarded by the `where` below.
     t_safe = np.where(t <= _EPS, 1.0, t)
     sigma_safe = np.where(sigma <= _EPS, 0.1, sigma)
 
@@ -67,10 +74,10 @@ def bs_price(s, k, t, r, sigma, q=0.0, right: Right = Right.CALL):
 
 
 def greeks(s, k, t, r, sigma, q=0.0, right: Right = Right.CALL) -> dict[str, np.ndarray]:
-    """delta / gamma / vega / theta。
+    """delta / gamma / vega / theta.
 
-    ``vega`` 为波动率变动 1.00（即 100 个波动率点）对应的价格变化；
-    ``theta`` 为每年的时间衰减，按日历日口径。
+    ``vega`` is the price change for a 1.00 move in volatility (100 vol points);
+    ``theta`` is decay per year, on the calendar-day convention.
     """
     s, k, t, r, sigma, q = map(np.asarray, (s, k, t, r, sigma, q))
     degenerate = (t <= _EPS) | (sigma <= _EPS)
@@ -113,7 +120,8 @@ def greeks(s, k, t, r, sigma, q=0.0, right: Right = Right.CALL) -> dict[str, np.
 
 
 def price_bounds(s: float, k: float, t: float, r: float, q: float, right: Right) -> tuple[float, float]:
-    """理论价的上下界。反解隐含波动率前用它判断给定价格是否有解。"""
+    """Lower and upper bounds on the theoretical price. Used before solving for
+    implied volatility to tell whether a given price admits a solution."""
     disc_s = s * np.exp(-q * t)
     disc_k = k * np.exp(-r * t)
     if right is Right.CALL:
@@ -130,21 +138,22 @@ def implied_vol(
     q: float = 0.0,
     right: Right = Right.CALL,
 ) -> Maybe[float]:
-    """由市场价格反解隐含波动率。
+    """Solve for implied volatility from a market price.
 
-    无解或未收敛时返回**显式缺失**，而非抛异常或用零冒充解——一个被当成 0 的
-    隐含波动率会让下游选出完全错误的合约，且不会报任何错。
+    With no solution, or no convergence, this returns an **explicit absence**
+    rather than raising or passing zero off as an answer — an implied volatility
+    read as 0 picks a completely wrong contract and raises nothing.
     """
     if t <= _EPS:
-        return Maybe.missing("已到期，无法反解隐含波动率")
+        return Maybe.missing("already expired; implied volatility is undefined")
     if price <= 0:
-        return Maybe.missing("价格非正")
+        return Maybe.missing("price is not positive")
 
     low, high = price_bounds(s, k, t, r, q, right)
     if price < low - 1e-9:
-        return Maybe.missing("价格低于内在价值下界")
+        return Maybe.missing("price is below the intrinsic-value floor")
     if price > high + 1e-9:
-        return Maybe.missing("价格高于理论上界")
+        return Maybe.missing("price is above the theoretical ceiling")
 
     def objective(sigma: float) -> float:
         return float(bs_price(s, k, t, r, sigma, q, right)) - price
@@ -152,11 +161,11 @@ def implied_vol(
     lo, hi = IV_BOUNDS
     f_lo, f_hi = objective(lo), objective(hi)
     if f_lo > 0 or f_hi < 0:
-        return Maybe.missing("目标价格落在可搜索波动率区间之外")
+        return Maybe.missing("the target price lies outside the searchable vol range")
     try:
         root = brentq(objective, lo, hi, xtol=1e-10, rtol=1e-12, maxiter=200)
     except (ValueError, RuntimeError):
-        return Maybe.missing("数值反解未收敛")
+        return Maybe.missing("the numerical solve did not converge")
     return Maybe.some(float(root))
 
 
@@ -167,11 +176,15 @@ def has_early_exercise_value(
     intrinsic: float,
     dividend_in_window: float,
 ) -> bool:
-    """判断深度实值看涨在除息前是否存在提前行权价值。
+    """Whether a deep in-the-money call has early-exercise value before a
+    dividend.
 
-    欧式模型用于美式期权是**显式近似**。对虚值与平值期权误差在千分之几量级，
-    但实值看涨在除息日前、时间价值低于该次分红时，欧式价确实是错的。这里不改模型，
-    只把这种情形标出来，使它不会被默认当作公允价值。
+    Using a European model for an American option is an **explicit
+    approximation**. For out-of-the-money and at-the-money options the error is
+    on the order of a tenth of a percent, but for an in-the-money call before an
+    ex-dividend date, with time value below that dividend, the European price is
+    genuinely wrong. This does not change the model; it flags the case so the
+    price is not taken as fair by default.
     """
     if right is not Right.CALL or dividend_in_window <= 0:
         return False
