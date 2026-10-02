@@ -1,23 +1,25 @@
-/* bench.js — 回测台的接线
+/* bench.js — the bench's wiring
  *
- * 职责：探测服务、收表单、发请求、存运行记录、把结果交给 charts.js 画。
- * 不含任何统计公式（在 core.js）和绘图代码（在 charts.js）。
+ * Its job: probe the service, collect the form, send the request, keep the run records,
+ * and hand results to charts.js. It contains no statistical formula (those are in
+ * core.js) and no drawing code (that is in charts.js).
  *
- * 一条贯穿全文的规矩：**不允许静默失败**。任何出错、任何被跳过的东西都经由
- * notice() 写到页面顶部的问题带——浏览器里看到一片空白却不知道为什么，
- * 比直接崩还糟。所以本文件没有空的 catch，也没有不声不响的提前返回。
+ * One rule runs through the whole file: **no silent failure**. Every error and every
+ * skipped thing goes through notice() into the problem strip at the top of the page —
+ * seeing a blank in the browser without knowing why is worse than a crash. So there is
+ * no empty catch here, and no quiet early return.
  */
 "use strict";
 
-let META = null;          // /api/meta 的内容
-let LIVE = false;         // 服务在不在
-let RUNS = [];            // 跑过的每一次
-let CURRENT = null;       // 当前查看哪一次
-let BASE = null;          // 钉住的基准运行 id（= 服务端返回的 id 字段）
-let RAW = [], VIEW = [];  // 当前这次的交易行（charts.js 读这两个）
+let META = null;          // the contents of /api/meta
+let LIVE = false;         // is the service up
+let RUNS = [];            // every run so far
+let CURRENT = null;       // which one is being viewed
+let BASE = null;          // the pinned baseline run id (the server's `id` field)
+let RAW = [], VIEW = [];  // this run's trade rows (charts.js reads these two)
 let ask = null, ctl = null;
 
-/* ── 问题带 ── */
+/* ── the problem strip ── */
 const ISSUES = [];
 function notice(msg){
   if(!ISSUES.includes(msg)) ISSUES.push(msg);
@@ -28,16 +30,16 @@ function paintIssues(){
   const box = $("issues");
   box.hidden = ISSUES.length === 0;
   box.innerHTML = ISSUES.length
-    ? `<b>${ISSUES.length} 条提示</b><ul>${ISSUES.map(m =>
+    ? `<b>${ISSUES.length} notice${ISSUES.length>1?"s":""}</b><ul>${ISSUES.map(m =>
         `<li>${String(m).replace(/</g,"&lt;").replace(/\n/g,"<br>")}</li>`).join("")}</ul>`
     : "";
 }
 window.addEventListener("error", e =>
-  notice(`页面出错：${e.message}（${(e.filename||"").split("/").pop()}:${e.lineno}）`));
+  notice(`page error: ${e.message} (${(e.filename||"").split("/").pop()}:${e.lineno})`));
 window.addEventListener("unhandledrejection", e =>
-  notice(`异步出错：${e.reason?.message || e.reason}`));
+  notice(`async error: ${e.reason?.message || e.reason}`));
 
-/* ── 启动：探测服务 ── */
+/* ── startup: probe the service ── */
 (async function boot(){
   try{
     const r = await fetch("/api/health");
@@ -45,15 +47,15 @@ window.addEventListener("unhandledrejection", e =>
     LIVE = true;
   }catch(e){
     LIVE = false;
-    $("mode").textContent = "离线 — 没连上本地服务，跑不了回测";
+    $("mode").textContent = "offline — no local service, so nothing can be run";
     $("mode").className = "mode offline";
     $("run").disabled = true;
-    $("runHint").innerHTML = `先在终端启动服务：<br><code>/opt/anaconda3/bin/python3 app/server.py</code>`;
-    notice(`没连上本地服务（${e.message}）。在项目目录下运行 `
-      + `/opt/anaconda3/bin/python3 app/server.py，然后刷新本页。`);
+    $("runHint").innerHTML = `Start the service in a terminal first:<br><code>/opt/anaconda3/bin/python3 app/server.py</code>`;
+    notice(`could not reach the local service (${e.message}). Run `
+      + `/opt/anaconda3/bin/python3 app/server.py in the project directory, then reload.`);
     return;
   }
-  $("mode").textContent = "已连上本地服务";
+  $("mode").textContent = "connected to the local service";
   $("mode").className = "mode live";
   await loadMeta();
 })();
@@ -64,24 +66,25 @@ async function loadMeta(){
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
     META = await r.json();
   }catch(e){
-    notice(`取回可用信号失败：${e.message}。界面仍可用，但预设和提示会缺。`);
+    notice(`could not fetch the available signals: ${e.message}. The interface still works, but the defaults and hints will be missing.`);
     return;
   }
   $("symbol").innerHTML = META.symbols.map(s =>
     `<option${s === META.defaults.symbol ? " selected" : ""}>${s}</option>`).join("");
-  $("sigCount").textContent = `${(META.signal_docs || []).length} 个`;
+  $("sigCount").textContent = `${(META.signal_docs || []).length}`;
   $("sigSearch").addEventListener("input", renderSignalRef);
   renderSignalRef();
   $("planCode").value = META.defaults.plan_code;
   $("planHelpBody").textContent = META.plan_help;
   $("signalsCode").value = META.defaults.signals_code;
-  switchMode();                     // 生成七个组件的表单
+  switchMode();                     // generate the seven components' forms
   fillDefaults();
   updateSpanHint();
 }
 
-/* 后端给的默认值填进生成出来的控件里。代码类字段（entry_code / review_code）
-   的模板也在这里灌——它们的默认内容在后端，不在 HTML 里。 */
+/* Fill the generated controls with the backend's defaults. The code fields
+   (entry_code / review_code) get their templates here too — their default content lives
+   in the backend, not in the HTML. */
 function fillDefaults(){
   const d = META.defaults || {};
   for(const [k, v] of Object.entries(d)){
@@ -94,9 +97,10 @@ function fillDefaults(){
   bindFields();
 }
 
-/* ── 信号参考 ──────────────────────────────────────────
-   按类别分组，带含义与单位，可搜索，点一下插入光标处。
-   只列名字没有信息量——使用者仍需去猜 rv_20 按什么口径年化。            */
+/* ── the signal reference ──────────────────────────────
+   Grouped by family, with meanings and units, searchable, and a click inserts at the
+   cursor. Names alone carry no information — the user would still have to guess what
+   convention rv_20 is annualised on. */
 function renderSignalRef(){
   const docs = META.signal_docs || [];
   if(!docs.length){ $("sigRef").innerHTML = ""; return; }
@@ -107,7 +111,7 @@ function renderSignalRef(){
   for(const d of docs.filter(hit)) (groups[d["family"]] ??= []).push(d);
 
   if(!Object.keys(groups).length){
-    $("sigRef").innerHTML = `<p class="hint">没有匹配 “${q}” 的信号。</p>`;
+    $("sigRef").innerHTML = `<p class="hint">No signal matches “${q}”.</p>`;
     return;
   }
   $("sigRef").innerHTML = Object.entries(groups).map(([fam, list]) => `
@@ -127,10 +131,12 @@ function renderSignalRef(){
     b.addEventListener("click", () => insertSignal(b.dataset.name)));
 }
 
-/* 插到当前正在编辑的那个框的光标处，而不是覆盖整行——覆盖会丢掉已经写好的条件。 */
+/* Insert at the cursor of whichever box is being edited, rather than replacing the
+   line — replacing would discard a condition already written. */
 function insertSignal(name){
-  // 插到「当前正在编辑的那个框」里。表单是生成的，所以按焦点找，
-  // 而不是按固定 id——后者在组件改动后会指向一个已经不存在的元素。
+  // Into whichever box has focus. The form is generated, so this follows focus rather
+  // than a fixed id — a fixed id would point at an element that no longer exists after
+  // the components change.
   const el = document.activeElement?.matches?.("textarea, input[type=text]")
     ? document.activeElement
     : ($("f_entry_code") || $("planCode") || $("f_entry"));
@@ -141,10 +147,11 @@ function insertSignal(name){
   el.selectionStart = el.selectionEnd = a + name.length;
 }
 
-/* ── 七个组件的表单：从后端那份定义生成 ─────────────────────
-   组件是什么、要填什么，唯一定义在 backtest/components.py。
-   界面照着画，不手写——两处定义必然走样。                            */
-const STATUS_MARK = { done: "", partial: "部分", missing: "未做" };
+/* ── the seven components' forms, generated from the backend definition ───────
+   What a component is and what it asks for is defined once, in
+   backtest/components.py. The interface draws from it rather than hand-coding — two
+   definitions always drift. */
+const STATUS_MARK = { done: "", partial: "partial", missing: "not built" };
 
 function renderComponents(){
   const planMode = strategyMode() === "plan";
@@ -159,9 +166,10 @@ function renderComponents(){
 }
 
 function compBlock(c, planMode){
-  // 界面只给控件和取值。"这个组件在交易里干什么"、"为什么止损和仓位会打架"
-  // 这类推理属于文档和代码注释——每次打开都念一遍，读两遍就开始跳过，
-  // 而且把真正要看的数字挤走了。需要时鼠标悬停看 title。
+  // The interface gives controls and values. Reasoning like "what this component
+  // decides in a trade" or "why the stop and the size fight" belongs in the docs and
+  // the code comments — repeated on every open it gets skipped after twice, and it
+  // squeezes out the numbers that matter. Hover for the title when needed.
   const taken = planMode && c.in_plan;
   const body = taken
     ? `<p class="comp-note">→ <code>${c.in_plan}</code></p>`
@@ -176,12 +184,12 @@ function compBlock(c, planMode){
     </article>`;
 }
 
-/* 没有控件的组件要说一句为什么——但一句就够，不是一段。
-   完整的"缺什么、怎么找"在 需求.md 与 components.py 里。 */
+/* A component with no controls says one line about why — one line, not a paragraph.
+   What is missing and how to find it lives in requirements.md and components.py. */
 function shortGap(c){
   const g = (c.gap || "").replace(/\*\*/g, "");
-  const first = g.split(/[；;。]/)[0] || "暂无可配置项";
-  return first.length > 26 ? first.slice(0, 26) + "…" : first;
+  const first = g.split(/[;.]/)[0] || "nothing configurable yet";
+  return first.length > 52 ? first.slice(0, 52) + "…" : first;
 }
 
 function fieldHtml(f){
@@ -208,8 +216,9 @@ function fieldHtml(f){
     </div>`;
 }
 
-/* depends：只显示当前取值下用得上的字段。全显示的话，后端分不清
-   "没填"和"填了但这个方法用不上"。 */
+/* depends: show only the fields the current values make use of. Showing all of them
+   leaves the backend unable to tell "not filled in" from "filled in but this method does
+   not use it". */
 function bindFields(){
   const apply = () => {
     document.querySelectorAll("[data-depends]").forEach(el => {
@@ -247,16 +256,16 @@ document.querySelectorAll("[data-strat]").forEach(tab =>
 const esc = t => String(t).replace(/</g, "&lt;");
 const mark = t => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>");
 
-/* ── 表单 ── */
+/* ── the form ── */
 function updateSpanHint(){
   const f = $("form");
   const a = new Date(f.start.value), b = new Date(f.end.value);
   if(isNaN(a) || isNaN(b)) { $("spanHint").textContent = ""; return; }
   const years = (b - a) / 31557600000;
-  if(years <= 0){ $("spanHint").textContent = "起始日晚于结束日，跑不了。"; return; }
+  if(years <= 0){ $("spanHint").textContent = "the start is after the end, so this cannot run."; return; }
   $("spanHint").textContent =
-    `约 ${years.toFixed(1)} 年，预计 ${Math.max(3, Math.round(years * 4))} 秒。`
-    + (years > 6 ? " 调参阶段建议先用短区间，定下来再跑全程。" : "");
+    `about ${years.toFixed(1)} years, roughly ${Math.max(3, Math.round(years * 4))} seconds.`
+    + (years > 6 ? " While tuning, use a shorter range first and run the whole period once it is settled." : "");
 }
 ["start","end"].forEach(n => $("form")[n].addEventListener("change", updateSpanHint));
 
@@ -264,14 +273,16 @@ $("engine").addEventListener("change", updateEngineHint);
 function updateEngineHint(){
   const driven = $("engine").value === "event_driven";
   $("concurrentWrap").hidden = !driven;
-  // 两个引擎跑同一套规则，笔数通常对不上——事件驱动受并发上限和现金约束，信号来了
-  // 也可能开不了仓。这是对的，但看到"135 笔 vs 88 笔"的人第一反应是哪个引擎错了，
-  // 所以必须在选引擎的地方就说清楚，而不是让人自己猜。
+  // The two engines run the same rules and usually disagree on the trade count — the
+  // event-driven one is bound by the concurrency limit and by cash, so a signal may
+  // arrive with no room to open. That is correct, but the first reaction to "135 vs 88"
+  // is to wonder which engine is wrong, so it has to be said where the engine is chosen
+  // rather than left to be guessed.
   $("engineHint").innerHTML = driven
-    ? "逐日推进，知道任何时刻账上有多少钱。<b>有权益曲线、回撤、夏普</b>，慢一些。"
-      + "<br>受并发上限和现金约束，<b>笔数通常少于成交表</b>——信号来了也可能开不了仓。"
-    : "各笔独立计算，快两个数量级，适合扫参数。<b>没有权益曲线，因此没有回撤和夏普。</b>"
-      + "<br>不受资金约束，枚举所有满足条件的机会，<b>笔数是上限</b>，不是实际能做到的。";
+    ? "Steps day by day and knows how much money is in the account at any moment. <b>Has an equity curve, drawdown and Sharpe</b>, and is slower."
+      + "<br>Bound by the concurrency limit and by cash, so its <b>trade count is usually below the trade table's</b> — a signal can arrive with no room to open."
+    : "Computes each trade independently, two orders of magnitude faster, and good for sweeps. <b>No equity curve, so no drawdown and no Sharpe.</b>"
+      + "<br>Unconstrained by capital, it enumerates every qualifying opportunity, so its <b>trade count is an upper bound</b>, not what could actually be done.";
 }
 updateEngineHint();
 
@@ -282,16 +293,18 @@ $("planHelp").addEventListener("click", () => {
   const b = $("planHelpBody"); b.hidden = !b.hidden;
 });
 
-/* 计划模式只能配事件驱动。与其让人点了跑回测才吃一个错误，不如当场说清楚，
-   并且自动把引擎切过去——这不是"帮你做决定"，是这两个选项本来就绑死的。 */
+/* Plan mode only works with the event-driven engine. Rather than letting someone hit
+   an error after pressing run, say so at once and switch the engine — this is not
+   deciding for the user, these two options were always bound together. */
 
 function formPayload(){
   const f = $("form"), o = {};
   for(const el of f.elements) if(el.name) o[el.name] = el.value;
   o.strategy_mode = strategyMode();
-  // 入场：代码框有内容就按代码走，否则按表达式
-  // entry_mode 现在是表单里的真字段（二选一），不再靠"代码框空不空"来猜。
-  // 仓位：只发当前方法用得上的参数。全发的话后端分不清"没填"和"用不上"
+  // entry_mode is a real field on the form, so this no longer guesses from whether the
+  // code box is empty.
+  // Sizing: send only the parameters the current method uses. Sending all of them leaves
+  // the backend unable to tell "not filled in" from "not used".
   const m = CONTRACT.sizing_methods.includes(o.sizing_method) ? o.sizing_method : "risk_pct";
   o.sizing = { method: m, ...(
     m === "risk_pct"       ? { risk_pct: +o.risk_pct } :
@@ -302,16 +315,16 @@ function formPayload(){
 }
 
 
-/* ── 跑 ── */
+/* ── running ── */
 $("run").addEventListener("click", runBacktest);
 async function runBacktest(){
-  if(!LIVE){ notice("没连上本地服务，跑不了回测。"); return; }
+  if(!LIVE){ notice("no local service, so nothing can be run."); return; }
   clearIssues();
   const btn = $("run");
-  btn.disabled = true; btn.classList.add("busy"); btn.textContent = "跑着…";
+  btn.disabled = true; btn.classList.add("busy"); btn.textContent = "running…";
   const note = document.createElement("div");
   note.className = "busy-note";
-  note.innerHTML = `<span class="spin"></span><span>正在跑回测。第一次拉数据会慢些，之后走缓存。</span>`;
+  note.innerHTML = `<span class="spin"></span><span>Running. The first fetch is slower; after that it is cached.</span>`;
   $("issues").after(note);
 
   const t0 = performance.now();
@@ -320,7 +333,7 @@ async function runBacktest(){
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify(formPayload()),
     });
-    const data = await r.json().catch(() => ({error:`服务返回的不是 JSON（HTTP ${r.status}）`}));
+    const data = await r.json().catch(() => ({error:`the service's response was not JSON (HTTP ${r.status})`}));
     if(!r.ok || data.error){
       notice(data.detail ? `${data.error}\n\n${data.detail}` : (data.error || `HTTP ${r.status}`));
       return;
@@ -330,28 +343,29 @@ async function runBacktest(){
     BASE = BASE ?? data.id;
     show(data.id);
     if(!data.rows.length)
-      notice("这次没有产生任何交易。入场条件可能太严，或者区间内选不到合约。");
+      notice("this run produced no trades. The entry condition may be too strict, or nothing in the range could be selected.");
   }catch(e){
-    notice(`请求失败：${e.message}。服务可能已经停了——回终端看看。`);
+    notice(`the request failed: ${e.message}. The service may have stopped — check the terminal.`);
   }finally{
     note.remove();
-    btn.disabled = false; btn.classList.remove("busy"); btn.textContent = "跑回测";
-    $("runHint").textContent = `上次用时 ${((performance.now()-t0)/1000).toFixed(1)} 秒。`;
+    btn.disabled = false; btn.classList.remove("busy"); btn.textContent = "run";
+    $("runHint").textContent = `last run took ${((performance.now()-t0)/1000).toFixed(1)} seconds.`;
   }
 }
 
-/* ── 选合约参考表 ──────────────────────────────────────────
-   四个量在「虚值 × 期限」这个面上的形状，就是选合约直觉的内容。
-   看不见形状只能凭记忆猜。数字来自当日真实链，不是公式贴的静态表。   */
+/* ── the contract-selection reference ─────────────────────
+   The shape of four quantities over the moneyness x tenor surface is the substance of
+   the intuition about choosing a contract. Without seeing the shape there is only
+   memory. The numbers come from that day's real chain, not a static formula table. */
 const TRADEOFF_GRIDS = [
-  {key:"theta_pct_day",  title:"每天烧掉权利金的",  fmt:v=>(v*100).toFixed(1)+"%",
-   why:"标的不动的成本。短期虚值是断崖", worse:"high"},
-  {key:"breakeven_move", title:"回本需要动",        fmt:v=>(v*100).toFixed(1)+"%",
-   why:"朝论点方向。比这个小的论点撑不起这张合约", worse:"high"},
-  {key:"delta_now",      title:"现在的 delta",       fmt:v=>v.toFixed(2),
-   why:"入场时的方向暴露",               worse:null},
-  {key:"delta_if_move",  title:"动 3% 十天后 delta", fmt:v=>v.toFixed(2),
-   why:"论点兑现后暴露变多少 ← 比左边重要", worse:null},
+  {key:"theta_pct_day",  title:"premium burnt per day",  fmt:v=>(v*100).toFixed(1)+"%",
+   why:"the cost of the underlying not moving; short-dated and out of the money is a cliff", worse:"high"},
+  {key:"breakeven_move", title:"move needed to break even", fmt:v=>(v*100).toFixed(1)+"%",
+   why:"in the direction of the thesis; a smaller thesis cannot carry this contract", worse:"high"},
+  {key:"delta_now",      title:"delta now",       fmt:v=>v.toFixed(2),
+   why:"the directional exposure at entry",       worse:null},
+  {key:"delta_if_move",  title:"delta after 3% and ten days", fmt:v=>v.toFixed(2),
+   why:"what the exposure becomes once the thesis plays out <- more important than the column to its left", worse:null},
 ];
 
 async function loadTradeoff(){
@@ -359,7 +373,7 @@ async function loadTradeoff(){
   const url = `/api/tradeoff?symbol=${encodeURIComponent(f.symbol.value)}`
             + `&date=${encodeURIComponent(f.end.value)}`
             + `&right=${(f.right?.value || "call").toUpperCase()[0]}`;
-  $("tradeoffBody").innerHTML = `<p class="hint">算着…</p>`;
+  $("tradeoffBody").innerHTML = `<p class="hint">computing…</p>`;
   try{
     const r = await fetch(url);
     const d = await r.json();
@@ -368,14 +382,15 @@ async function loadTradeoff(){
     $("tradeoffBody").innerHTML = TRADEOFF_GRIDS.map(g =>
       gridTable(g, d.grids[g.key])).join("");
   }catch(e){
-    $("tradeoffBody").innerHTML = `<p class="hint">取不到：${esc(e.message)}</p>`;
+    $("tradeoffBody").innerHTML = `<p class="hint">could not fetch it: ${esc(e.message)}</p>`;
   }
 }
 
 function gridTable(meta, g){
   if(!g || !g.rows.length) return "";
-  // 颜色只编码"越大越差"的量。delta 类不上色——大小本身没有好坏，
-  // 上了色等于在暗示一个并不存在的判断。
+  // Colour only encodes quantities where larger is worse. The delta columns are not
+  // shaded — larger is neither good nor bad there, and shading would imply a judgement
+  // that does not exist.
   const flat = g.rows.flatMap(r => r.values).filter(v => v != null);
   const lo = Math.min(...flat), hi = Math.max(...flat);
   const shade = v => {
@@ -385,7 +400,7 @@ function gridTable(meta, g){
   };
   return `<div class="to-grid">
     <div class="to-h">${meta.title}<span class="to-why">${meta.why}</span></div>
-    <table><thead><tr><th>虚值</th>${g.cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead>
+    <table><thead><tr><th>moneyness</th>${g.cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead>
     <tbody>${g.rows.map(r => `<tr><th>${r.label}</th>${
       r.values.map(v => `<td${shade(v)}>${v == null ? "—" : meta.fmt(v)}</td>`).join("")
     }</tr>`).join("")}</tbody></table></div>`;
@@ -395,9 +410,10 @@ $("tradeoffRef").addEventListener("toggle", e => {
   if(e.target.open && !$("toWhen").textContent) loadTradeoff();
 });
 
-/* ── 异常扫描 ──────────────────────────────────────────────
-   规则扫出来的，不是模型"找找看"。没触发就整块不显示——
-   硬凑的洞察是噪音，噪音会让真的警告也被跳过。                    */
+/* ── the anomaly scan ─────────────────────────────────────
+   Found by rules, not by asking a model to look. Nothing triggered hides the whole
+   block — an insight forced out of nothing is noise, and noise makes real warnings get
+   skipped. */
 function renderAnomalies(found){
   $("anomSec").hidden = !found.length;
   if(!found.length) return;
@@ -408,17 +424,18 @@ function renderAnomalies(found){
     </div>`).join("");
 }
 
-/* ── 本次运行的诊断 ────────────────────────────────────────
-   与组件缺口的区别：这些每次都不一样，而且可查。只给个次数没用——
-   "候选被丢弃 45 次"不告诉你该不该在意；要看到原因分布才知道是信号太严
-   还是链上根本选不出合约。                                            */
+/* ── this run's diagnostics ───────────────────────────────
+   Unlike the component gaps, these differ every run and can be inspected. A count alone
+   is useless — "45 candidates dropped" does not say whether to care; the distribution of
+   reasons is what distinguishes a signal that is too strict from a chain that holds
+   nothing qualifying. */
 const DIAG_LABEL = {
-  candidate_dropped: "候选被丢弃",
-  selection_failed:  "选不出合约",
-  not_tradable:      "无法成交",
-  quote_missing:     "盯市缺报价",
-  range_truncated:   "区间被截断",
-  fill_deferred:     "成交顺延",
+  candidate_dropped: "candidate dropped",
+  selection_failed:  "nothing selectable",
+  not_tradable:      "untradable",
+  quote_missing:     "no quote to mark against",
+  range_truncated:   "range truncated",
+  fill_deferred:     "fill deferred",
 };
 function renderDiagnostics(diags){
   const box = $("diagSec");
@@ -435,20 +452,24 @@ function renderDiagnostics(diags){
     </details>`).join("");
 }
 
-/* ── 前后端契约 ─────────────────────────────────────────────
-   界面需要后端提供哪些字段，在这里**显式声明**。两边都用这份声明：
+/* ── the front/back contract ──────────────────────────────
+   Which fields the interface needs from the backend is **declared explicitly** here, and
+   both sides use the declaration:
 
-   - 运行时：收到响应后核对，缺了立刻报出来，而不是让 undefined
-     一路渗进渲染函数（后端返回 id、前端读 run_id 时，RUNS.find() 会因为
-     两边都是 undefined 反而"匹配上"，表面还能用）
-   - 提交前：tools/check_wiring.py 拿真实响应核对这份声明
+   - at runtime: the response is checked against it and anything missing is reported at
+     once, rather than letting undefined seep into the render functions (when the backend
+     returned `id` and the front end read `run_id`, RUNS.find() "matched" because both
+     sides were undefined, and it still looked like it worked)
+   - before committing: tools/check_wiring.py checks the declaration against a real
+     response
 
-   扫 JS 源码猜字段名是不可靠的（漏掉 RUNS[0].x 这类写法），所以用声明。 */
+   Scanning the JS source to guess field names is unreliable (it misses forms like
+   RUNS[0].x), hence the declaration. */
 const CONTRACT = {
   run: ["id", "rows", "config", "engine", "started", "seconds",
         "n_trades", "win_rate", "net_pnl", "boundary", "problems",
         "diagnostics", "anomalies", "manifest", "events", "synthetic"],
-  // 只有事件驱动引擎才有，成交表下缺失是正常的
+  // Only the event-driven engine has these; their absence under the trade table is normal
   run_optional: ["equity", "equity_metrics", "scenarios", "attribution"],
   meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps"],
   sizing_methods: ["fixed", "risk_pct", "fixed_notional", "scale_by_vol"],
@@ -457,25 +478,25 @@ const CONTRACT = {
 function checkContract(record){
   const missing = CONTRACT.run.filter(k => !(k in record));
   if(missing.length)
-    notice(`后端响应缺字段：${missing.join("、")}。界面会有地方显示不出来——这是前后端没同步。`);
+    notice(`the backend response is missing fields: ${missing.join(", ")}. Something on the interface will not render — the two sides are out of step.`);
 }
 
-/* ── 运行记录 ── */
+/* ── the run history ── */
 function cfgLine(c){
   const s = c.select, x = c.exit;
-  const strike = s.delta != null ? `Δ${s.delta}` : `虚值${(s.moneyness*100).toFixed(0)}%`;
-  const entry = typeof c.entry === "string" ? c.entry : "（自写代码）";
-  const eng = c.engine === "event_driven" ? "事件驱动" : "成交表";
+  const strike = s.delta != null ? `Δ${s.delta}` : `${(s.moneyness*100).toFixed(0)}% OTM`;
+  const entry = typeof c.entry === "string" ? c.entry : "(custom code)";
+  const eng = c.engine === "event_driven" ? "event driven" : "trade table";
   return `[${eng}] ${entry} · ${s.dte}DTE ${strike} · TP${x.take_profit ?? "—"} `
-       + `SL${x.stop_loss ?? "—"} 持有${x.hold_days ?? "—"}`;
+       + `SL${x.stop_loss ?? "—"} hold${x.hold_days ?? "—"}`;
 }
 function paintRuns(){
   $("runsSec").hidden = RUNS.length === 0;
   const base = RUNS.find(r => r.id === BASE);
   const baseSum = base ? stats(base.rows).sum : null;
   $("runs").innerHTML = `<thead><tr>
-      <th>#</th><th style="text-align:left">配置</th><th>笔数</th><th>胜率</th>
-      <th>净盈亏</th><th>平均每笔</th><th>基准</th></tr></thead><tbody>` +
+      <th>#</th><th style="text-align:left">configuration</th><th>trades</th><th>win rate</th>
+      <th>net P&L</th><th>mean</th><th>baseline</th></tr></thead><tbody>` +
     RUNS.map(r => {
       const s = stats(r.rows);
       const d = (baseSum !== null && r.id !== BASE) ? s.sum - baseSum : null;
@@ -485,10 +506,10 @@ function paintRuns(){
         <td class="n">${s.n}</td>
         <td class="n">${s.n ? pct(s.win) : "—"}</td>
         <td class="n ${sgn(s.sum)}">${s.n ? money(s.sum) : "—"}
-          ${d !== null ? `<span class="delta ${sgn(d)}">${money(d)} 对基准</span>` : ""}</td>
+          ${d !== null ? `<span class="delta ${sgn(d)}">${money(d)} vs baseline</span>` : ""}</td>
         <td class="n ${sgn(s.mean)}">${s.n ? money(s.mean) : "—"}</td>
         <td><button class="pin ${r.id === BASE ? "on" : ""}" data-pin="${r.id}">
-          ${r.id === BASE ? "基准" : "设为基准"}</button></td></tr>`;
+          ${r.id === BASE ? "baseline" : "set as baseline"}</button></td></tr>`;
     }).join("") + `</tbody>`;
   $("runs").querySelectorAll("tbody tr").forEach(tr =>
     tr.addEventListener("click", e => {
@@ -499,10 +520,10 @@ function paintRuns(){
     b.addEventListener("click", e => { e.stopPropagation(); BASE = +b.dataset.pin; paintRuns(); }));
 }
 
-/* ── 显示某一次 ── */
+/* ── show one run ── */
 function show(runId){
   const run = RUNS.find(r => r.id === runId);
-  if(!run){ notice(`找不到第 ${runId} 次运行的结果。`); return; }
+  if(!run){ notice(`no result found for run ${runId}.`); return; }
   CURRENT = runId;
   RAW = run.rows;
   $("placeholder").hidden = true;
@@ -510,17 +531,19 @@ function show(runId){
   paintRuns();
 
   const b = $("banner");
-  // 硬边界：只有一条，就摆在数字上方。它决定这组数字能不能用。
+  // The hard boundary: one line, above the numbers. It decides whether they can be used.
   b.hidden = !run.boundary;
   if(run.boundary)
-    b.innerHTML = `<b>这组数字的边界</b><span>${run.boundary.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")}</span>`;
-  // 真出问题的才进提示条。组件缺口不进——它是静态的，位置在左边栏各层旁边。
+    b.innerHTML = `<b>the boundary on these numbers</b><span>${run.boundary.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")}</span>`;
+  // Only real problems go into the notice strip. Component gaps do not — they are static,
+  // and they sit beside each layer in the left panel.
   for(const m of (run.problems || [])) notice(m);
   renderAnomalies(run.anomalies || []);
   renderDiagnostics(run.diagnostics || []);
-  // 运行事件不再往提示条里塞一遍。它们已经在诊断面板里，而且那里有原因分布
-  // 和日期范围——提示条里的"candidate_dropped：45 次"只是同一件事的劣化版本。
-  // 提示条留给真正需要你立刻知道的：出错、以及这次没产生任何交易。
+  // Run events are not repeated into the notice strip. They are already in the
+  // diagnostics panel, with the distribution of reasons and the date range — a
+  // "candidate_dropped: 45" line in the strip is a worse version of the same thing. The
+  // strip is for what has to be known at once: errors, and a run with no trades.
 
   fillDimSelects();
   apply();
@@ -533,15 +556,15 @@ function numericCols(rows){
 }
 function fillDimSelects(){
   const cols = numericCols(RAW);
-  if(!cols.length){ notice("这次的交易明细里没有可分组的数值列。"); return; }
+  if(!cols.length){ notice("this run's trade log has no numeric column to group by."); return; }
   const keep = [$("dim").value, $("dim2").value];
   const opts = cols.map(c => `<option value="${c}">${label(c)}</option>`).join("");
   $("dim").innerHTML = opts;
-  $("dim2").innerHTML = `<option value="">（不交叉）</option>` + opts;
+  $("dim2").innerHTML = `<option value="">(no cross)</option>` + opts;
   $("dim").value  = cols.includes(keep[0]) ? keep[0] : (cols.includes("entry_iv") ? "entry_iv" : cols[0]);
   $("dim2").value = cols.includes(keep[1]) ? keep[1] : "";
   const rs = [...new Set(RAW.map(r => r.exit_reason).filter(Boolean))].sort();
-  $("reason").innerHTML = `<option value="">全部</option>` +
+  $("reason").innerHTML = `<option value="">all</option>` +
     rs.map(r => `<option value="${r}">${REASON[r] || r}</option>`).join("");
 }
 
@@ -552,14 +575,15 @@ function apply(){
   renderStrip(VIEW);
   if(!VIEW.length){
     for(const id of ["buckets","cross","robust","detail"]) $(id).innerHTML = "";
-    for(const id of ["curve","hist","years","scatter"]) blankChart($(id), "当前筛选下没有交易");
-    $("ab").innerHTML = `<div class="empty" style="grid-column:1/-1">当前筛选下没有交易</div>`;
+    for(const id of ["curve","hist","years","scatter"]) blankChart($(id), "no trades under the current filter");
+    $("ab").innerHTML = `<div class="empty" style="grid-column:1/-1">no trades under the current filter</div>`;
     $("crossSec").hidden = true;
-    notice(`按「${REASON[reason] || reason}」筛选后没有交易。`);
+    notice(`no trades left after filtering on "${REASON[reason] || reason}".`);
     return;
   }
   const run = RUNS.find(r => r.id === CURRENT);
-  // 事件驱动独有的三块。成交表没有就藏起来，不显示一堆零。
+  // The three event-driven-only sections. Absent under the trade table they are hidden,
+  // rather than shown as a row of zeros.
   const hasEquity = !!(run && run.equity && run.equity.length);
   $("equitySec").hidden = !hasEquity;
   $("scenSec").hidden = !(run && run.scenarios && run.scenarios.length);
@@ -575,7 +599,7 @@ function apply(){
 }
 ["dim","dim2","bins","reason"].forEach(id => $(id).addEventListener("change", apply));
 
-/* ── AI 读一遍 ── */
+/* ── have the AI read it ── */
 function digest(rows, col, k){
   const run = RUNS.find(r => r.id === CURRENT);
   const s = stats(rows), B = bucketize(rows, col, k) || [];
@@ -587,68 +611,68 @@ function digest(rows, col, k){
   const hold = rows.reduce((a,r)=>a+r.holding_days,0)/rows.length;
   const c = run.config;
   return [
-    `策略：入场 ${typeof c.entry === "string" ? c.entry : "（用户自写代码）"} · `
-      + `${c.select.dte}DTE · ${c.select.delta != null ? "delta "+c.select.delta : "虚值 "+c.select.moneyness}`
-      + ` · 止盈 ${c.exit.take_profit} 止损 ${c.exit.stop_loss} 最多持有 ${c.exit.hold_days} 个交易日`,
-    `标的与区间：${c.symbol} ${c.start} ~ ${c.end}`,
-    `数据来源：${(run.boundary||"").includes("合成") ? "合成期权链（标的价真实，期权价由 Black-Scholes 生成）" : "真实数据"}`,
+    `Strategy: entry ${typeof c.entry === "string" ? c.entry : "(user's own code)"} · `
+      + `${c.select.dte}DTE · ${c.select.delta != null ? "delta "+c.select.delta : (c.select.moneyness*100).toFixed(0)+"% OTM"}`
+      + ` · take profit ${c.exit.take_profit}, stop loss ${c.exit.stop_loss}, hold at most ${c.exit.hold_days} trading days`,
+    `Underlying and range: ${c.symbol} ${c.start} ~ ${c.end}`,
+    `Data: ${(run.boundary||"").includes("ynthetic") ? "a synthetic option chain (the underlying's prices are real; the option prices come from Black-Scholes)" : "real data"}`,
     ``,
-    `整体：${s.n} 笔，胜率 ${pct(s.win)}，净盈亏 ${money(s.sum)}，平均每笔 ${money(s.mean)}，`
-      + `中位 ${money(s.median)}，平均持有 ${hold.toFixed(1)} 个交易日`,
-    `最大单笔盈 ${money(s.max)}，最大单笔亏 ${money(s.min)}，最赚的 5 笔合计 ${money(top5)}`,
+    `Overall: ${s.n} trades, win rate ${pct(s.win)}, net ${money(s.sum)}, mean per trade ${money(s.mean)}, `
+      + `median ${money(s.median)}, mean holding ${hold.toFixed(1)} trading days`,
+    `Best trade ${money(s.max)}, worst ${money(s.min)}, the best 5 together ${money(top5)}`,
     ``,
-    `按了结原因：`,
+    `By exit reason:`,
     ...Object.entries(reasons).map(([k2,v]) =>
-      `  ${REASON[k2]||k2}：${v.n} 笔，合计 ${money(v.sum)}，平均 ${money(v.sum/v.n)}`),
+      `  ${REASON[k2]||k2}: ${v.n} trades, total ${money(v.sum)}, mean ${money(v.sum/v.n)}`),
     ``,
-    `按「${label(col)}」分 ${B.length} 档（等频）：`,
+    `By ${label(col)}, ${B.length} equal-frequency buckets:`,
     ...B.map(b => { const t = stats(b.rows);
-      return `  ${fmtVal(col,b.lo)} – ${fmtVal(col,b.hi)}：${t.n} 笔，胜率 ${pct(t.win)}，`
-           + `平均 ${money(t.mean)}，中位 ${money(t.median)}`; }),
+      return `  ${fmtVal(col,b.lo)} – ${fmtVal(col,b.hi)}: ${t.n} trades, win rate ${pct(t.win)}, `
+           + `mean ${money(t.mean)}, median ${money(t.median)}`; }),
     ``,
-    `逐年净盈亏：`,
-    ...Object.keys(by).sort().map(y => `  ${y}：${money(by[y])}`),
+    `Net P&L by year:`,
+    ...Object.keys(by).sort().map(y => `  ${y}: ${money(by[y])}`),
   ].join("\n");
 }
-const PROMPT_RULES = `你在读一份期权策略回测的统计摘要，读者是策略作者本人，正在用回测决定策略参数。
+const PROMPT_RULES = `You are reading a statistical summary of an options strategy backtest. The reader is the strategy's author, using the backtest to settle its parameters.
 
-用中文回答，不超过 220 字，分成三段，每段用「—— 小标题」开头：
+Answer in under 180 words, in three sections, each beginning with "— " and a short heading:
 
-—— 看到什么
-最值得注意的一两个事实。具体数字，不要复述全部统计。
+— What is visible
+The one or two most notable facts. Specific numbers, not a restatement of every statistic.
 
-—— 值得追的线索
-哪个方向值得进一步验证，为什么。如果分档呈单调关系，指出来；如果只是单点突出，说明那更可能是噪音。
+— Worth following up
+Which direction deserves further checking, and why. If the buckets are monotonic, say so; if a single bucket stands out, say that is more likely noise.
 
-—— 不能信的地方
-样本量、集中度、数据来源带来的限制。如果数据是合成期权链，必须指出：关于期权本身的结论（选什么 delta、止盈设多少）不可信，只有基于标的价格的结论（何时进场）可信。
+— What cannot be trusted
+The limits imposed by sample size, concentration and provenance. If the data is a synthetic option chain, you must say that conclusions about the option itself (which delta, where to take profit) cannot be trusted, and only conclusions about the underlying's price (when to enter) can.
 
-不要客套，不要建议"进一步研究"这种空话，直接说判断。`;
+No pleasantries, and no empty suggestions to "study it further" — state the judgement.`;
 
 $("ask").addEventListener("click", async () => {
-  if(!ask){ notice("AI 总结不可用，无法发起请求。"); return; }
-  if(!VIEW.length){ notice("当前筛选下没有交易，没有东西可以让 Claude 读。"); return; }
+  if(!ask){ notice("the AI summary is unavailable, so no request can be made."); return; }
+  if(!VIEW.length){ notice("no trades under the current filter, so there is nothing for Claude to read."); return; }
   const out = $("aiOut"), btn = $("ask"), stop = $("stop");
   ctl = new AbortController();
   btn.disabled = true; stop.hidden = false;
-  out.innerHTML = `<em>Claude 正在读…（首次回应通常要十几秒）</em>`;
+  out.innerHTML = `<em>Claude is reading… (the first response usually takes ten or twenty seconds)</em>`;
   try{
-    await ask(PROMPT_RULES + "\n\n===== 统计摘要 =====\n" + digest(VIEW, $("dim").value, +$("bins").value),
+    await ask(PROMPT_RULES + "\n\n===== the summary =====\n" + digest(VIEW, $("dim").value, +$("bins").value),
       { signal: ctl.signal, modelTier:"default", onText: ({text}) => { out.textContent = text; } });
   }catch(e){
-    const msg = {cancelled:"已停止。", not_granted:"你拒绝了这次调用。",
-      rate_limited:"调用太频繁，过一会儿再试。", prompt_too_large:"数据太多，先缩小筛选范围。",
-      refused:"这次请求被拒绝了。", session_expired:"登录状态过期，刷新页面再试。"}[e.code];
+    const msg = {cancelled:"stopped.", not_granted:"you declined this call.",
+      rate_limited:"too many calls; try again shortly.", prompt_too_large:"too much data; narrow the filter first.",
+      refused:"this request was refused.", session_expired:"the session expired; reload the page."}[e.code];
     if(e.code === "not_granted"){
       out.textContent = "";
       document.querySelector(".ai").hidden = true;
-      notice("你拒绝了 AI 总结的授权，该功能已在本次会话中隐藏。");
+      notice("you declined the AI summary, so it is hidden for this session.");
       return;
     }
-    const shown = msg || `出错了（${e.code}）：${e.message}`;
+    const shown = msg || `it failed (${e.code}): ${e.message}`;
     out.textContent = e.text || "";
     out.innerHTML += (e.text ? "\n\n" : "") + `<em>${shown}</em>`;
-    if(e.code !== "cancelled") notice(`AI 总结失败：${shown}`);
+    if(e.code !== "cancelled") notice(`the AI summary failed: ${shown}`);
   }finally{ btn.disabled = false; stop.hidden = true; ctl = null; }
 });
 $("stop").addEventListener("click", () => ctl?.abort());
@@ -656,9 +680,9 @@ $("stop").addEventListener("click", () => ctl?.abort());
 (async () => {
   if(!window.claude?.use){
     document.querySelector(".ai").hidden = true;
-    return;   // 本地打开时没有 Claude 运行时，这是预期状态，不算问题
+    return;   // Opened locally there is no Claude runtime; that is expected, not a problem
   }
   try{ ask = await window.claude.use("sample"); }
-  catch(e){ ask = null; notice(`AI 总结探测失败：${e?.message || e}`); }
+  catch(e){ ask = null; notice(`probing for the AI summary failed: ${e?.message || e}`); }
   if(!ask) document.querySelector(".ai").hidden = true;
 })();

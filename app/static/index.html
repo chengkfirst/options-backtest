@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>期权回测台</title>
+<title>Options Bench</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="app.css">
@@ -8,198 +8,204 @@
 
 <div class="bench">
 
-<!-- ══ 左：参数，按七个组件组织 ══ -->
+<!-- ══ left: parameters, organised by the seven components ══ -->
 <aside class="panel">
   <div class="panel-head">
-    <h1>期权回测台</h1>
-    <p class="mode" id="mode">连接中…</p>
+    <h1>Options Bench</h1>
+    <p class="mode" id="mode">connecting…</p>
   </div>
 
   <form id="form" class="panel-body">
 
-    <!-- 跑什么：标的、区间、引擎。配置样板，压成两行，不和策略抢位置。 -->
+    <!-- What to run: symbol, range, engine. Boilerplate, kept to two rows so it does
+         not compete with the strategy for space. -->
     <div class="setup-bar">
-      <label class="sb narrow">标的<select name="symbol" id="symbol"></select></label>
-      <label class="sb">起<input type="date" name="start" value="2020-01-01"></label>
-      <label class="sb">止<input type="date" name="end" value="2024-12-31"></label>
+      <label class="sb narrow">symbol<select name="symbol" id="symbol"></select></label>
+      <label class="sb">from<input type="date" name="start" value="2020-01-01"></label>
+      <label class="sb">to<input type="date" name="end" value="2024-12-31"></label>
     </div>
     <div class="setup-bar">
-      <label class="sb grow">引擎<select name="engine" id="engine">
-        <option value="trade_table">成交表 — 快，扫参数用</option>
-        <option value="event_driven" selected>事件驱动 — 有组合状态</option>
+      <label class="sb grow">engine<select name="engine" id="engine">
+        <option value="trade_table">trade table — fast, for sweeps</option>
+        <option value="event_driven" selected>event driven — has portfolio state</option>
       </select></label>
-      <label class="sb narrow" id="concurrentWrap">并发上限<input type="number" name="max_concurrent" value="5" min="1" max="50"></label>
+      <label class="sb narrow" id="concurrentWrap">max concurrent<input type="number" name="max_concurrent" value="5" min="1" max="50"></label>
     </div>
     <p class="hint setup-note"><span id="spanHint"></span>
-      <span id="engineLock" hidden>计划模式下引擎锁定为事件驱动。</span></p>
+      <span id="engineLock" hidden>In plan mode the engine is locked to event driven.</span></p>
 
-    <!-- 策略怎么写：逐个规则填，还是一个函数一起定。 -->
+    <!-- How the strategy is written: rule by rule, or one function for all of it. -->
     <div class="tabs mode-tabs" role="tablist">
-      <button type="button" class="tab on" data-strat="params" role="tab">逐个规则</button>
-      <button type="button" class="tab" data-strat="plan" role="tab">一个计划函数</button>
+      <button type="button" class="tab on" data-strat="params" role="tab">rule by rule</button>
+      <button type="button" class="tab" data-strat="plan" role="tab">one plan function</button>
     </div>
 
-    <!-- 计划模式下才显示的那个代码框 -->
+    <!-- The code box, shown only in plan mode -->
     <div id="planWrap" hidden>
       <textarea name="plan_code" id="planCode" spellcheck="false" rows="20" class="code"></textarea>
-      <p class="hint"><button type="button" class="link" id="planHelp">ctx 里有什么</button></p>
+      <p class="hint"><button type="button" class="link" id="planHelp">what is in ctx</button></p>
       <pre class="help" id="planHelpBody" hidden></pre>
     </div>
 
-    <!-- 七个组件：**从后端那份定义生成**，不手写。
-         手写 HTML 会与 components.py 各说各的，改一处忘一处。 -->
+    <!-- The seven components, **generated from the backend definition**, not written
+         by hand. Hand-written HTML drifts from components.py. -->
     <div id="comps"></div>
 
     <details class="ref" id="tradeoffRef">
-      <summary>选合约参考表<span class="ref-n" id="toWhen"></span></summary>
-      <p class="hint">按<b>虚值 × 期限</b>摊开。数字来自<b>当日真实链</b>，不是公式贴的表——
-        换成你的数据后会自动反映真实偏斜。</p>
+      <summary>contract selection reference<span class="ref-n" id="toWhen"></span></summary>
+      <p class="hint">Spread over <b>moneyness x tenor</b>. The numbers come from <b>that
+        day's real chain</b>, not a formula — with your own data they reflect the real
+        skew automatically.</p>
       <div id="tradeoffBody" class="to-body"></div>
     </details>
 
     <details class="ref">
-      <summary>自定义信号<span class="ref-n">选填</span></summary>
+      <summary>custom signals<span class="ref-n">optional</span></summary>
       <textarea name="signals_code" id="signalsCode" spellcheck="false" rows="7" class="code"
-        title="定义 SIGNALS 字典。一律用 adjusted（复权价），否则除息日会出现虚假跳空。"></textarea>
+        title="Define a SIGNALS dict. Always use adjusted(), or ex-dividend days produce false gaps."></textarea>
     </details>
 
     <details class="ref">
-      <summary>信号参考<span class="ref-n" id="sigCount"></span></summary>
-      <input type="search" id="sigSearch" placeholder="搜信号名或含义…" class="ref-search">
+      <summary>signal reference<span class="ref-n" id="sigCount"></span></summary>
+      <input type="search" id="sigSearch" placeholder="search a name or a meaning…" class="ref-search">
       <div id="sigRef" class="sig-ref"></div>
     </details>
 
     <details class="ref">
-      <summary>两个引擎的区别</summary>
+      <summary>how the two engines differ</summary>
       <p class="hint" id="engineHint"></p>
     </details>
 
   </form>
 
   <div class="panel-foot">
-    <button class="run" id="run">跑回测</button>
-    <p class="hint" id="runHint">十年区间约 40 秒，缩短区间会快很多。</p>
+    <button class="run" id="run">run</button>
+    <p class="hint" id="runHint">About 40 seconds over ten years; a shorter range is much faster.</p>
   </div>
 </aside>
 
-<!-- ══ 右：结果 ══ -->
+<!-- ══ right: results ══ -->
 <main class="stage">
 
   <div class="issues" id="issues" hidden></div>
 
-  <!-- 运行历史：对比才是研究的主体，所以它在最上面 -->
+  <!-- Run history: comparison is the substance of research, so it comes first -->
   <section class="runs" id="runsSec" hidden>
     <div class="runs-head">
-      <h2>运行记录</h2>
-      <p>点一行切换查看。钉一个当基准后，其余行显示相对它的变化。</p>
+      <h2>run history</h2>
+      <p>Click a row to view it. Pin one as the baseline and the other rows show their change against it.</p>
     </div>
     <div class="scroll"><table id="runs"></table></div>
   </section>
 
   <div class="placeholder" id="placeholder">
-    <h2>还没跑过</h2>
-    <p>左边写好交易计划，点「跑回测」。</p>
+    <h2>nothing run yet</h2>
+    <p>Write the plan on the left, then press run.</p>
     <p class="hint" id="gapList" hidden></p>
   </div>
 
   <div id="result" hidden>
     <div class="banner" id="banner" hidden></div>
     <section id="anomSec" hidden>
-      <h3 class="sec-h">值得看一眼的地方<span class="sec-why">规则扫出来的，没有就不显示</span></h3>
+      <h3 class="sec-h">worth a look<span class="sec-why">found by rules; nothing found, nothing shown</span></h3>
       <div id="anomBody" class="anom-body"></div>
     </section>
 
     <section id="diagSec" hidden>
-      <h3 class="sec-h">这次跑的时候发生了什么<span class="sec-why">点开看具体原因</span></h3>
+      <h3 class="sec-h">what happened during this run<span class="sec-why">expand for the reasons</span></h3>
       <div id="diagBody" class="diag-body"></div>
     </section>
     <dl class="strip" id="strip"></dl>
 
     <div class="ai">
       <div class="ai-head">
-        <h2>AI 读一遍</h2>
-        <p>把这次的统计交给 Claude，让它指出值得追的线索和不能信的地方。</p>
-        <button class="btn" id="ask">让 Claude 读</button>
-        <button class="btn ghost" id="stop" hidden>停止</button>
+        <h2>have the AI read it</h2>
+        <p>Hand this run's statistics to Claude, for the leads worth following and what cannot be trusted.</p>
+        <button class="btn" id="ask">ask Claude</button>
+        <button class="btn ghost" id="stop" hidden>stop</button>
       </div>
       <div class="ai-body" id="aiOut"></div>
     </div>
 
     <section id="equitySec" hidden>
-      <div class="sec-head"><h2>权益曲线</h2><p id="equityNote"></p></div>
-      <div class="chart"><svg id="equity" viewBox="0 0 1080 280" role="img" aria-label="权益曲线"></svg></div>
+      <div class="sec-head"><h2>equity curve</h2><p id="equityNote"></p></div>
+      <div class="chart"><svg id="equity" viewBox="0 0 1080 280" role="img" aria-label="equity curve"></svg></div>
       <dl class="strip" id="equityStrip"></dl>
     </section>
 
     <section id="attrSec" hidden>
-      <div class="sec-head"><h2>盈亏归因</h2>
-        <p>钱从哪来：标的方向（delta）、波动（gamma）、隐含波动率（vega）、时间（theta）。
-           残差大说明一阶近似失效，那几笔的归因不可信。</p></div>
-      <div class="chart"><svg id="attr" viewBox="0 0 520 200" role="img" aria-label="盈亏归因"></svg></div>
+      <div class="sec-head"><h2>P&amp;L attribution</h2>
+        <p>Where the money came from: direction (delta), movement (gamma), implied
+           volatility (vega), time (theta). A large residual means the approximation
+           failed and those trades' attribution cannot be trusted.</p></div>
+      <div class="chart"><svg id="attr" viewBox="0 0 520 200" role="img" aria-label="P&amp;L attribution"></svg></div>
     </section>
 
     <section id="scenSec" hidden>
-      <div class="sec-head"><h2>历史情景</h2>
-        <p>真实历史区间的表现。不含任何展开近似，比压力测试可信。</p></div>
+      <div class="sec-head"><h2>historical scenarios</h2>
+        <p>Performance over real historical windows. No approximation, so more
+           trustworthy than a stress test.</p></div>
       <div class="scroll"><table id="scen"></table></div>
     </section>
 
     <section>
-      <div class="sec-head"><h2>累计盈亏</h2><p id="curveNote"></p></div>
-      <div class="chart"><svg id="curve" viewBox="0 0 1080 260" role="img" aria-label="累计盈亏曲线"></svg></div>
+      <div class="sec-head"><h2>cumulative P&amp;L</h2><p id="curveNote"></p></div>
+      <div class="chart"><svg id="curve" viewBox="0 0 1080 260" role="img" aria-label="cumulative P&amp;L"></svg></div>
     </section>
 
     <div class="two">
       <section>
-        <div class="sec-head"><h2>单笔盈亏分布</h2></div>
-        <div class="chart"><svg id="hist" viewBox="0 0 520 250" role="img" aria-label="单笔盈亏分布"></svg></div>
+        <div class="sec-head"><h2>per-trade P&amp;L distribution</h2></div>
+        <div class="chart"><svg id="hist" viewBox="0 0 520 250" role="img" aria-label="per-trade P&amp;L distribution"></svg></div>
       </section>
       <section>
-        <div class="sec-head"><h2>按年份</h2></div>
-        <div class="chart"><svg id="years" viewBox="0 0 520 220" role="img" aria-label="逐年盈亏"></svg></div>
+        <div class="sec-head"><h2>by year</h2></div>
+        <div class="chart"><svg id="years" viewBox="0 0 520 220" role="img" aria-label="P&amp;L by year"></svg></div>
       </section>
     </div>
 
     <section>
-      <div class="sec-head"><h2>稳健性</h2>
-        <p>去掉最赚的几笔还成立吗。翻转说明结论靠极值撑着。</p></div>
+      <div class="sec-head"><h2>robustness</h2>
+        <p>Does it hold without the best few trades? A sign flip means the conclusion
+           rests on extremes.</p></div>
       <div class="scroll"><table id="robust"></table></div>
     </section>
 
     <details class="more">
-      <summary>按条件切开看</summary>
+      <summary>cut it by a condition</summary>
       <div class="more-body">
         <div class="controls">
-          <div class="field"><label for="dim">分组维度</label><select id="dim"></select></div>
-          <div class="field"><label for="bins">分几组</label>
+          <div class="field"><label for="dim">group by</label><select id="dim"></select></div>
+          <div class="field"><label for="bins">buckets</label>
             <select id="bins"><option>3</option><option selected>4</option><option>5</option><option>6</option></select></div>
-          <div class="field"><label for="dim2">交叉维度</label><select id="dim2"></select></div>
-          <div class="field"><label for="reason">了结原因</label><select id="reason"></select></div>
+          <div class="field"><label for="dim2">cross with</label><select id="dim2"></select></div>
+          <div class="field"><label for="reason">exit reason</label><select id="reason"></select></div>
         </div>
         <section>
-          <div class="sec-head"><h2>分组对比</h2><p id="dimNote"></p></div>
+          <div class="sec-head"><h2>by bucket</h2><p id="dimNote"></p></div>
           <div class="scroll"><table id="buckets"></table></div>
         </section>
         <div class="two">
           <section>
-            <div class="sec-head"><h2>该维度与盈亏</h2><p id="scatNote"></p></div>
-            <div class="chart"><svg id="scatter" viewBox="0 0 520 250" role="img" aria-label="维度与盈亏散点"></svg></div>
+            <div class="sec-head"><h2>this dimension against P&amp;L</h2><p id="scatNote"></p></div>
+            <div class="chart"><svg id="scatter" viewBox="0 0 520 250" role="img" aria-label="dimension against P&amp;L"></svg></div>
           </section>
           <section>
-            <div class="sec-head"><h2>高低两半</h2><p>按中位数切开。</p></div>
+            <div class="sec-head"><h2>the two halves</h2><p>Split at the median.</p></div>
             <div class="ab" id="ab"></div>
           </section>
         </div>
         <section id="crossSec" hidden>
-          <div class="sec-head"><h2>交叉分组</h2>
-            <p>格内为平均每笔。少于 15 笔的格子已淡化——那里的极值通常是噪音。</p></div>
+          <div class="sec-head"><h2>crossed buckets</h2>
+            <p>Each cell is the mean per trade. Cells with fewer than 15 trades are
+               dimmed — extremes there are usually noise.</p></div>
           <div class="scroll"><table class="grid-tab" id="cross"></table></div>
         </section>
       </div>
     </details>
 
     <details class="more">
-      <summary>逐笔明细</summary>
+      <summary>trade by trade</summary>
       <div class="more-body">
         <p class="hint" id="detailNote"></p>
         <div class="scroll" style="max-height:440px;overflow-y:auto"><table id="detail"></table></div>
