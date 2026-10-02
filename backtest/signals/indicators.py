@@ -1,11 +1,14 @@
-"""技术指标。
+"""Technical indicators.
 
-全部是 ``pd.Series -> pd.Series`` 的纯函数，且**只依赖截至当日的数据**。预热期返回
-``NaN``，由上层转为显式缺失——绝不用更短的窗口或填充值代替，因为那会让预热期的信号
-看起来可用，实际是另一套参数算出来的。
+All of them are pure ``pd.Series -> pd.Series`` functions that **depend only on
+data up to the day in question**. The warm-up period returns ``NaN``, which the
+layer above turns into an explicit absence — never a shorter window or a filled
+value, because that makes a warm-up signal look usable when it was in fact
+computed with different parameters.
 
-指标一律吃**复权价**：除息日与拆股日的跳空是价格体系变化，不是市场波动，用实际成交价
-会让均线与波动率在这些日子出现虚假跃变。
+Indicators always take **adjusted prices**: the gaps on ex-dividend and split days
+are changes of price system, not market movement, and traded prices make moving
+averages and volatility jump spuriously on those days.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ def ema(series: pd.Series, window: int) -> pd.Series:
 
 
 def momentum(series: pd.Series, window: int) -> pd.Series:
-    """区间收益率。"""
+    """Return over the window."""
     _check_window(window)
     return series.pct_change(window)
 
@@ -38,12 +41,12 @@ def rsi(series: pd.Series, window: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0.0)
     loss = (-delta).clip(lower=0.0)
-    # Wilder 平滑；min_periods 保证预热期不产生取值
+    # Wilder smoothing; min_periods keeps the warm-up from producing a value.
     avg_gain = gain.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
     avg_loss = loss.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
     rs = avg_gain / avg_loss.replace(0.0, np.nan)
     out = 100 - 100 / (1 + rs)
-    # 全程无下跌时 RSI 为 100，这是定义而非缺失
+    # With no down day at all, RSI is 100 by definition, not absent.
     return out.mask(avg_loss.eq(0.0) & avg_gain.gt(0.0), 100.0)
 
 
@@ -73,10 +76,12 @@ def bollinger(series: pd.Series, window: int = 20, num_std: float = 2.0) -> dict
 
 
 def realized_vol(series: pd.Series, window: int = 20) -> pd.Series:
-    """已实现波动率，按**交易日 / 252** 年化。
+    """Realised volatility, annualised on **trading days / 252**.
 
-    波动只在交易日产生，所以这里用交易日口径；而定价的到期时间用日历日 / 365，
-    因为期权在周末照常衰减。两个口径分工明确，强行统一必错其一。
+    Volatility is only realised on trading days, hence this convention; pricing's
+    time to expiry uses calendar days / 365, because an option decays over the
+    weekend. The two conventions have different jobs, and forcing them into one
+    makes one of them wrong.
     """
     _check_window(window)
     log_ret = np.log(series).diff()
@@ -87,15 +92,17 @@ def realized_vol(series: pd.Series, window: int = 20) -> pd.Series:
 
 def _check_window(window: int) -> None:
     if window < 1:
-        raise ValueError(f"窗口须为正整数，当前 {window}")
+        raise ValueError(f"the window must be a positive integer, got {window}")
 
 
 def rank_in_window(series: pd.Series, window: int) -> pd.Series:
-    """当前值在过去 ``window`` 天的**区间**里的位置，0–1。
+    """Where the current value sits in the **range** of the last ``window`` days,
+    0 to 1.
 
-    这就是交易台上说的 "IV rank"：``(今天 − 区间最低) / (区间最高 − 区间最低)``。
-    它回答的是"相对自己的历史，现在贵还是便宜"——绝对的 IV 数字没有可比性，
-    20% 对某些标的是高位，对另一些是低位。
+    This is what a trading desk calls IV rank:
+    ``(today − range low) / (range high − range low)``. It answers "dear or cheap
+    relative to its own history" — absolute IV numbers are not comparable, and 20%
+    is high for some underlyings and low for others.
     """
     lo = series.rolling(window, min_periods=window // 2).min()
     hi = series.rolling(window, min_periods=window // 2).max()
@@ -104,11 +111,13 @@ def rank_in_window(series: pd.Series, window: int) -> pd.Series:
 
 
 def percentile_in_window(series: pd.Series, window: int) -> pd.Series:
-    """当前值在过去 ``window`` 天里的**分位**，0–1。
+    """The current value's **percentile** among the last ``window`` days, 0 to 1.
 
-    与 ``rank_in_window`` 的区别常被忽略：IV rank 只看区间两端，一次极端尖峰
-    就会把它长期压低；IV percentile 看的是"有多少天比今天低"，对尖峰不敏感。
-    两个一起看才知道是真便宜还是被一次意外拉低了。
+    The difference from ``rank_in_window`` is routinely overlooked: IV rank sees
+    only the two ends of the range, so one extreme spike depresses it for a long
+    time, while IV percentile asks "how many days were below today" and is
+    insensitive to spikes. Reading both together is what tells you whether
+    something is genuinely cheap or merely dragged down by one outlier.
     """
     return series.rolling(window, min_periods=window // 2).apply(
         lambda w: (w[:-1] < w[-1]).mean(), raw=True

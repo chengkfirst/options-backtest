@@ -1,13 +1,17 @@
-"""合约选择：把"约 30 天到期、delta 约 0.30 的看涨"翻译成唯一确定的一张合约。
+"""Contract selection: turning "a call about 30 days out, delta about 0.30" into
+one specific contract.
 
-两个口径在这里并存，必须分清：
+Two conventions live here and must not be confused:
 
-- **目标到期天数**按**日历日**计（30 DTE 就是 30 个日历日，与市场惯例一致）。
-- **可执行性下限**按**交易日**计，因为它对应的是执行延迟——T 日下的单在 T+1 执行，
-  合约届时必须仍可交易。
+- The **target days to expiry** is in **calendar days** (30 DTE means 30 calendar
+  days, as the market means it).
+- The **executability floor** is in **trading days**, because it answers to the
+  execution lag — an order placed on T is executed on T+1, and the contract has to
+  still be tradable then.
 
-每次选择都返回完整的筛选过程：选中了哪张、每一步淘汰了多少、为什么失败。没有这个，
-"为什么这天没开仓"就只能靠猜。
+Every selection returns its whole funnel: which contract was chosen, how many were
+eliminated at each step, and why it failed. Without that, "why was nothing opened
+that day" can only be guessed at.
 """
 
 from __future__ import annotations
@@ -29,54 +33,64 @@ from backtest.types import ContractId, Right, require
 
 @dataclass(frozen=True, slots=True)
 class SelectionRule:
-    """选约规则。``target_delta`` 与 ``moneyness`` 二选一。"""
+    """A selection rule. Exactly one of ``target_delta`` and ``moneyness``."""
 
     right: Right = Right.CALL
     target_dte: int = 30
     dte_window: tuple[int, int] = (21, 45)
     target_delta: float | None = 0.30
-    #: 相对标的的价值状态，正数为虚值（看涨则行权价更高）。
+    #: Moneyness relative to spot; positive is out of the money (for a call, a
+    #: higher strike).
     moneyness: float | None = None
     min_volume: float | None = None
     min_open_interest: float | None = None
     max_relative_spread: float | None = None
 
-    # ── 可行域：硬约束，不满足就不考虑 ──────────────────────
+    # ── the feasible region: hard constraints, nothing outside is considered ──
     #
-    # 专业做法不是"选一个点"，是"划一个可行域，然后在里面按目标排序"。
-    # 盯死 delta=0.30 有两个问题：链上未必有那一张（于是选到一张离得很远的），
-    # 以及**只在那一个点成立的结论是噪音**——实盘参数不可能刚好落在那里。
-    #: delta 的可接受区间（绝对值）。给了它，``target_delta`` 退化为排序用的目标。
+    # The professional form is not "pick a point" but "mark out a feasible region,
+    # then order within it by an objective". Pinning delta = 0.30 has two problems:
+    # the chain may not hold that contract (so something far away gets picked), and
+    # **a conclusion that holds only at that one point is noise** — live parameters
+    # never land exactly there.
+    #: Acceptable band for delta, in absolute value. Given this, ``target_delta``
+    #: becomes merely the objective used to order within the band.
     delta_band: tuple[float, float] | None = None
-    #: 该合约自身 IV 的可接受区间。买方想要低、卖方想要高。
+    #: Acceptable band for the contract's own IV. A buyer wants it low, a seller
+    #: wants it high.
     iv_band: tuple[float, float] | None = None
 
 
     def __post_init__(self) -> None:
         lo, hi = self.dte_window
-        require(0 < lo <= hi, f"dte_window 非法：{self.dte_window}")
-        require(lo <= self.target_dte <= hi, f"target_dte {self.target_dte} 不在 {self.dte_window} 内")
+        require(0 < lo <= hi, f"invalid dte_window: {self.dte_window}")
+        require(lo <= self.target_dte <= hi,
+                f"target_dte {self.target_dte} is outside {self.dte_window}")
         require(
             (self.target_delta is None) != (self.moneyness is None),
-            "target_delta 与 moneyness 必须且只能指定一个",
+            "exactly one of target_delta and moneyness must be given",
         )
         if self.target_delta is not None:
-            require(0 < abs(self.target_delta) < 1, f"target_delta 须在 0 与 1 之间：{self.target_delta}")
+            require(0 < abs(self.target_delta) < 1,
+                    f"target_delta must lie between 0 and 1: {self.target_delta}")
         for name, band in (("delta_band", self.delta_band), ("iv_band", self.iv_band)):
             if band is not None:
                 lo, hi = band
-                require(lo < hi, f"{name} 的下界须小于上界：{band}")
+                require(lo < hi, f"{name}'s lower bound must be below its upper: {band}")
 
 
-#: 选约函数拿到的链，除 ``CHAIN_COLUMNS`` 外还有这几列。都是算好的——同样的推导
-#: 每次自己写一遍，迟早有一次符号弄反。
+#: The columns a selection function gets on top of ``CHAIN_COLUMNS``. All
+#: precomputed — derive the same thing by hand every time and sooner or later a
+#: sign comes out backwards.
 DERIVED_COLUMNS: tuple[str, ...] = (
     "dte", "sessions_left", "mid", "spread", "moneyness", "is_call", "is_put",
 )
 
-#: 自定义选约：拿当日链与**决策日**的信号视图，返回选中的那一行（或 None 表示不开仓）。
+#: A custom selector: takes the day's chain and the **decision day's** signal
+#: view, and returns the chosen row (or None for no trade).
 #:
-#: 为什么链是执行日的、视图却是决策日的——见 ``enrich_chain`` 的说明。
+#: Why the chain is the execution day's while the view is the decision day's — see
+#: ``enrich_chain``.
 ContractChooser = Callable[[pd.DataFrame, object], object]
 
 
@@ -86,24 +100,30 @@ def enrich_chain(
     calendar: TradingCalendar,
     asof: date,
 ) -> pd.DataFrame:
-    """把当日链整理成"可以直接按 greek 和 iv 挑"的样子。
+    """Put the day's chain into a shape you can pick from directly on greeks and iv.
 
-    做两件事：
+    Two things happen:
 
-    1. **加派生列**。``dte`` 按日历日（30DTE 就是 30 个日历日，与市场惯例一致），
-       ``sessions_left`` 按交易日（可执行性用的是这个口径，两者不可混用）；
-       ``mid``、``spread``（相对买卖价差）；``moneyness`` **正数一律表示虚值**，
-       看涨看跌同号，不用每次重新想方向。
+    1. **Derived columns are added.** ``dte`` in calendar days (30 DTE means 30
+       calendar days, as the market means it), ``sessions_left`` in trading days
+       (executability uses this convention; the two must not be mixed); ``mid`` and
+       ``spread`` (the relative bid/ask spread); and ``moneyness``, where
+       **positive always means out of the money** for calls and puts alike, so the
+       direction never has to be reasoned out again.
 
-    2. **先剔除执行不了的合约**。T 日决策、T+1 成交，届时仍可交易的才留下。
-       在这里剔掉而不是事后校验，是为了让"按 greek 和 iv 随便挑"**由构造保证安全**：
-       挑不到开不了的，就不需要记得去检查。
+    2. **Contracts that cannot be executed are removed first.** The decision is on
+       T, the fill on T+1, and only what is still tradable then survives. Removing
+       them here rather than validating afterwards is what makes "pick freely on
+       greeks and iv" **safe by construction**: you cannot pick something
+       unopenable, so there is nothing to remember to check.
 
-    **关于前视**：这张链是**执行日**的，传给选约函数的信号视图却是**决策日**的。
-    这不是笔误。真实过程是——T 日收盘你根据当时看到的东西决定"买一张什么样的"，
-    单子在 T+1 收盘成交，具体是哪张由规则在成交时点解析。所以规则可以用 T 的信息，
-    解析可以用 T+1 的链；但规则本身不许看 T+1 的行情，否则就是拿成交日的涨跌
-    反过来挑行权价。
+    **On look-ahead**: this chain is the **execution day's**, while the signal view
+    passed to the selector is the **decision day's**. That is not a slip. The real
+    process is that at the close of T you decide, from what you can see then, what
+    kind of contract to buy; the order fills at the close of T+1 and which contract
+    it is gets resolved at that moment. So the rule may use T's information and the
+    resolution may use T+1's chain — but the rule itself must not see T+1's market,
+    or it is picking a strike out of the fill day's move.
     """
     if chain.empty:
         return chain
@@ -116,12 +136,14 @@ def enrich_chain(
     out["spread"] = relative_spread(out["bid"], out["ask"])
 
     spot = out["underlying_price"].astype(float)
-    # ``right`` 列的取值是 "C" / "P"（与合约代码一致）。但写 chain.right == "call"
-    # 是最自然的直觉，而那会静默匹配到 0 行。所以直接给布尔列，让人不必记这件事。
+    # The ``right`` column holds "C" / "P" (matching the contract id). But
+    # `chain.right == "call"` is the natural instinct, and that silently matches
+    # zero rows. Hence the boolean columns, so nobody has to remember.
     is_call = out["right"] == Right.CALL.value
     out["is_call"] = is_call
     out["is_put"] = ~is_call
-    # 看涨：行权价越高越虚值。看跌：行权价越低越虚值。统一成"正数 = 虚值"。
+    # For a call a higher strike is further out of the money; for a put a lower
+    # one is. Unified so that positive always means out of the money.
     out["moneyness"] = np.where(is_call, out["strike"] / spot - 1.0, 1.0 - out["strike"] / spot)
 
     return out.loc[out["sessions_left"] >= config.min_days_to_expiry].reset_index(drop=True)
@@ -129,7 +151,7 @@ def enrich_chain(
 
 @dataclass(frozen=True, slots=True)
 class SelectionResult:
-    """选中的合约 + 完整筛选过程。"""
+    """The contract chosen, together with the whole funnel."""
 
     contract: Maybe[ContractId]
     quote: dict | None
@@ -143,8 +165,8 @@ class SelectionResult:
     def describe(self) -> str:
         steps = " → ".join(f"{name}:{n}" for name, n in self.trace)
         if self.ok:
-            return f"选中 {self.contract.unwrap()} | {steps}"
-        return f"未选中（{self.contract.reason}） | {steps}"
+            return f"chose {self.contract.unwrap()} | {steps}"
+        return f"nothing chosen ({self.contract.reason}) | {steps}"
 
 
 def select_contract(
@@ -155,32 +177,36 @@ def select_contract(
     asof: date,
     view: object = None,
 ) -> SelectionResult:
-    """从某日的链中选出一张合约。
+    """Choose one contract from a day's chain.
 
-    ``rule`` 两种形态：
+    ``rule`` comes in two forms:
 
-    - ``SelectionRule``——声明式，"约 30 天、delta 约 0.30"。快，可以扫参数，
-      但表达不了"按当时情况调整"。
-    - **函数**——``f(chain, view)``，拿整张链自己筛，返回一行或 ``None``。
-      链已加好派生列并剔除不可执行的合约，见 ``enrich_chain``。
+    - ``SelectionRule`` — declarative, "about 30 days, delta about 0.30". Fast and
+      sweepable, but cannot express "adjust to what the market is doing".
+    - **a function** — ``f(chain, view)``, which filters the whole chain itself and
+      returns one row or ``None``. The chain already carries the derived columns
+      and has the unexecutable contracts removed; see ``enrich_chain``.
     """
     if callable(rule):
         return _choose_by_function(chain, rule, config, calendar, asof, view)
-    trace: list[tuple[str, int]] = [("链上合约", len(chain))]
+    trace: list[tuple[str, int]] = [("on the chain", len(chain))]
     skipped: list[str] = []
 
     if chain.empty:
-        return SelectionResult(Maybe.missing("该日链为空"), None, tuple(trace))
+        return SelectionResult(Maybe.missing("the chain is empty that day"), None,
+                               tuple(trace))
 
     pool = chain.loc[chain["right"] == rule.right.value]
-    trace.append(("按期权类型", len(pool)))
+    trace.append(("by option type", len(pool)))
     if pool.empty:
-        return SelectionResult(Maybe.missing("链上没有该类型的合约"), None, tuple(trace))
+        return SelectionResult(Maybe.missing("the chain holds no contract of that type"),
+                               None, tuple(trace))
 
     pool = _filter_expiry(pool, rule, config, calendar, asof, trace)
     if pool is None or pool.empty:
         return SelectionResult(
-            Maybe.missing("没有满足到期条件且可执行的到期日"), None, tuple(trace)
+            Maybe.missing("no expiry both inside the window and executable"), None,
+            tuple(trace)
         )
 
     pool = _filter_liquidity(pool, rule, config, trace, skipped)
@@ -188,13 +214,15 @@ def select_contract(
         pool = _apply_bands(pool, rule, trace, skipped)
     if pool.empty:
         return SelectionResult(
-            Maybe.missing("流动性过滤后无候选"), None, tuple(trace), tuple(skipped)
+            Maybe.missing("no candidate survived the liquidity filters"), None,
+            tuple(trace), tuple(skipped)
         )
 
     row = _pick_strike(pool, rule, trace)
     if row is None:
         return SelectionResult(
-            Maybe.missing("无法确定行权价（delta 不可用）"), None, tuple(trace), tuple(skipped)
+            Maybe.missing("cannot settle on a strike (delta is unavailable)"), None,
+            tuple(trace), tuple(skipped)
         )
 
     contract = ContractId(
@@ -214,38 +242,46 @@ def _choose_by_function(
     asof: date,
     view: object,
 ) -> SelectionResult:
-    """执行用户写的选约函数，并把返回值校验成一张确实存在、确实开得了的合约。
+    """Run the user's selection function and validate its return into a contract
+    that really exists and really can be opened.
 
-    校验是必须的。用户函数返回什么都有可能——空的 DataFrame、自己拼的行、
-    一个不在链上的行权价。这些如果不查，回测会拿着一张不存在的合约照常跑完，
-    最后给出一个完全可信的假结果。
+    The validation is not optional. A user function can return anything — an empty
+    DataFrame, a row it assembled itself, a strike that is not on the chain. Left
+    unchecked, the backtest carries a non-existent contract through to the end and
+    produces a wholly believable false result.
     """
-    trace: list[tuple[str, int]] = [("链上合约", len(chain))]
+    trace: list[tuple[str, int]] = [("on the chain", len(chain))]
     pool = enrich_chain(chain, config, calendar, asof)
-    trace.append(("可执行（T+1 仍可交易）", len(pool)))
+    trace.append(("executable (still tradable on T+1)", len(pool)))
     if pool.empty:
-        return SelectionResult(Maybe.missing("当日没有可执行的合约"), None, tuple(trace))
+        return SelectionResult(Maybe.missing("no executable contract that day"), None,
+                               tuple(trace))
 
     try:
         picked = chooser(pool, view)
     except Exception as exc:  # noqa: BLE001
-        # 不吞。用户函数里的错必须带着是哪天、错在哪一起抛出来，否则调试无从下手。
+        # Never swallowed. An error inside the user's function has to be raised
+        # with the day and the cause, or there is nowhere to start debugging.
         raise StartupError(
-            f"选约函数在 {asof} 抛出异常：{type(exc).__name__}: {exc}"
+            f"the selection function raised on {asof}: {type(exc).__name__}: {exc}"
         ) from exc
 
     if picked is None:
-        # 返回 None 可能是"今天确实不想开"，也可能是筛选条件写错了一直筛空。
-        # 两者从结果上分不出来，所以把当日**实际**能选的样貌一并报出——
-        # 写错 right 取值、delta 全是缺失这类问题，看一眼事件就知道了。
+        # None can mean "genuinely no trade today" or a filter written wrong that
+        # returns nothing every day. Those are indistinguishable from the result,
+        # so what **was actually** selectable that day is reported alongside — a
+        # wrong `right` value, or delta absent throughout, is then obvious from
+        # one event.
         return SelectionResult(
-            Maybe.missing(f"选约函数返回 None（当日不开仓）｜当日可选：{_profile(pool)}"),
+            Maybe.missing(f"the selection function returned None (no trade today) | "
+                          f"available that day: {_profile(pool)}"),
             None, tuple(trace),
         )
 
     row = _as_single_row(picked, asof)
     if row is None:
-        return SelectionResult(Maybe.missing("选约函数返回了空结果"), None, tuple(trace))
+        return SelectionResult(Maybe.missing("the selection function returned nothing"),
+                               None, tuple(trace))
 
     key = (str(row["symbol"]), _as_date(row["expiry"]), str(row["right"]), float(row["strike"]))
     match = pool.loc[
@@ -256,12 +292,13 @@ def _choose_by_function(
     ]
     if match.empty:
         raise StartupError(
-            f"选约函数在 {asof} 返回的合约不在当日可执行的链上：{key}。"
-            "请从传进去的 chain 里挑一行返回，不要自己拼。"
+            f"the contract the selection function returned on {asof} is not on that "
+            f"day's executable chain: {key}. Return a row from the chain that was "
+            f"passed in; do not assemble one."
         )
 
     row = match.iloc[0]
-    trace.append(("函数选中", 1))
+    trace.append(("chosen by the function", 1))
     contract = ContractId(
         symbol=str(row["symbol"]),
         expiry=_as_date(row["expiry"]),
@@ -272,34 +309,37 @@ def _choose_by_function(
 
 
 def _profile(pool: pd.DataFrame) -> str:
-    """当日可选合约的一句话画像。用于让"选不出来"这件事自己解释自己。"""
+    """A one-line profile of what was selectable that day, so that "nothing was
+    selected" explains itself."""
     def rng(col: str, fmt: str = "{:.2f}") -> str:
         v = pool[col].dropna()
         if v.empty:
-            return f"{col}=全缺失"
+            return f"{col}=absent throughout"
         return f"{col} {fmt.format(v.min())}–{fmt.format(v.max())}"
 
     rights = "/".join(sorted(pool["right"].astype(str).unique()))
-    return (f"{len(pool)} 张，right 取值 {rights}，"
-            f"{rng('dte', '{:.0f}')}，{rng('delta')}，{rng('iv')}，{rng('spread')}")
+    return (f"{len(pool)} contracts, right values {rights}, "
+            f"{rng('dte', '{:.0f}')}, {rng('delta')}, {rng('iv')}, {rng('spread')}")
 
 
 def _as_single_row(picked, asof: date):
-    """把选约函数的返回值收敛成一行。接受 Series、单行 DataFrame、以及空结果。"""
+    """Reduce the selection function's return to one row. Accepts a Series, a
+    single-row DataFrame, and an empty result."""
     if isinstance(picked, pd.DataFrame):
         if picked.empty:
             return None
         if len(picked) > 1:
             raise StartupError(
-                f"选约函数在 {asof} 返回了 {len(picked)} 行。一次只能选一张合约——"
-                "需要多腿请等多腿支持，现在自己挑一行返回。"
+                f"the selection function returned {len(picked)} rows on {asof}. One "
+                f"contract at a time — multi-leg needs multi-leg support; for now "
+                f"return a single row."
             )
         return picked.iloc[0]
     if isinstance(picked, pd.Series):
         return picked
     raise StartupError(
-        f"选约函数在 {asof} 返回了 {type(picked).__name__}，"
-        "应当返回 chain 里的一行（Series）或 None。"
+        f"the selection function returned {type(picked).__name__} on {asof}; it must "
+        f"return a row of the chain (a Series) or None."
     )
 
 
@@ -319,23 +359,24 @@ def _filter_expiry(
     lo, hi = rule.dte_window
 
     in_window = [e for e in expiries if lo <= (e - asof).days <= hi]
-    trace.append(("到期在窗口内", len(in_window)))
+    trace.append(("expiry inside the window", len(in_window)))
     if not in_window:
         return None
 
-    # 可执行性下限：执行日之前或当日到期的合约不可用。下限按交易日计，
-    # 且配置层已保证它不小于执行延迟加一。
+    # The executability floor: a contract expiring before or on the execution day
+    # is unusable. The floor is in trading days, and the config layer has already
+    # guaranteed it is at least the execution lag plus one.
     executable = [
         e for e in in_window if calendar.sessions_between(asof, e) >= config.min_days_to_expiry
     ]
-    trace.append(("满足可执行性下限", len(executable)))
+    trace.append(("past the executability floor", len(executable)))
     if not executable:
         return None
 
-    # 最接近目标天数；并列时取较近的那个（确定性规则）
+    # Closest to the target; on a tie take the nearer one (a deterministic rule).
     chosen = min(executable, key=lambda e: (abs((e - asof).days - rule.target_dte), e))
     subset = pool.loc[pool["expiry"].map(_as_date) == chosen]
-    trace.append(("选定到期日后", len(subset)))
+    trace.append(("after settling the expiry", len(subset)))
     return subset
 
 
@@ -346,16 +387,17 @@ def _filter_liquidity(
     trace: list[tuple[str, int]],
     skipped: list[str],
 ) -> pd.DataFrame:
-    """流动性过滤。字段不可用时**跳过该约束并标明**，不因缺字段判为不合格。"""
+    """Liquidity filters. When a field is unavailable the constraint is **skipped
+    and flagged**; an absent field never counts as a failure."""
     checks = (
-        ("volume", rule.min_volume, "最小成交量"),
-        ("open_interest", rule.min_open_interest, "最小未平仓"),
+        ("volume", rule.min_volume, "minimum volume"),
+        ("open_interest", rule.min_open_interest, "minimum open interest"),
     )
     for column, threshold, label in checks:
         if threshold is None:
             continue
         if pool[column].isna().all():
-            skipped.append(f"{label}（数据源不提供 {column}）")
+            skipped.append(f"{label} (the data source does not supply {column})")
             continue
         pool = pool.loc[pool[column] >= threshold]
         trace.append((label, len(pool)))
@@ -365,23 +407,24 @@ def _filter_liquidity(
     cap = rule.max_relative_spread or config.costs.max_relative_spread
     spread = relative_spread(pool["bid"], pool["ask"])
     pool = pool.loc[spread.notna() & (spread <= cap)]
-    trace.append(("价差上限", len(pool)))
+    trace.append(("spread cap", len(pool)))
     return pool
 
 
 def _apply_bands(pool: pd.DataFrame, rule: SelectionRule, trace, skipped):
-    """可行域过滤。字段不可用时**跳过该约束并标明**，不因缺字段判为不合格。"""
+    """Feasible-region filters. When a field is unavailable the constraint is
+    **skipped and flagged**; an absent field never counts as a failure."""
     if rule.delta_band is not None:
         lo, hi = rule.delta_band
         if pool["delta"].isna().all():
-            skipped.append("delta 区间（数据源不提供 delta）")
+            skipped.append("delta band (the data source does not supply delta)")
         else:
             pool = pool.loc[pool["delta"].abs().between(lo, hi)]
             trace.append((f"delta∈[{lo},{hi}]", len(pool)))
     if rule.iv_band is not None:
         lo, hi = rule.iv_band
         if pool["iv"].isna().all():
-            skipped.append("IV 区间（数据源不提供 iv）")
+            skipped.append("IV band (the data source does not supply iv)")
         else:
             pool = pool.loc[pool["iv"].between(lo, hi)]
             trace.append((f"IV∈[{lo},{hi}]", len(pool)))
@@ -391,12 +434,13 @@ def _apply_bands(pool: pd.DataFrame, rule: SelectionRule, trace, skipped):
 def _pick_strike(pool: pd.DataFrame, rule: SelectionRule, trace: list[tuple[str, int]]):
     if rule.target_delta is not None:
         usable = pool.loc[pool["delta"].notna()]
-        trace.append(("delta 可用", len(usable)))
+        trace.append(("delta available", len(usable)))
         if usable.empty:
             return None
         target = abs(rule.target_delta)
         distance = (usable["delta"].abs() - target).abs()
-        # 并列时取更虚值的一张：看涨取更高行权价，看跌取更低
+        # On a tie take the one further out of the money: a higher strike for a
+        # call, a lower one for a put.
         tie_break = -usable["strike"] if rule.right is Right.CALL else usable["strike"]
         order = np.lexsort((tie_break.to_numpy(), distance.to_numpy()))
         return usable.iloc[order[0]]
@@ -406,5 +450,5 @@ def _pick_strike(pool: pd.DataFrame, rule: SelectionRule, trace: list[tuple[str,
     target_strike = spot * (1 + sign * rule.moneyness)
     distance = (pool["strike"] - target_strike).abs()
     order = np.lexsort((pool["strike"].to_numpy(), distance.to_numpy()))
-    trace.append(("按价值状态定位", len(pool)))
+    trace.append(("located by moneyness", len(pool)))
     return pool.iloc[order[0]]

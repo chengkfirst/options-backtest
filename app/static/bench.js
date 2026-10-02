@@ -101,10 +101,10 @@ function renderSignalRef(){
   const docs = META.signal_docs || [];
   if(!docs.length){ $("sigRef").innerHTML = ""; return; }
   const q = ($("sigSearch").value || "").trim().toLowerCase();
-  const hit = d => !q || [d["信号"], d["量的是什么"], d["类别"]]
+  const hit = d => !q || [d["signal"], d["measures"], d["family"]]
     .some(v => String(v).toLowerCase().includes(q));
   const groups = {};
-  for(const d of docs.filter(hit)) (groups[d["类别"]] ??= []).push(d);
+  for(const d of docs.filter(hit)) (groups[d["family"]] ??= []).push(d);
 
   if(!Object.keys(groups).length){
     $("sigRef").innerHTML = `<p class="hint">没有匹配 “${q}” 的信号。</p>`;
@@ -114,12 +114,12 @@ function renderSignalRef(){
     <div class="sig-group">
       <div class="sig-fam">${fam}</div>
       ${list.map(d => `
-        <button type="button" class="sig" data-name="${d["信号"]}"
-                title="${d["注意"] || ""}">
-          <code>${d["信号"]}</code>
-          <span class="sig-what">${d["量的是什么"]}</span>
-          <span class="sig-unit">${d["单位"]}</span>
-          ${d["注意"] ? '<span class="sig-warn" aria-label="有注意事项">!</span>' : ""}
+        <button type="button" class="sig" data-name="${d["signal"]}"
+                title="${d["caveat"] || ""}">
+          <code>${d["signal"]}</code>
+          <span class="sig-what">${d["measures"]}</span>
+          <span class="sig-unit">${d["unit"]}</span>
+          ${d["caveat"] ? '<span class="sig-warn" aria-label="has a caveat">!</span>' : ""}
         </button>`).join("")}
     </div>`).join("");
 

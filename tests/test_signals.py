@@ -62,12 +62,12 @@ class TestSignalSet:
         assert {"sma_20", "sma_50", "rsi_14", "rv_20"} <= set(signals.names)
 
     def test_missing_is_explicit_not_zero(self, signals, market):
-        """预热期读到显式缺失，不是数值 0。"""
+        """The warm-up reads as an explicit absence, not as the number 0."""
         value = signals.on(market.bars.dates[0])["sma_200"]
-        assert value.is_missing and "无取值" in value.reason
+        assert value.is_missing and "no value" in value.reason
 
     def test_unknown_signal_fails_at_startup(self, signals):
-        with pytest.raises(StartupError, match="未注册的信号"):
+        with pytest.raises(StartupError, match="unregistered signals"):
             signals.require(["sma_20", "typo"])
 
     def test_unknown_signal_raises_on_access(self, signals, market):

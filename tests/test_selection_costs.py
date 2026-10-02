@@ -1,4 +1,4 @@
-"""选约规则与成本模型。"""
+"""Selection rules and the cost model."""
 
 from __future__ import annotations
 
@@ -47,23 +47,24 @@ class TestExpirySelection:
     def test_no_expiry_in_window_means_no_trade(self, snapshot, config, market, day):
         rule = SelectionRule(target_dte=200, dte_window=(190, 210), target_delta=0.30)
         res = select_contract(snapshot, rule, config, market.calendar, day)
-        assert not res.ok and "到期" in res.contract.reason
+        assert not res.ok and "expiry" in res.contract.reason
 
     def test_executability_floor_excludes_near_expiry(self, snapshot, config, market, day):
-        """执行日或之前到期的合约不可用——否则了结意图会落空。"""
+        """A contract expiring on or before the execution day is unusable, or an
+        exit intent would come to nothing."""
         rule = SelectionRule(target_dte=3, dte_window=(1, 6), target_delta=0.30)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         if res.ok:
             remaining = market.calendar.sessions_between(day, res.contract.unwrap().expiry)
             assert remaining >= config.min_days_to_expiry
         else:
-            assert "可执行" in res.describe() or "到期" in res.contract.reason
+            assert "executable" in res.describe() or "expiry" in res.contract.reason
 
     def test_trace_is_explainable(self, snapshot, config, market, day):
         rule = SelectionRule(target_delta=0.30)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         names = [step for step, _ in res.trace]
-        assert "链上合约" in names and "按期权类型" in names
+        assert "on the chain" in names and "by option type" in names
 
 
 class TestStrikeSelection:
@@ -79,7 +80,8 @@ class TestStrikeSelection:
         assert abs(res.contract.unwrap().strike - spot * 1.05) <= config.contract.strike_step
 
     def test_tie_breaks_toward_further_otm(self, config, market, day):
-        """delta 与目标等距时取更虚值的一张：保守，且结果确定。"""
+        """On an equal delta distance take the one further out of the money:
+        conservative, and deterministic."""
         rows = []
         for strike, delta in ((400.0, 0.25), (410.0, 0.35)):
             row = {c: np.nan for c in CHAIN_COLUMNS}
@@ -104,7 +106,8 @@ class TestStrikeSelection:
 
 class TestLiquidityFilters:
     def test_unavailable_fields_are_skipped_not_failed(self, snapshot, config, market, day):
-        """合成链不提供成交量；不得因字段缺失判为不合格。"""
+        """The synthetic chain supplies no volume; an absent field must not count
+        as a failure."""
         rule = SelectionRule(target_delta=0.30, min_volume=100, min_open_interest=500)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         assert res.ok and len(res.skipped_filters) == 2
@@ -112,7 +115,7 @@ class TestLiquidityFilters:
     def test_spread_cap_excludes_wide_quotes(self, snapshot, config, market, day):
         rule = SelectionRule(target_delta=0.30, max_relative_spread=1e-6)
         res = select_contract(snapshot, rule, config, market.calendar, day)
-        assert not res.ok and "流动性" in res.contract.reason
+        assert not res.ok and "liquidity" in res.contract.reason
 
     def test_empty_chain(self, config, market, day):
         empty = pd.DataFrame(columns=list(CHAIN_COLUMNS))
@@ -158,7 +161,7 @@ class TestCosts:
 
     @pytest.mark.parametrize(
         "bid,ask,expected",
-        [(np.nan, 2.0, "报价缺失"), (2.0, np.nan, "报价缺失"), (3.0, 2.0, "卖价低于买价")],
+        [(np.nan, 2.0, "no quote"), (2.0, np.nan, "no quote"), (3.0, 2.0, "ask below bid")],
     )
     def test_untradable_reasons(self, bid, ask, expected):
         got = check_tradable(bid, ask, CostConfig())
@@ -166,7 +169,7 @@ class TestCosts:
 
     def test_spread_cap(self):
         got = check_tradable(1.0, 2.0, CostConfig(max_relative_spread=0.2))
-        assert not got.ok and "价差" in got.reason
+        assert not got.ok and "spread" in got.reason
 
     def test_tradable_reports_spread(self):
         got = check_tradable(2.00, 2.20, CostConfig())

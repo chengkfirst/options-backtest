@@ -1,7 +1,8 @@
-"""组合账本：现金与持仓的一致性、加权平均成本、到期交割、账目守恒。
+"""The portfolio ledger: cash and positions staying consistent, weighted average
+cost, expiry settlement, the accounting identity.
 
-账本是整个事件驱动引擎唯一持有状态的地方，所以关于状态的 bug 只可能在这里。
-这些测试就是冲着那些 bug 去的。
+The ledger is the only place in the event-driven engine that holds state, so a
+state bug can only be here. These tests go after exactly those bugs.
 """
 
 from __future__ import annotations
@@ -37,7 +38,8 @@ class TestLong:
         assert ledger.position(CALL).quantity == 2
 
     def test_partial_close_keeps_unit_cost(self, ledger):
-        """部分了结后剩余持仓的单位成本不变，只减数量。"""
+        """After a partial close the remaining unit cost is unchanged; only the
+        quantity falls."""
         ledger.apply_fill(contract=CALL, side=Side.BUY, quantity=3, price=5.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
         realised = ledger.apply_fill(contract=CALL, side=Side.SELL, quantity=1, price=8.0,
@@ -61,17 +63,18 @@ class TestLong:
         assert len(ledger) == 0 and ledger.position(CALL) is None
 
     def test_rejects_oversell(self, ledger):
-        """卖超持仓即反手开空，未被支持——必须报错而不是悄悄建一个空头。"""
+        """Overselling means reversing through zero, which is unsupported — it has
+        to raise rather than quietly open a short."""
         ledger.apply_fill(contract=CALL, side=Side.BUY, quantity=1, price=5.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
-        with pytest.raises(InvariantError, match="反手开仓"):
+        with pytest.raises(InvariantError, match="reversing through zero"):
             ledger.apply_fill(contract=CALL, side=Side.SELL, quantity=3, price=6.0,
                               fees=ZERO_FEES, when=T1, trade_id=1)
 
 
 class TestShort:
     def test_sell_increases_cash(self, ledger):
-        """卖出是收权利金，持仓为负。"""
+        """Selling receives premium and the position is negative."""
         ledger.apply_fill(contract=PUT, side=Side.SELL, quantity=1, price=3.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
         assert ledger.cash == pytest.approx(100_300)
@@ -87,7 +90,7 @@ class TestShort:
         assert len(ledger) == 0
 
     def test_market_value_is_negative(self, ledger):
-        """空头市值为负——它是负债，不是资产。"""
+        """A short's market value is negative — it is a liability, not an asset."""
         ledger.apply_fill(contract=PUT, side=Side.SELL, quantity=1, price=3.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
         assert ledger.position(PUT).market_value(2.0) == pytest.approx(-200.0)
@@ -98,8 +101,8 @@ class TestShort:
         assert ledger._collateral(ledger.position(PUT)) == pytest.approx(380 * 2 * 100)
 
     def test_naked_call_collateral_is_nan(self, ledger):
-        """裸卖 call 的保证金模型没做——返回 NaN 让任何用到它的地方显形，
-        而不是编一个数字。"""
+        """There is no margin model for a naked call — returning NaN makes any use
+        of it show up, rather than inventing a number."""
         import math
 
         ledger.apply_fill(contract=CALL, side=Side.SELL, quantity=1, price=5.0,
@@ -116,7 +119,8 @@ class TestExpiry:
         assert len(ledger) == 0 and ledger.realised == pytest.approx(-500.0)
 
     def test_short_put_assigned_gets_shares(self, ledger):
-        """QQQ 期权是实物交割：被指派拿到股票、付出现金，不是现金结算。"""
+        """QQQ options settle physically: assignment delivers shares against cash,
+        not a cash settlement."""
         ledger.apply_fill(contract=PUT, side=Side.SELL, quantity=1, price=3.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
         kind = ledger.settle_expiry(PUT, Maybe.some(370.0), PUT.expiry)
@@ -126,7 +130,8 @@ class TestExpiry:
         assert stock.shares == 100 and stock.avg_price == pytest.approx(380.0)
 
     def test_premium_is_realised_on_assignment(self, ledger):
-        """指派时权利金必须计入已实现——漏掉它会让账目不守恒（真出过这个 bug）。"""
+        """On assignment the premium must be realised — omitting it breaks the
+        accounting identity."""
         ledger.apply_fill(contract=PUT, side=Side.SELL, quantity=1, price=3.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
         ledger.settle_expiry(PUT, Maybe.some(370.0), PUT.expiry)
@@ -143,11 +148,12 @@ class TestExpiry:
         assert not ledger.stock_positions
 
     def test_missing_spot_aborts(self, ledger):
-        """到期日没有标的收盘价时必须报错——猜一个价格会让结算悄悄出错。"""
+        """With no underlying close on the expiry day this must raise — guessing a
+        price makes the settlement quietly wrong."""
         ledger.apply_fill(contract=CALL, side=Side.BUY, quantity=1, price=5.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
-        with pytest.raises(InvariantError, match="没有标的收盘价"):
-            ledger.settle_expiry(CALL, Maybe.missing("休市"), CALL.expiry)
+        with pytest.raises(InvariantError, match="no underlying close"):
+            ledger.settle_expiry(CALL, Maybe.missing("market closed"), CALL.expiry)
 
     def test_at_the_money_expires_worthless(self, ledger):
         ledger.apply_fill(contract=CALL, side=Side.BUY, quantity=1, price=5.0,
@@ -157,14 +163,16 @@ class TestExpiry:
 
 class TestMarkToMarket:
     def test_liquidation_value_below_mid_for_long(self, ledger):
-        """多头按买价估值必须低于中价——中价是账面，买价才是卖得掉的钱。"""
+        """A long marked at the bid must come out below the mid — the mid is book
+        value, the bid is what could be sold."""
         ledger.apply_fill(contract=CALL, side=Side.BUY, quantity=2, price=5.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
         snap = ledger.snapshot(T1, {CALL: (6.0, 6.4)}, Maybe.some(405.0))
         assert snap.equity_liq < snap.equity_mid
 
     def test_liquidation_value_below_mid_for_short(self, ledger):
-        """空头按卖价估值——买回要花更多钱，所以清算权益更低。"""
+        """A short is marked at the ask — buying it back costs more, so liquidation
+        equity is lower."""
         ledger.apply_fill(contract=PUT, side=Side.SELL, quantity=1, price=3.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
         snap = ledger.snapshot(T1, {PUT: (1.0, 1.4)}, Maybe.some(395.0))
@@ -180,12 +188,13 @@ class TestMarkToMarket:
         ledger.apply_fill(contract=PUT, side=Side.SELL, quantity=1, price=3.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
         ledger.settle_expiry(PUT, Maybe.some(370.0), PUT.expiry)
-        with pytest.raises(InvariantError, match="没有标的收盘价"):
-            ledger.snapshot(T1, {}, Maybe.missing("休市"))
+        with pytest.raises(InvariantError, match="no underlying close"):
+            ledger.snapshot(T1, {}, Maybe.missing("market closed"))
 
 
 class TestInvariant:
-    """账目守恒：期末权益 = 期初 + 已实现 − 费用 + 浮动。"""
+    """The accounting identity: closing equity = opening + realised − fees +
+    unrealised."""
 
     @pytest.mark.parametrize("side,price", [(Side.BUY, 5.0), (Side.SELL, 3.0)])
     def test_holds_with_open_position(self, ledger, side, price):
@@ -205,11 +214,11 @@ class TestInvariant:
         ledger.check_invariant(ledger.snapshot(date(2024, 3, 18), {}, Maybe.some(372.0)))
 
     def test_detects_drift(self, ledger):
-        """守恒校验必须能抓到偏差——否则它只是装饰。"""
+        """The identity check has to catch a drift, or it is decoration."""
         ledger.apply_fill(contract=CALL, side=Side.BUY, quantity=1, price=5.0,
                           fees=ZERO_FEES, when=T0, trade_id=1)
         ledger._cash += 0.01
-        with pytest.raises(InvariantError, match="账目不守恒"):
+        with pytest.raises(InvariantError, match="accounting identity fails"):
             ledger.check_invariant(ledger.snapshot(T1, {CALL: (5.0, 5.0)}, Maybe.some(400.0)))
 
     def test_rejects_non_positive_capital(self):
