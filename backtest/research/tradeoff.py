@@ -1,33 +1,44 @@
-"""选合约的取舍面：同一天的链，按虚值 × 期限摊开看。
+"""The contract-selection trade-off surface: one day's chain, spread out over
+moneyness x tenor.
 
-## 为什么要这个
+## Why this exists
 
-选合约的直觉是关于**结构**的——"这张太虚了，动了也起不来"、"这么短的 theta 扛
-不住"。这些判断背后是几个量在虚值 × 期限这个面上的形状。看不见那个形状，就只能
-凭记忆猜。
+The intuition about choosing a contract is about **structure** — "that one is too
+far out of the money, it will not come back even if the move happens", "theta at
+that tenor is unbearable". Behind those judgements is the shape of a few quantities
+over the moneyness x tenor surface. Without seeing that shape, there is only memory
+to go on.
 
-## 四个量，各回答一句话
+## Four quantities, one sentence each
 
 ===================  ======================================================
-``theta_pct_day``     标的不动，我每天烧掉权利金的百分之几
-``delta_now``         现在的方向暴露
-``delta_if_move``     **论点兑现之后**暴露变成多少 ← 最容易被忽略的一个
-``breakeven_move``    标的要动多少我才回本。**正数一律表示"朝论点方向动"**，
-                      看涨看跌同号——与链上 ``moneyness`` 的口径一致，
-                      免得读表时还要在脑子里换算方向
+``theta_pct_day``     with the underlying still, what percentage of the
+                      premium burns each day
+``delta_now``         the directional exposure right now
+``delta_if_move``     what the exposure becomes **once the thesis plays
+                      out** <- the one most easily overlooked
+``breakeven_move``    how far the underlying has to move to break even.
+                      **Positive always means "in the direction of the
+                      thesis"**, for calls and puts alike — the same
+                      convention as the chain's ``moneyness``, so no
+                      direction has to be converted while reading
 ===================  ======================================================
 
-``delta_if_move`` 是这里最重要的。短期深虚值的合约，标的真动了暴露反而缩——
-论点对了，仓位没了。只看入场时的 delta 看不出这件事。
+``delta_if_move`` is the important one here. A short-dated, far out-of-the-money
+contract's exposure actually shrinks once the underlying really moves — the thesis
+was right and the position is gone. The delta at entry cannot show that.
 
-## 数字从哪来
+## Where the numbers come from
 
-**从当日真实链上算，不是从公式贴一张静态表。** 这样真实数据接进来之后它自动反映
-真实的偏斜与期限结构；合成链上它反映的就是 Black-Scholes 的性质。两种情况下这张
-表都诚实地描述"你当下真的能买到什么"，而不是描述某个模型应该是什么样。
+**Computed from the day's real chain, not pasted from a formula into a static
+table.** So once real data is wired in it reflects the real skew and term structure;
+on the synthetic chain it reflects Black-Scholes' properties. In both cases the table
+honestly describes what you can actually buy right now, rather than what some model
+says things should look like.
 
-``delta_if_move`` 是唯一需要模型的一项——链上没有"如果标的涨 3% 会怎样"这种数据，
-只能重新定价。它会被单独标记来源。
+``delta_if_move`` is the one entry that needs a model — the chain holds no "what if
+the underlying rises 3%", so it has to be repriced. Its provenance is flagged
+separately.
 """
 
 from __future__ import annotations
@@ -38,9 +49,10 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-#: 默认看的虚值档位（正数一律表示虚值，看涨看跌同号）。
+#: The moneyness levels shown by default (positive always means out of the money,
+#: for calls and puts alike).
 MONEYNESS = (0.00, 0.02, 0.04, 0.06, 0.10)
-#: 默认看的期限档位（日历日）。
+#: The tenors shown by default, in calendar days.
 TENORS = (14, 21, 30, 45, 60, 90)
 
 
@@ -54,10 +66,12 @@ def tradeoff_grid(
     move: float = 0.03,
     rate: float = 0.04,
 ) -> dict[str, pd.DataFrame]:
-    """把当日链摊成「虚值 × 期限」的四张表。
+    """Spread the day's chain into four moneyness x tenor tables.
 
-    每个格子取**最接近**该虚值/期限的那张真实合约；找不到足够接近的就留空，
-    **不插值**——插出来的数字看起来和真实报价一样，但它不对应任何你能买到的东西。
+    Each cell takes the real contract **closest** to that moneyness and tenor; where
+    nothing is close enough the cell is left empty, and **nothing is interpolated** —
+    an interpolated number looks exactly like a real quote while corresponding to
+    nothing you could buy.
     """
     if chain.empty:
         return {k: pd.DataFrame() for k in
@@ -75,19 +89,22 @@ def tradeoff_grid(
         asof = pd.Timestamp(pool["asof"].iloc[0]).date()
         pool["dte"] = [(pd.Timestamp(e).date() - asof).days for e in pool["expiry"]]
 
-    # 期限用**链上真有的**，不用写死的档位。写死的话，到期日稀疏时整列是空的，
-    # 看起来像系统坏了；而真实链的到期日分布本来就因标的而异。
+    # The tenors come from **what the chain actually holds**, not a hard-coded list.
+    # Hard-coded, a sparse set of expiries leaves whole columns empty and looks like a
+    # broken system; and a real chain's expiry distribution varies by underlying
+    # anyway.
     if tenors is None:
         available = sorted(int(d) for d in pool["dte"].unique() if d > 0)
         tenors = _spread_out(available, TENORS)
 
     out = {k: pd.DataFrame(index=[f"{m:.0%}" for m in moneyness],
-                           columns=[f"{t}天" for t in tenors], dtype=float)
+                           columns=[f"{t}d" for t in tenors], dtype=float)
            for k in ("theta_pct_day", "delta_now", "delta_if_move", "breakeven_move")}
 
     for mi, m in enumerate(moneyness):
         for ti, t in enumerate(tenors):
-            # 容差：虚值 ±1.2 个百分点，期限 ±25%。超出就留空，不凑。
+            # Tolerances: moneyness within 1.2 percentage points, tenor within 25%.
+            # Outside them the cell stays empty; nothing is forced.
             near = pool.loc[(pool["_mny"] - m).abs().le(0.012)
                             & (pool["dte"] - t).abs().le(max(3, t * 0.25))]
             if near.empty:
@@ -97,7 +114,7 @@ def tradeoff_grid(
             mid, dte = float(row["mid"]), float(row["dte"])
             if mid <= 0.01 or dte <= 0:
                 continue
-            r_, c_ = f"{m:.0%}", f"{t}天"
+            r_, c_ = f"{m:.0%}", f"{t}d"
 
             theta = float(row.get("theta", np.nan))
             if np.isfinite(theta):
@@ -118,10 +135,13 @@ def tradeoff_grid(
 
 
 def _delta_after(spot, strike, dte, iv, rate, is_call, move) -> float:
-    """论点兑现（标的动 ``move``）且过了十天之后的 delta。
+    """Delta after the thesis plays out (the underlying moves by ``move``) and ten
+    days pass.
 
-    重定价放在数据层（``data.chain.delta_after_move``），不在这里直接调定价——
-    上层只消费链上的字段，不关心数字是观测还是推导，这样换数据源时上层零改动。
+    The repricing lives in the data layer (``data.chain.delta_after_move``) rather
+    than calling pricing directly here — the layers above consume the chain's columns
+    and do not care whether a number was observed or derived, which is what lets the
+    data source be swapped with no change above.
     """
     from backtest.data.chain import delta_after_move
     from backtest.types import Right
@@ -131,15 +151,18 @@ def _delta_after(spot, strike, dte, iv, rate, is_call, move) -> float:
 
 
 def _spread_out(available: list[int], wanted: Sequence[int], n: int = 6) -> list[int]:
-    """从链上真有的期限里，挑出最接近惯用档位的那几个。
+    """From the tenors the chain actually holds, pick those closest to the
+    conventional levels.
 
-    惯用档位（14/21/30/45/60/90）是为了让不同日子的表可以横向比较；但如果某天
-    链上根本没有接近 90 天的到期日，硬列一栏空的只会让人以为系统坏了。
+    The conventional levels (14/21/30/45/60/90) exist so tables from different days
+    can be compared; but if a given day's chain holds nothing near 90 days, forcing an
+    empty column just makes it look like a broken system.
     """
     if not available:
         return []
-    # 链上本来就没几个到期日时全留下。按惯用档挑会把"没人最接近它"的那些丢掉
-    # （9/16/30/58 天会丢掉 9 天），链稀疏时信息量白损失一截。
+    # When the chain holds only a few expiries, keep them all. Picking by the
+    # conventional levels would drop the ones nothing is closest to (9/16/30/58 days
+    # would lose the 9), losing information for nothing on a sparse chain.
     if len(available) <= n:
         return available
     picked: list[int] = []

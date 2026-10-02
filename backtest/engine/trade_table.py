@@ -1,15 +1,21 @@
-"""成交表引擎：以表操作产出交易明细，而非逐日模拟。
+"""The trade-table engine: producing a trade log through table operations rather
+than a day-by-day simulation.
 
-核心洞察：**一笔有明确进出场规则的期权交易，本质是一次查表，不是一次模拟。**
-止盈止损常被误认为必须逐 bar 推进——实际上它需要的只是该合约在持有窗口内的逐日
-报价序列，取第一个越过阈值的日子即可。一次切片取代整个循环。
+The insight: **an option trade with definite entry and exit rules is a table lookup,
+not a simulation.** Take-profit and stop-loss are widely assumed to require stepping
+bar by bar — what they actually need is that contract's daily quotes over the holding
+window, and the first day that crosses the threshold. One slice replaces the loop.
 
-**时点约定贯穿始终**：任何决策发生在 T 日收盘，对应成交在 T+lag 日收盘。入场如此，
-了结也如此。用 T 日收盘价同时做决策和成交是最常见的前视来源，这里在架构上排除。
+**The timing convention runs throughout**: every decision happens at the close of T
+and the corresponding fill at the close of T+lag. Entries and exits alike. Using T's
+close for both the decision and the fill is the commonest source of look-ahead, and
+it is excluded here architecturally.
 
-**口径**：各笔交易独立计算，不考虑资金约束、不考虑并发上限、不产生组合权益曲线。
-因此它回答的是"这个想法有没有 edge"，不是"这个策略能不能跑"。并发持仓数序列被一并
-输出，使资金可行性的缺口从看不见变成一眼可见。
+**What this engine does not do**: each trade is computed independently, with no
+capital constraint, no concurrency limit and no portfolio equity curve. So it answers
+"does this idea have an edge", not "can this strategy be run". The series of
+concurrent positions is emitted alongside, which turns the gap in capital feasibility
+from invisible into obvious.
 """
 
 from __future__ import annotations
@@ -56,7 +62,8 @@ class _ExitDecision:
 
 
 class TradeTableEngine:
-    """七步流程：枚举 → 选约 → 入场报价 → 切片 → 算比例 → 首次触发 → 了结。"""
+    """Seven steps: enumerate -> select -> entry quote -> slice -> ratios -> first
+    trigger -> exit."""
 
     def __init__(
         self,
@@ -72,66 +79,80 @@ class TradeTableEngine:
         self.config = config or market.config
         self.events = events or market.events
 
-    # ---- 守卫 ----
-    #: 本引擎不支持的策略特性。给近似结果是最坏的选项——使用者拿到一个看起来正常的
-    #: 数字，却不知道它对应的规则并没有被真正执行。
+    # ---- guards ----
+    #: Strategy features this engine does not support. Returning an approximation is
+    #: the worst option — the user receives a number that looks fine without knowing
+    #: the rule behind it was never actually executed.
     UNSUPPORTED = {
-        "roll": "展期：新合约依赖旧合约何时退出，各笔独立计算表达不了",
-        "sizing_by_equity": "按权益比例定规模：各笔独立计算，不存在'当前权益'",
-        "portfolio_limits": "组合层敞口限额：需要跨持仓的状态",
-        "hedge": "跨持仓对冲：需要组合层视角",
-        "max_concurrent": "并发上限：各笔独立计算，互不知晓",
+        "roll": "rolling: the new contract depends on when the old one exits, which "
+                "independent per-trade computation cannot express",
+        "sizing_by_equity": "sizing as a fraction of equity: with each trade computed "
+                            "independently there is no current equity",
+        "portfolio_limits": "portfolio exposure limits: these need state across positions",
+        "hedge": "hedging across positions: this needs a portfolio view",
+        "max_concurrent": "a concurrency limit: trades are computed independently and "
+                          "know nothing of each other",
     }
 
     def _guard(self, strategy: Strategy) -> None:
-        """拒绝本引擎无法正确处理的配置，而不是给出近似结果。"""
+        """Refuse a configuration this engine cannot handle correctly, rather than
+        returning an approximation."""
         if strategy.review is not None:
             raise StartupError(
-                "逐日复查只能用事件驱动引擎。成交表引擎向量化算出场——一次性算完"
-                "整个持有窗口的首次触发，根本没有「逐日」这个环节。"
-                "改用 engine='event_driven'。"
+                "a daily review needs the event-driven engine. The trade-table engine "
+                "computes exits vectorised — the first trigger over the whole holding "
+                "window at once — so there is no 'each day' step at all. Use "
+                "engine='event_driven'."
             )
         if strategy.plan is not None:
             raise StartupError(
-                "计划式策略只能用事件驱动引擎。成交表引擎各笔独立、向量化算出场，"
-                "表达不了'这一笔用这套出场规则'——而那正是计划式的要点。"
-                "改用 engine='event_driven'。"
+                "a plan-based strategy needs the event-driven engine. The trade-table "
+                "engine treats trades independently and computes exits vectorised, so "
+                "it cannot express 'this trade has these exit rules' — which is the "
+                "whole point of a plan. Use engine='event_driven'."
             )
         self.signals.require(list(strategy.entry.requires))
         if strategy.exit.hold_days is None and strategy.exit.dte_floor is None:
-            raise StartupError("缺少时间类了结条件，仓位会被拖到到期")
+            raise StartupError("no time-based exit, so positions get dragged into expiry")
 
-        # 执行延迟一天意味着：剩余 dte_floor 日那天做决策，剩余 dte_floor-1 日那天成交。
-        # 下限小于 lag+1 时成交日落在到期日或之后，了结意图会落空，仓位被静默拖到结算。
+        # A one-day lag means the decision is taken with dte_floor days left and the
+        # fill happens with dte_floor-1 left. Below lag+1 the fill day lands on or
+        # after the expiry, the exit intent comes to nothing, and the position is
+        # silently dragged into settlement.
         lag = self.config.execution_lag_days
         floor = strategy.exit.dte_floor
         if floor is not None and floor < lag + 1:
             raise StartupError(
-                f"剩余到期下限 {floor} 个交易日过小：执行延迟为 {lag} 天，"
-                f"决策日之后还要 {lag} 天才成交，下限至少为 {lag + 1}。"
-                f"否则了结意图会落空，仓位被静默拖到到期结算。"
+                f"the days-to-expiry floor of {floor} trading days is too small: with "
+                f"an execution lag of {lag} days the fill is {lag} days after the "
+                f"decision, so the floor must be at least {lag + 1}. Otherwise the "
+                f"exit intent comes to nothing and the position is silently dragged "
+                f"into expiry settlement."
             )
         if strategy.sizing.method != "fixed":
             raise StartupError(
-                f"成交表引擎只支持固定张数：各笔独立计算，不存在\"当前权益\"，"
-                f"因此 {strategy.sizing.method} 无从算起。请改用 engine=\"event_driven\"。"
+                f"the trade-table engine supports only a fixed number of contracts: "
+                f"trades are computed independently, there is no current equity, and "
+                f"so {strategy.sizing.method} has nothing to compute from. Use "
+                f"engine=\"event_driven\"."
             )
         for feature, why in self.UNSUPPORTED.items():
             if getattr(strategy, feature, None):
                 raise StartupError(
-                    f"成交表引擎不支持 {feature}（{why}）；该策略需要事件驱动引擎"
-                    f"（见 ROADMAP.md 阶段 4）"
+                    f"the trade-table engine does not support {feature} ({why}); this "
+                    f"strategy needs the event-driven engine"
                 )
 
-    # ---- 主流程 ----
+    # ---- the main flow ----
     def run(self, strategy: Strategy) -> "TradeTableResult":
         self._guard(strategy)
         sessions = self.market.sessions()
         records: list[TradeRecord] = []
         trade_id = 0
 
-        #: 已接受的交易，用来判断"这张合约此刻是否已在持仓"。
-        #: 成交表本来是无状态的，这是唯一一处例外——为的是与事件驱动引擎语义一致。
+        #: Accepted trades, used to tell whether a contract is already held. The
+        #: trade table is otherwise stateless; this is the one exception, and it exists
+        #: so the two engines agree semantically.
         held: list[TradeRecord] = []
 
         for signal_day in sessions:
@@ -142,7 +163,8 @@ class TradeTableEngine:
             entry_day = self.market.calendar.shift(signal_day, self.config.execution_lag_days)
             if entry_day is None or entry_day > self.config.end:
                 self.events.record(
-                    EventKind.CANDIDATE_DROPPED, signal_day, "执行日超出回测区间"
+                    EventKind.CANDIDATE_DROPPED, signal_day,
+                    "the execution day falls outside the backtest range"
                 )
                 continue
 
@@ -155,7 +177,8 @@ class TradeTableEngine:
             ):
                 self.events.record(
                     EventKind.CANDIDATE_DROPPED, entry_day,
-                    "同一合约已在持仓中，allow_stacking 为假", str(record.contract))
+                    "this contract is already held and allow_stacking is false",
+                    str(record.contract))
                 continue
             trade_id += 1
             record = replace(record, trade_id=trade_id)
@@ -170,7 +193,7 @@ class TradeTableEngine:
             calendar_sessions=sessions,
         )
 
-    # ---- 单笔 ----
+    # ---- one trade ----
     def _build_trade(
         self, trade_id: int, signal_day: date, entry_day: date, strategy: Strategy
     ) -> TradeRecord | None:
@@ -180,9 +203,10 @@ class TradeTableEngine:
             self.config,
             self.market.calendar,
             entry_day,
-            # 链取执行日的，信号视图取**决策日**的。自定义选约函数可以用 T 日看到的
-            # 东西决定"要一张什么样的"，但不许看 T+1 的行情——那等于拿成交日的涨跌
-            # 反过来挑行权价。
+            # The chain is the execution day's, the signal view the **decision
+            # day's**. A custom selector may decide what kind of contract to want from
+            # what T showed, but must not see T+1's market — that would be picking a
+            # strike out of the fill day's move.
             self.signals.on(signal_day),
         )
         if not selection.ok:
@@ -197,7 +221,8 @@ class TradeTableEngine:
         tradable = check_tradable(entry_quote["bid"], entry_quote["ask"], self.config.costs)
         if not tradable.ok:
             self.events.record(
-                EventKind.NOT_TRADABLE, entry_day, f"入场不可成交：{tradable.reason}", str(contract)
+                EventKind.NOT_TRADABLE, entry_day,
+                f"the entry is untradable: {tradable.reason}", str(contract)
             )
             return None
 
@@ -215,7 +240,8 @@ class TradeTableEngine:
         gaps = len(window) - len(quotes)
         if gaps:
             self.events.record(
-                EventKind.QUOTE_MISSING, entry_day, f"持有窗口内缺 {gaps} 天报价", str(contract)
+                EventKind.QUOTE_MISSING, entry_day,
+                f"{gaps} days without a quote inside the holding window", str(contract)
             )
 
         decision = self._first_trigger(entry_day, entry_price, contract, quotes, strategy, window)
@@ -233,11 +259,12 @@ class TradeTableEngine:
         )
 
     def _holding_window(self, entry_day: date, contract: ContractId, strategy: Strategy) -> list[date]:
-        """报价窗口：入场日起、到期日止。
+        """The quote window: from the entry day to the expiry.
 
-        窗口比**决策**窗口多出一个执行延迟——决策发生在某日收盘，成交在其后一个
-        交易日收盘，成交那天的报价必须也在这一次切片里，否则每笔交易都要多发一次
-        查询，且窗口边界与执行边界不一致。
+        It is one execution lag longer than the **decision** window — a decision
+        happens at one close and the fill at the next session's close, so the fill
+        day's quote has to be in this same slice; otherwise every trade needs an extra
+        query and the window boundary no longer matches the execution boundary.
         """
         cal = self.market.calendar
         last = contract.expiry
@@ -248,7 +275,8 @@ class TradeTableEngine:
         return [d for d in cal.sessions_in(entry_day, last)]
 
     def _decision_window(self, window: list[date], entry_day: date, strategy: Strategy) -> list[date]:
-        """决策窗口：报价窗口去掉末尾为执行预留的那几天。"""
+        """The decision window: the quote window minus the days reserved at the end
+        for execution."""
         cal = self.market.calendar
         if strategy.exit.hold_days is None:
             return [d for d in window if d > entry_day]
@@ -256,10 +284,10 @@ class TradeTableEngine:
         return [d for d in window if entry_day < d <= (limit or window[-1])]
 
     def _exit_price_of(self, row: pd.Series) -> Maybe[float]:
-        """了结价：卖出方向，取不利端（bid）。"""
+        """The exit price: selling, so the adverse side (the bid)."""
         tradable = check_tradable(row["bid"], row["ask"], self.config.costs)
         if not tradable.ok:
-            return Maybe.missing(tradable.reason or "不可成交")
+            return Maybe.missing(tradable.reason or "untradable")
         from backtest.costs.model import fill_price
 
         return Maybe.some(fill_price(row["bid"], row["ask"], Side.SELL, self.config.costs))
@@ -273,9 +301,10 @@ class TradeTableEngine:
         strategy: Strategy,
         window: list[date],
     ) -> _ExitDecision:
-        """在持有窗口内找**最早触发**的了结条件。
+        """Find the **first** exit condition to fire inside the holding window.
 
-        决策发生在某日收盘，因此这里返回的是"决策日"；实际成交在决策日 + 执行延迟。
+        A decision happens at a close, so what is returned here is the decision day;
+        the fill happens on the decision day plus the execution lag.
         """
         rule = strategy.exit
         cal = self.market.calendar
@@ -318,7 +347,7 @@ class TradeTableEngine:
                 triggers.append((int(hit[0]), ExitReason.TIME_EXIT))
 
         if not triggers:
-            # 没有任何条件触发：窗口末日即决策日
+            # Nothing fired: the last day of the window is the decision day.
             return _ExitDecision(days[-1], (ExitReason.TIME_EXIT,))
 
         earliest = min(idx for idx, _ in triggers)
@@ -350,7 +379,8 @@ class TradeTableEngine:
         exit_price: float | None = None
         exit_row: pd.Series | None = None
 
-        # 决策日之后按执行延迟找可成交的日子；不可成交则顺延
+        # After the decision day, find a tradable day at the execution lag; defer
+        # when it is untradable.
         candidates = [d for d in cal.sessions_in(settle_day or decision.day, contract.expiry)] if settle_day else []
         for day in candidates:
             if day > self.config.end:
@@ -371,7 +401,7 @@ class TradeTableEngine:
             deferred += 1
 
         if exit_price is None:
-            # 至到期仍未能成交 → 被动到期，按内在价值结算
+            # Still unfilled at expiry -> a passive expiry, settled at intrinsic value.
             return self._settle_at_expiry(
                 trade_id=trade_id,
                 contract=contract,
@@ -386,7 +416,8 @@ class TradeTableEngine:
 
         if deferred:
             self.events.record(
-                EventKind.EXIT_DEFERRED, decision.day, f"了结顺延 {deferred} 个交易日", str(contract)
+                EventKind.EXIT_DEFERRED, decision.day,
+                f"the exit was deferred {deferred} trading days", str(contract)
             )
 
         _, exit_fees = execute(
@@ -420,7 +451,9 @@ class TradeTableEngine:
         spot = self.market.spot(contract.expiry)
         if spot.is_missing:
             self.events.record(
-                EventKind.QUOTE_MISSING, contract.expiry, "到期日无标的收盘价，该笔作废", str(contract)
+                EventKind.QUOTE_MISSING, contract.expiry,
+                "no underlying close on the expiry day, so this trade is void",
+                str(contract)
             )
             return None
         s = spot.unwrap()
@@ -434,7 +467,8 @@ class TradeTableEngine:
         self.events.record(
             EventKind.PASSIVE_EXPIRY,
             contract.expiry,
-            f"被动到期（{'实值' if itm else '虚值'}），内在价值 {intrinsic:.2f}",
+            f"expired passively ({'in' if itm else 'out of'} the money), intrinsic "
+            f"{intrinsic:.2f}",
             str(contract),
         )
         exit_quote = dict(entry_quote)
@@ -457,24 +491,27 @@ class TradeTableEngine:
         )
 
     def _context(self, quote: dict, day: date, contract: ContractId) -> dict[str, Maybe[float]]:
-        """入场／了结时的上下文变量，供事后任意分组分析。无需重跑回测。
+        """The context at entry and exit, for grouping the analysis any way afterwards
+        without rerunning the backtest.
 
-        两个来源：**期权链**给出合约自身的状态（IV、delta、价值状态），**信号层**
-        给出标的当时的状态（均线、RSI、波动率）。后者不可省——"进场时 RSI 多少"
-        是分组分析最常用的切法之一，事后补不回来。
+        Two sources: the **chain** gives the contract's own state (IV, delta,
+        moneyness), and the **signal layer** gives the underlying's state at the time
+        (moving averages, RSI, volatility). The second cannot be dropped — "what was
+        RSI at entry" is one of the commonest cuts in grouped analysis, and it cannot
+        be reconstructed afterwards.
         """
 
         def numeric(key: str) -> Maybe[float]:
             value = quote.get(key)
             if value is None or (isinstance(value, float) and np.isnan(value)):
-                return Maybe.missing(f"{key} 不可用")
+                return Maybe.missing(f"{key} is unavailable")
             return Maybe.some(float(value))
 
         spot = numeric("underlying_price")
         moneyness = (
             Maybe.some(float(spot.unwrap() / contract.strike - 1.0))
             if spot.is_present
-            else Maybe.missing("标的价不可用")
+            else Maybe.missing("the underlying price is unavailable")
         )
         context: dict[str, Maybe[float]] = {
             "underlying_price": spot,
@@ -503,7 +540,7 @@ class TradeTableEngine:
         gross = (exit_price - entry_price) * multiplier * qty
         net = gross - fees.total
         if not np.isfinite(net):
-            raise InvariantError(f"交易 {trade_id} 的盈亏不是有限数")
+            raise InvariantError(f"trade {trade_id} has a non-finite P&L")
         return TradeRecord(
             trade_id=trade_id,
             engine=ENGINE_NAME,

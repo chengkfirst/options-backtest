@@ -372,12 +372,12 @@ function renderScenarios(rows){
 function renderEquityStrip(m){
   if(!m){ $("equityStrip").innerHTML = ""; return; }
   const tiles = [
-    ["总收益", pct(m["总收益"]), sgn(m["总收益"])],
-    ["年化", pct(m["年化"]), sgn(m["年化"])],
-    ["最大回撤", pct(m["最大回撤"]), "neg"],
-    ["夏普", m["夏普"].toFixed(2), ""],
-    ["年化波动", pct(m["年化波动"]), ""],
-    ["平均资金占用", pct(m["平均资金占用"]), ""],
+    ["总收益", pct(m["total_return"]), sgn(m["total_return"])],
+    ["年化", pct(m["annualised"]), sgn(m["annualised"])],
+    ["最大回撤", pct(m["max_drawdown"]), "neg"],
+    ["夏普", m["sharpe"].toFixed(2), ""],
+    ["年化波动", pct(m["annualised_vol"]), ""],
+    ["平均资金占用", pct(m["mean_capital_used"]), ""],
   ];
   $("equityStrip").innerHTML = tiles.map(([k,v,cls]) =>
     `<div class="stat"><dt>${k}</dt><dd class="${cls}">${v}</dd></div>`).join("");

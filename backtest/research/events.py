@@ -1,35 +1,46 @@
-"""历史事件研究：跌到某个程度之后，通常会怎样。
+"""Historical event studies: after a fall of a given size, what usually happens.
 
-这不是回测。回测模拟的是"按这套规则交易会赚多少"；这里问的是更前面一个问题：
-**这个条件本身有没有信息量。** 它只用标的价格，不碰期权——所以即使期权链是
-合成的，这里的结论也完全成立。
+This is not a backtest. A backtest simulates what trading by a set of rules would
+have earned; this asks the question before that one: **does the condition itself
+carry information.** It uses only the underlying's price and never touches options —
+so its conclusions hold even when the option chain is synthetic.
 
-## 四个必须做对的地方
+## Five things that have to be right
 
-1. **按"段"计数，不按"天"。** QQQ 历史上有 1,923 天处在 10% 回调之下，但那只是
-   约 14 段独立事件。按天计数会把一次熊市算成几百个观测，样本量虚高两个数量级。
+1. **Count episodes, not days.** QQQ has spent 1,923 days more than 10% below its
+   high, but that is only about 14 independent events. Counting days turns one bear
+   market into hundreds of observations and inflates the sample by two orders of
+   magnitude.
 
-2. **必须对照无条件基准。** QQQ 十二个月后上涨的无条件概率本来就很高。如果回调后
-   是 80% 而平时是 78%，这个信号什么也没说。**只报条件概率是在骗自己。**
+2. **The unconditional baseline is mandatory.** QQQ's unconditional probability of
+   being higher twelve months later is already high. If after a correction it is 80%
+   and ordinarily it is 78%, the signal said nothing. **Reporting only the
+   conditional probability is self-deception.**
 
-3. **路径和终点是两回事。** "十二个月后收在更高位"和"中途没再跌 10%"完全不同——
-   后者决定你拿不拿得住，而且往往是真正的约束。
+3. **The path and the endpoint are different things.** "Higher twelve months later"
+   and "never fell another 10% on the way" are not the same — the second decides
+   whether you can hold on, and it is often the real constraint.
 
-4. **区间末尾要截断。** 离数据末尾不足 N 个月的事件，没有完整的后续，必须排除并
-   报出排除了几个，不能悄悄按已有的天数算。
+4. **The end of the range has to be censored.** An event closer than N months to the
+   end of the data has no complete follow-up: it must be excluded, and how many were
+   excluded has to be reported, rather than quietly computed over however many days
+   exist.
 
-5. **判定事件用收盘，衡量痛苦用日内。** 这两件事不是一个口径：
-   日内插一下又收回来不算一次回调，但"我会不会被止损打掉"必须看日内最低。
-   实测 QQQ：按收盘算跌破 5% 有 3,069 天，按日内算有 3,529 天（多 15%）；
-   2015-08-24 收盘只跌 3.8%，日内最低跌了 17.2%——任何止损都被打掉了，
-   而收盘口径完全看不见。全用收盘会让回撤、"再跌 X%" 的概率**同时被低估**，
-   三个偏差同向，全都指向"看起来比实际好"。
+5. **Detect the event on the close, measure the pain intraday.** These are not one
+   convention: a dip that recovers by the close is not a correction, but "would I
+   have been stopped out" has to read the intraday low. Measured on QQQ: 3,069 days
+   broke 5% on a closing basis against 3,529 intraday (15% more); on 2015-08-24 the
+   close was down only 3.8% while the intraday low was down 17.2% — any stop was hit,
+   and the closing basis cannot see it at all. Using closes throughout understates
+   both the drawdown and the probability of a further fall, and all the biases point
+   the same way: it looks better than it was.
 
-## 样本量的硬现实
+## The hard reality of sample size
 
-二十七年的 QQQ：回调 10% 约 14 段，20% 约 6 段，30% 约 3 段。**三个观测得不出
-任何统计结论**，只能当作"历史上发生过这三次，分别是这样"。这个工具会把话说到这个
-份上，而不是给你一个看起来很精确的百分比。
+Twenty-seven years of QQQ: about 14 episodes at 10%, 6 at 20%, 3 at 30%. **Three
+observations support no statistical conclusion at all** — only "this happened three
+times in history, and here is each". This tool says exactly that much, rather than
+handing over a percentage that looks precise.
 """
 
 from __future__ import annotations
@@ -41,15 +52,17 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-#: 一个月按多少交易日算。21 是惯例（252/12）。
+#: Trading days per month. 21 is the convention (252/12).
 DAYS_PER_MONTH = 21
 
 
 def _as_bars(data: "pd.Series | pd.DataFrame") -> tuple[pd.Series, pd.Series, pd.Series, bool]:
-    """把输入收敛成（收盘、日内最高、日内最低、有没有真日内数据）。
+    """Reduce the input to (close, intraday high, intraday low, is it really
+    intraday).
 
-    只给收盘序列也能跑，但**"再跌 X%" 与最深回撤会被系统性低估**——
-    这一点会一路标到结果里，而不是让使用者以为拿到的是完整口径。
+    A close-only series runs, but **the probability of a further fall and the deepest
+    drawdown are then understated systematically** — a fact flagged all the way
+    through to the result, rather than left for the user to assume otherwise.
     """
     if isinstance(data, pd.Series):
         c = data.dropna().astype(float)
@@ -57,7 +70,7 @@ def _as_bars(data: "pd.Series | pd.DataFrame") -> tuple[pd.Series, pd.Series, pd
     frame = data.copy()
     frame.columns = [str(col).lower() for col in frame.columns]
     if "close" not in frame:
-        raise ValueError(f"缺 close 列，只有 {sorted(frame.columns)}")
+        raise ValueError(f"no close column; only {sorted(frame.columns)}")
     c = frame["close"].astype(float)
     has = {"high", "low"} <= set(frame.columns)
     h = frame["high"].astype(float) if has else c
@@ -68,14 +81,14 @@ def _as_bars(data: "pd.Series | pd.DataFrame") -> tuple[pd.Series, pd.Series, pd
 
 @dataclass(frozen=True, slots=True)
 class Episode:
-    """一次回调事件：从首次跌破阈值那一刻起。"""
+    """One correction episode, from the moment the threshold is first crossed."""
 
-    crossed: pd.Timestamp        # 首次跌破阈值的日期
-    price: float                 # 跌破时的价格，之后所有收益以它为起点
-    ref_high: float              # 事发前的参考高点
+    crossed: pd.Timestamp        # the date the threshold was first crossed
+    price: float                 # the price at the crossing; every return is from here
+    ref_high: float              # the reference high before the event
     ref_high_date: pd.Timestamp
-    drawdown: float              # 跌破当日的实际回撤（负数）
-    ended: pd.Timestamp | None   # 这一段何时结束（回撤收复到重置线）
+    drawdown: float              # the actual drawdown on the crossing day (negative)
+    ended: pd.Timestamp | None   # when the episode ended (recovered to the reset line)
 
 
 def find_corrections(
@@ -85,28 +98,32 @@ def find_corrections(
     reference_window: int = 252,
     reset_fraction: float = 0.5,
 ) -> list[Episode]:
-    """找出所有跌破 ``threshold`` 的独立回调段。
+    """Find every independent episode that crossed ``threshold``.
 
-    ``threshold`` 用正数表示，0.10 即回调 10%。
+    ``threshold`` is positive: 0.10 means a 10% correction.
 
-    **参考高点**用滚动 ``reference_window`` 日的收盘最高价（默认 252 ≈ 52 周）。
-    处理方式：滚动窗口而非历史最高——后者会让 2000 年之后十几年都"处在回调中"，
-    把不同性质的时期混成一段。
+    The **reference high** is the rolling ``reference_window``-day closing high
+    (252 ≈ 52 weeks by default). A rolling window rather than the all-time high: the
+    latter would leave the decade after 2000 permanently "in a correction", merging
+    periods of quite different character into one.
 
-    **段的界定**：一段回调 = **从同一个前高算起的那一段**。跌破之后要重新计数，
-    必须先创出新高——2024 年 8 月和 9 月两次触及 10% 回调，前高都是同一个 503，
-    那是一次回调里的两次触及，不是两次独立事件。按"收复到某个水平"来重置会把它
-    算成两段，样本量虚高。
+    **What makes an episode**: one correction = **the stretch measured from one prior
+    high**. Counting again requires a new reference high — August and September 2024
+    each touched a 10% correction against the same 503 high, which is two touches
+    within one correction, not two independent events. Resetting on "recovered to some
+    level" would count it as two and inflate the sample.
 
-    ``reset_fraction`` 只决定 ``ended`` 记在哪天（回撤收复到 ``-threshold *
-    reset_fraction`` 的那天），不影响计数。
+    ``reset_fraction`` only decides which day goes into ``ended`` (the day the drawdown
+    recovers to ``-threshold * reset_fraction``); it does not affect the count.
     """
     if not 0 < threshold < 1:
-        raise ValueError(f"threshold 用正数表示回调幅度，0.10 即 10%，给的是 {threshold}")
+        raise ValueError(f"threshold is the positive size of the correction, 0.10 for "
+                         f"10%, got {threshold}")
     if not 0 <= reset_fraction <= 1:
-        raise ValueError(f"reset_fraction 须在 0 与 1 之间，给的是 {reset_fraction}")
+        raise ValueError(f"reset_fraction must lie between 0 and 1, got {reset_fraction}")
 
-    # **事件的判定一律用收盘**：日内插一下又收回来不算一次回调。
+    # **Events are always detected on the close**: a dip that recovers by the close is
+    # not a correction.
     prices, _, _, _ = _as_bars(data)
     ref = prices.rolling(reference_window, min_periods=reference_window // 4).max()
     ref_idx = prices.rolling(reference_window, min_periods=reference_window // 4).apply(
@@ -117,15 +134,16 @@ def find_corrections(
     episodes: list[Episode] = []
     open_at: int | None = None
     reset_level = -threshold * reset_fraction
-    last_peak: int | None = None             # 上一段参考高点的位置
+    last_peak: int | None = None             # where the last episode's reference high was
 
     values = dd.to_numpy()
     for i in range(len(prices)):
         if np.isnan(values[i]):
             continue
         if open_at is None:
-            # 新的一段要求**参考高点换了一个**（日期更晚），而不是"创了新高"。
-            # 要求创新高的话，2000 年崩盘后十六年没新高，其间所有回调会被全部吞掉。
+            # A new episode requires **a different reference high** (a later date),
+            # not a new all-time high. Requiring a new high would swallow every
+            # correction in the sixteen years after the 2000 crash.
             fresh_peak = True
             if values[i] <= -threshold:
                 offset0 = ref_idx.iloc[i]
@@ -152,20 +170,21 @@ def find_corrections(
 
 @dataclass(frozen=True, slots=True)
 class Outcome:
-    """一段回调之后、某个时间窗内发生了什么。"""
+    """What happened within one horizon after one correction."""
 
     crossed: pd.Timestamp
     horizon_months: int
-    end_return: float              # 窗口末的收益（相对跌破价）
+    end_return: float              # the return at the end of the horizon, from the crossing
     finished_up: bool
     finished_above_5: bool
     finished_above_10: bool
-    recovered_pre_high: bool       # 窗口内**任意时点**回到事发前高
-    days_to_recover: float         # 回到前高用了几个交易日；没回到为 nan
-    touched_minus_5: bool          # 窗口内**日内任意时点**又跌 5%
+    recovered_pre_high: bool       # back to the prior high **at any point** in the window
+    days_to_recover: float         # trading days to the prior high; nan if never
+    touched_minus_5: bool          # fell another 5% **at any point intraday** in the window
     touched_minus_10: bool
-    max_drawdown_after: float      # 窗口内相对跌破价的最深跌幅（日内口径）
-    #: 上面两个"触及"与最深回撤是不是用了真日内数据。假的话它们被**系统性低估**。
+    max_drawdown_after: float      # deepest fall from the crossing in the window (intraday)
+    #: Whether the two "touched" flags and the deepest drawdown used real intraday
+    #: data. When false they are **understated systematically**.
     intraday: bool = True
 
 
@@ -175,11 +194,13 @@ def measure(
     *,
     horizons_months: Sequence[int] = (1, 3, 6, 12),
 ) -> pd.DataFrame:
-    """每一段回调在每个时间窗内的结果。
+    """Each correction's outcome in each horizon.
 
-    **末尾截断**：离数据末尾不足 N 个月的段，该时间窗**不出现在结果里**，
-    而不是按已有的天数凑合算——凑合算会系统性偏向"还没来得及跌"的短窗口。
-    被排除了几个由 :func:`study` 报出来。
+    **Censoring at the end**: an episode closer than N months to the end of the data
+    simply **does not appear** for that horizon, rather than being computed over
+    however many days exist — making do that way biases systematically towards short
+    windows that have not had time to fall. How many were excluded is reported by
+    :func:`study`.
     """
     prices, highs, lows, intraday = _as_bars(data)
     rows: list[Outcome] = []
@@ -191,12 +212,13 @@ def measure(
         for months in horizons_months:
             n = months * DAYS_PER_MONTH
             if i0 + n >= len(prices):
-                continue                      # 数据不够，这个窗口不算
+                continue                      # not enough data: this horizon does not count
             path = prices.iloc[i0: i0 + n + 1]
             rel = path / ep.price - 1.0
-            # **衡量痛苦用日内最低**：止损是被日内触及打掉的，不是被收盘打掉的。
+            # **Measure the pain on the intraday low**: a stop is hit by an intraday
+            # touch, not by a close.
             worst = lows.iloc[i0: i0 + n + 1] / ep.price - 1.0
-            # **"收复"以收盘论**，插一下前高不算收复。
+            # **Recovery is judged on the close**: touching the prior high is not it.
             recovered = path >= ep.ref_high
             first = int(np.argmax(recovered.to_numpy())) if recovered.any() else -1
             rows.append(Outcome(
@@ -212,7 +234,7 @@ def measure(
                 max_drawdown_after=float(worst.min()),
                 intraday=intraday,
             ))
-    # slots dataclass 没有 __dict__，用 asdict
+    # A slots dataclass has no __dict__, so use asdict.
     from dataclasses import asdict
 
     return pd.DataFrame([asdict(r) for r in rows]) if rows else pd.DataFrame()
@@ -223,11 +245,12 @@ def baseline(
     *,
     horizons_months: Sequence[int] = (1, 3, 6, 12),
 ) -> pd.DataFrame:
-    """**无条件基准**：随便挑一天进场，同样的时间窗内会怎样。
+    """**The unconditional baseline**: enter on any day at random, same horizons.
 
-    这是整个研究里最容易被跳过、也最不能跳过的一步。QQQ 十二个月后上涨的无条件
-    概率本来就很高；如果回调后是 80% 而平时是 78%，这个信号什么也没说。
-    只报条件概率是在骗自己。
+    This is the step most easily skipped and least skippable in the whole study. QQQ's
+    unconditional probability of being higher twelve months later is already high; if
+    after a correction it is 80% and ordinarily 78%, the signal said nothing. Reporting
+    only the conditional probability is self-deception.
     """
     prices, _, _, _ = _as_bars(data)
     rows = []
@@ -240,21 +263,23 @@ def baseline(
         rel = end / start - 1.0
         rows.append({
             "horizon_months": months,
-            "样本": len(rel),
-            "上涨": float((rel > 0).mean()),
-            "涨5%以上": float((rel >= 0.05).mean()),
-            "涨10%以上": float((rel >= 0.10).mean()),
-            "中位收益": float(np.median(rel)),
+            "sample": len(rel),
+            "up": float((rel > 0).mean()),
+            "up 5%+": float((rel >= 0.05).mean()),
+            "up 10%+": float((rel >= 0.10).mean()),
+            "median return": float(np.median(rel)),
         })
     return pd.DataFrame(rows)
 
 
 def effective_sample(episodes: Sequence[Episode], months: int) -> int:
-    """互不重叠的段数。
+    """How many episodes do not overlap.
 
-    十二个月的窗口在时间上大量重叠，名义样本量会严重虚高——2000 年 4 月和
-    2000 年 10 月两段的十二个月窗口几乎是同一段历史，它们不是两个独立观测。
-    这里数的是**窗口互不重叠**的最大子集（贪心，按时间序）。
+    Twelve-month windows overlap heavily in time, which inflates the nominal sample
+    badly — the twelve months after April 2000 and after October 2000 are nearly the
+    same stretch of history, and they are not two independent observations. What is
+    counted here is the largest subset of **non-overlapping windows** (greedy, in time
+    order).
     """
     if not episodes:
         return 0
@@ -274,10 +299,13 @@ def study(
     horizons_months: Sequence[int] = (1, 3, 6, 12),
     reference_window: int = 252,
 ) -> dict:
-    """完整的一次事件研究：找段 → 量结果 → 对照基准 → 报样本量。
+    """A complete event study: find the episodes, measure the outcomes, compare
+    against the baseline, report the sample size.
 
-    返回的 ``table`` 每一行是一个时间窗，条件概率与无条件基准并排，并给出
-    **超额**（条件 − 基准）。超额才是信号的内容；条件概率本身不是。
+    Each row of the returned ``table`` is one horizon, with the conditional probability
+    beside the unconditional baseline and the **excess** between them (conditional
+    minus baseline). The excess is the signal's content; the conditional probability by
+    itself is not.
     """
     prices, _, _, intraday = _as_bars(data)
     eps = find_corrections(data, threshold, reference_window=reference_window)
@@ -291,32 +319,36 @@ def study(
         eff = effective_sample(
             [e for e in eps if e.crossed in set(sub["crossed"])] if n else [], months)
         if months not in base.index or n == 0:
-            rows.append({"时间窗": f"{months}月", "样本": n, "有效样本": eff,
-                         "备注": "数据不足，该窗口无观测"})
+            rows.append({"horizon": f"{months}m", "sample": n, "effective": eff,
+                         "note": "not enough data; no observations for this horizon"})
             continue
         b = base.loc[months]
         rows.append({
-            "时间窗": f"{months}月",
-            "样本": n, "有效样本": eff,
-            "上涨": float(sub["finished_up"].mean()),
-            "基准上涨": float(b["上涨"]),
-            "超额": float(sub["finished_up"].mean() - b["上涨"]),
-            "涨5%+": float(sub["finished_above_5"].mean()),
-            "收复前高": float(sub["recovered_pre_high"].mean()),
-            "再跌5%": float(sub["touched_minus_5"].mean()),
-            "再跌10%": float(sub["touched_minus_10"].mean()),
-            "中位收益": float(sub["end_return"].median()),
-            "最深回撤中位": float(sub["max_drawdown_after"].median()),
-            "收复用时中位(日)": float(sub["days_to_recover"].median()),
-            "备注": _sample_warning(n, eff),
+            "horizon": f"{months}m",
+            "sample": n, "effective": eff,
+            "up": float(sub["finished_up"].mean()),
+            "baseline up": float(b["up"]),
+            "excess": float(sub["finished_up"].mean() - b["up"]),
+            "up 5%+": float(sub["finished_above_5"].mean()),
+            "recovered prior high": float(sub["recovered_pre_high"].mean()),
+            "fell another 5%": float(sub["touched_minus_5"].mean()),
+            "fell another 10%": float(sub["touched_minus_10"].mean()),
+            "median return": float(sub["end_return"].median()),
+            "median deepest drawdown": float(sub["max_drawdown_after"].median()),
+            "median days to recover": float(sub["days_to_recover"].median()),
+            "note": _sample_warning(n, eff),
         })
     return {
         "threshold": threshold,
-        # 给的是不是真日内数据。假的话"再跌 X%"与最深回撤被系统性低估，
-        # 实测 QQQ 上低估约 12–15%，而且极端日可以差十几个百分点。
+        # Whether real intraday data was given. When false, the "fell another X%"
+        # flags and the deepest drawdown are understated systematically — measured at
+        # about 12-15% on QQQ, and by tens of percentage points on extreme days.
         "intraday": intraday,
-        "口径": ("事件判定用收盘；再跌 X% 与最深回撤用日内最低" if intraday
-                else "**只给了收盘序列**：再跌 X% 与最深回撤被低估，给 OHLC 才准"),
+        "basis": ("events detected on the close; further falls and the deepest "
+                  "drawdown measured on the intraday low" if intraday
+                  else "**only a close series was given**: further falls and the "
+                       "deepest drawdown are understated; pass OHLC for the real "
+                       "figures"),
         "episodes": eps,
         "outcomes": out,
         "baseline": base.reset_index(),
@@ -329,11 +361,14 @@ def study(
 
 
 def _sample_warning(n: int, eff: int) -> str:
-    """把样本量的话说到该说的份上，不给一个看起来很精确的百分比。"""
+    """Say exactly as much as the sample size supports, rather than handing over a
+    percentage that looks precise."""
     if eff <= 3:
-        return f"**只有 {eff} 个互不重叠的观测——这不是统计，是三个故事**"
+        return (f"**only {eff} non-overlapping observations — this is not statistics, "
+                f"it is {eff} stories**")
     if eff <= 8:
-        return f"有效样本 {eff}，只能看方向，别看小数点"
+        return f"effective sample {eff}: read the direction, not the decimals"
     if n > eff * 2:
-        return f"名义 {n} 段但只有 {eff} 个不重叠，概率的置信区间比看上去宽得多"
+        return (f"{n} episodes nominally but only {eff} non-overlapping, so the "
+                f"confidence interval on these probabilities is far wider than it looks")
     return ""

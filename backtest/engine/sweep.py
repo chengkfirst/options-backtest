@@ -1,13 +1,14 @@
-"""参数扫描。
+"""Parameter sweeps.
 
-成交表引擎的主要价值：几百组参数秒级跑完，而逐日推进要几小时。
+This is the trade-table engine's main value: hundreds of parameter sets in seconds,
+where stepping day by day would take hours.
 
-但扫描是**过拟合的主要来源**。期权策略参数维度天然多（DTE、delta、止盈、止损、
-持有期、信号参数），十年数据可能只有一两百笔独立交易；在这种条件下，扫出来的"最优
-参数"几乎必然是噪音。因此这里强制记录**试验次数**——研究工作台（路线图阶段 2）的
-多重检验修正要用它，不让人假装只试了一次。
-
-本阶段只产出扫描结果与试验次数；显著性评估、有效样本量、证据分级在阶段 2。
+But a sweep is **the main source of overfitting**. An option strategy naturally has
+many parameter dimensions (DTE, delta, take profit, stop loss, holding period,
+signal parameters), and ten years of data may hold only one or two hundred
+independent trades; under those conditions the "optimal parameters" a sweep finds
+are almost certainly noise. So the **number of trials** is recorded here by force —
+the multiple-testing correction needs it, and nobody gets to pretend they tried once.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from backtest.report import stats as R
 from backtest.selection.rules import SelectionRule
 from backtest.signals.registry import SignalSet
 
-#: 可扫描的参数及其所属的规则对象。
+#: The sweepable parameters and which rule object each belongs to.
 SWEEPABLE = {
     "target_dte": "select",
     "target_delta": "select",
@@ -42,17 +43,17 @@ SWEEPABLE = {
 
 @dataclass(frozen=True, slots=True)
 class SweepResult:
-    """每组参数一行，外加试验次数。"""
+    """One row per parameter set, plus the number of trials."""
 
     table: pd.DataFrame
     trials: int
     grid: Mapping[str, Sequence[Any]]
 
     def top(self, n: int = 10, by: str = "net_pnl") -> pd.DataFrame:
-        """按某列排序取前 n 组。
+        """The top n sets, ordered by one column.
 
-        **这个排名本身不构成结论**：相邻名次的差异是否超出噪音，要到阶段 2 的证据
-        分级才能回答。这里只是把结果摆出来。
+        **This ranking is not itself a conclusion**: whether the gap between adjacent
+        ranks exceeds the noise is a separate question. This only lays the results out.
         """
         return self.table.sort_values(by, ascending=False).head(n)
 
@@ -62,12 +63,15 @@ def _apply(strategy: Strategy, params: Mapping[str, Any]) -> Strategy:
     exit_changes = {k: v for k, v in params.items() if SWEEPABLE[k] == "exit"}
     new_select: SelectionRule = strategy.select
     if select_changes and callable(new_select):
-        # 选约写成函数之后，"扫 target_dte"就没有意义了——那个数字在函数里，
-        # 不在配置里。默默跳过会让人以为扫了，所以直接拒绝。
+        # Once selection is a function, sweeping target_dte means nothing — that
+        # number lives in the function, not in the configuration. Silently skipping it
+        # would leave the impression it was swept, so this refuses.
         raise StartupError(
-            f"选约是自定义函数，扫不了 {sorted(select_changes)}——这些参数在你的函数里，"
-            "不在配置里。要扫选约参数，先换回声明式的 SelectionRule；"
-            "或者把要扫的量做成函数的参数，自己在外层循环。"
+            f"selection is a custom function, so {sorted(select_changes)} cannot be "
+            f"swept — those parameters are inside your function, not in the "
+            f"configuration. To sweep selection parameters, go back to a declarative "
+            f"SelectionRule, or make the quantity a parameter of your function and "
+            f"loop outside."
         )
     if select_changes:
         if "target_dte" in select_changes:
@@ -88,12 +92,13 @@ def sweep(
     strategy: Strategy,
     grid: Mapping[str, Sequence[Any]],
 ) -> SweepResult:
-    """对参数网格逐组运行，各组独立且结果确定。"""
+    """Run every set in the grid; each is independent and deterministic."""
     unknown = sorted(set(grid) - set(SWEEPABLE))
     if unknown:
-        raise StartupError(f"不可扫描的参数 {unknown}；可扫描：{sorted(SWEEPABLE)}")
+        raise StartupError(f"parameters {unknown} cannot be swept; sweepable: "
+                           f"{sorted(SWEEPABLE)}")
     if not grid:
-        raise StartupError("参数网格为空")
+        raise StartupError("the parameter grid is empty")
 
     names = sorted(grid)
     rows: list[dict[str, Any]] = []

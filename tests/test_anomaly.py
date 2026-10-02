@@ -1,7 +1,8 @@
-"""异常扫描。
+"""Anomaly scanning.
 
-两个方向都要测：**该触发的要触发**，**不该触发的绝不能触发**。
-后者更重要——硬凑出来的"洞察"是噪音，而噪音会让真的警告也被跳过。
+Both directions have to be tested: **what should fire does**, and **what should not
+fire never does**. The second matters more — an "insight" forced out of nothing is
+noise, and noise is what makes real warnings get skipped.
 """
 
 from __future__ import annotations
@@ -14,15 +15,16 @@ from backtest.research.anomaly import Finding, scan
 
 
 def trades(n=100, seed=0, **over) -> pd.DataFrame:
-    """一份平平无奇的交易明细：没有任何一条规则该触发。"""
+    """A thoroughly unremarkable trade log: no rule should fire on it."""
     rng = np.random.default_rng(seed)
     entry = pd.date_range("2018-01-03", periods=n, freq="9D")
-    # 盈亏按顺序交替，保证各年贡献接近——随机正态在 100 笔上很容易让某一年
-    # 占掉绝大部分，那样夹具本身就是"异常"的，测不出"正常时保持沉默"。
+    # P&L alternates in order so the years contribute about equally — over 100 trades
+    # a random normal easily lets one year take most of it, which would make the
+    # fixture itself anomalous and defeat the "silent when normal" test.
     pnl = np.where(np.arange(n) % 3 == 0, 400.0, -150.0) + rng.normal(0, 20, n)
     frame = pd.DataFrame({
         "entry_date": entry,
-        "exit_date": entry + pd.Timedelta(days=5),      # 互不重叠
+        "exit_date": entry + pd.Timedelta(days=5),      # non-overlapping
         "net_pnl": pnl,
         "exit_reason": np.resize(["take_profit", "stop_loss", "time_exit"], n),
     })
@@ -33,21 +35,22 @@ def trades(n=100, seed=0, **over) -> pd.DataFrame:
 
 class TestQuietWhenNormal:
     def test_normal_result_finds_nothing(self):
-        """**最重要的一条**：正常结果必须一条都不报。"""
+        """**The most important one**: a normal result must report nothing at all."""
         assert scan(trades()) == []
 
     def test_empty_input(self):
         assert scan(pd.DataFrame()) == []
 
     def test_small_sample_does_not_trigger_count_rules(self):
-        """样本太少时规则应当沉默，而不是拿 5 笔得出结论。"""
+        """With too small a sample the rules stay silent rather than concluding from
+        five trades."""
         assert scan(trades(n=8)) == []
 
     def test_a_broken_rule_does_not_kill_the_scan(self):
-        """某条规则算不了，其余的还要照常跑。"""
+        """One rule failing to compute must not stop the rest."""
         t = trades()
-        t["exit_date"] = "不是日期"          # 让重叠那条算不出来
-        scan(t)                              # 不抛异常即可
+        t["exit_date"] = "not a date"        # make the overlap rule uncomputable
+        scan(t)                              # it is enough that it does not raise
 
 
 class TestRulesFire:
@@ -72,7 +75,7 @@ class TestRulesFire:
         assert "decay" in self.kinds(t)
 
     def test_dead_exit_when_reason_missing(self):
-        """止盈一次都没触发——那个档位是装饰品。"""
+        """The take-profit never fired — that level is decoration."""
         t = trades(n=60, seed=4)
         t["exit_reason"] = ["stop_loss"] * 30 + ["time_exit"] * 30
         assert "dead_exit" in self.kinds(t)
@@ -96,10 +99,10 @@ class TestRulesFire:
         assert "overlap" in self.kinds(t)
 
     def test_too_good_for_the_sample(self):
-        assert "too_good" in self.kinds(trades(n=50), metrics={"夏普": 3.4})
+        assert "too_good" in self.kinds(trades(n=50), metrics={"sharpe": 3.4})
 
     def test_too_good_quiet_with_enough_trades(self):
-        assert "too_good" not in self.kinds(trades(n=400), metrics={"夏普": 3.4})
+        assert "too_good" not in self.kinds(trades(n=400), metrics={"sharpe": 3.4})
 
     def test_loss_concentration(self):
         t = trades(n=60, seed=7)

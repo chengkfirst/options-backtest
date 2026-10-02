@@ -1,4 +1,4 @@
-"""顶层门面。一个 :func:`run` 跑完整条链路。
+"""The top-level facade. One :func:`run` goes through the whole chain.
 
     from backtest import run
 
@@ -9,9 +9,9 @@
         select={"right": "call", "dte": 30, "delta": 0.30},
         exit={"hold_days": 10, "take_profit": 1.0, "stop_loss": 0.5, "dte_floor": 5},
     )
-    result.summary()          # 打印一页结论
-    result.trades             # 交易明细 DataFrame
-    result.export("out/")     # 落盘
+    result.summary()          # print a one-page conclusion
+    result.trades             # the trade log, as a DataFrame
+    result.export("out/")     # write it out
 """
 
 from __future__ import annotations
@@ -44,11 +44,12 @@ def _as_date(value: str | date) -> date:
 
 
 def _sizing_from(spec, quantity: int) -> Sizing:
-    """把 ``sizing=`` 收敛成 :class:`Sizing`。
+    """Reduce ``sizing=`` to a :class:`Sizing`.
 
-    没给就用固定张数——**但这只是默认值，不是推荐做法**。固定张数会让每笔的风险
-    占比随权益漂移：权益翻倍之后，同样 1 张只占一半的风险；权益腰斩之后又变成两倍。
-    真正想控制风险的话用 ``risk_pct``。
+    With nothing given this is a fixed number of contracts — **a default, not a
+    recommendation**. A fixed count lets each trade's fraction of risk drift with
+    equity: after equity doubles, the same 1 contract is half the risk; after it
+    halves, twice. To actually control risk, use ``risk_pct``.
     """
     if spec is None:
         return Sizing(method="fixed", contracts=quantity)
@@ -61,10 +62,11 @@ def _sizing_from(spec, quantity: int) -> Sizing:
 
 
 def _selection_from(spec):
-    """把 ``select=`` 参数收敛成引擎认识的东西。
+    """Reduce the ``select=`` argument to something the engine understands.
 
-    三种写法：声明式字典、``SelectionRule``、或一个 ``f(chain, view)`` 函数。
-    函数原样透传——它的校验在 ``select_contract`` 里做，那里才看得到当日的链。
+    Three forms: a declarative dict, a ``SelectionRule``, or an ``f(chain, view)``
+    function. A function passes through untouched — its validation happens in
+    ``select_contract``, which is where the day's chain is visible.
     """
     if callable(spec) and not isinstance(spec, SelectionRule):
         return spec
@@ -72,7 +74,8 @@ def _selection_from(spec):
         return spec
     spec = dict(spec)
     right = spec.pop("right", "call")
-    # 界面给的是区间（dte_lo/hi、delta_lo/hi）；也接受老的点式写法（dte + delta）。
+    # The interface sends bands (dte_lo/hi, delta_lo/hi); point form (dte + delta)
+    # is also accepted.
     lo, hi = spec.pop("dte_lo", None), spec.pop("dte_hi", None)
     if lo is not None and hi is not None:
         window = (int(lo), int(hi))
@@ -119,7 +122,7 @@ def run(
     plan: Callable | None = None,
     review: Callable | None = None,
     select: Mapping[str, Any] | SelectionRule | None = None,
-    exit: Mapping[str, Any] | ExitRule | None = None,  # noqa: A002 - 与策略术语一致
+    exit: Mapping[str, Any] | ExitRule | None = None,  # noqa: A002 - the strategy's own term
     quantity: int = 1,
     sizing: "Mapping[str, Any] | Sizing | None" = None,
     capital: float = 100_000.0,
@@ -130,37 +133,44 @@ def run(
     refresh: bool = False,
     signals: Mapping[str, Callable] | None = None,
 ) -> "Result":
-    """跑一次成交表回测。
+    """Run one backtest.
 
-    ``plan`` 是**计划式策略**：一个函数同时决定买什么、买多少、怎么了结。七个组件
-    在真实交易里是联动的（回撤深就买得更久、下注更大、止损放宽），参数化写法表达
-    不了这种联动。给了 ``plan`` 就绕过 ``entry``/``select``，只能配 ``engine="event_driven"``。
-    见 ``backtest.engine.plan``。
+    ``plan`` is a **plan-based strategy**: one function decides what to buy, how much,
+    and how to get out. In a real trade the seven components are coupled (a deep
+    drawdown means buying longer dated, betting bigger, widening the stop), and the
+    parameterised form cannot express that. Giving ``plan`` bypasses ``entry`` and
+    ``select``, and requires ``engine="event_driven"``. See ``backtest.engine.plan``.
 
-    ``chain`` 指定期权数据源。默认 ``None`` 用合成链（**测试夹具，不是数据源**）。
-    换成你自己的数据：``chain="file:/路径/到/你的数据"``，或直接传一个实现了
-    ``ChainSource`` 协议的对象。详见 ``backtest.data.adapters``。
+    ``chain`` chooses the option data source. ``None`` uses the synthetic chain (**a
+    test fixture, not a data source**). To use your own data:
+    ``chain="file:/path/to/your/data"``, or pass an object implementing the
+    ``ChainSource`` protocol. See ``backtest.data.adapters``.
 
-    ``signals`` 注册自定义信号：``{"名字": lambda bars: 一个 Series}``。
-    注册后即可在 ``entry`` 表达式里按名字使用。``bars.adjusted("close")`` 取复权价
-    （信号一律用复权价，否则除息日会出现虚假跳空）。
+    ``signals`` registers custom signals: ``{"name": lambda bars: a Series}``. Once
+    registered they can be used by name in the ``entry`` expression.
+    ``bars.adjusted("close")`` gives adjusted prices (signals always use adjusted
+    prices, or ex-dividend days produce false gaps).
 
-    ``engine`` 选引擎：
+    ``engine`` chooses the engine:
 
-    ``"trade_table"``（默认）
-        各笔独立计算，快两个数量级，适合扫参数。**没有权益曲线，因此没有回撤和夏普。**
+    ``"trade_table"`` (the default)
+        Each trade computed independently; two orders of magnitude faster, and good
+        for sweeps. **No equity curve, so no drawdown and no Sharpe.**
     ``"event_driven"``
-        逐日推进，有组合状态。慢，但给出权益曲线、回撤、资金约束与并发上限。
-        ``max_concurrent`` 只对它有效。
+        Steps day by day with portfolio state. Slower, but gives the equity curve,
+        drawdown, capital constraints and concurrency limits. ``max_concurrent``
+        applies only to it.
 
-    同一配置下两条引擎在无约束时产出相同的交易明细——这是互相校验的基础。
+    On the same configuration and with no constraints the two engines produce the same
+    trade log — which is the basis for checking each against the other.
     """
     if engine not in ("trade_table", "event_driven"):
-        raise StartupError(f"未知引擎 {engine!r}，可选 trade_table / event_driven")
+        raise StartupError(f"unknown engine {engine!r}; one of trade_table / event_driven")
     proxy = VOL_PROXY_BY_SYMBOL.get(symbol)
     if proxy is None:
         raise StartupError(
-            f"未知标的 {symbol}；已知标的与其波动率代理：{VOL_PROXY_BY_SYMBOL}"
+            f"unknown symbol {symbol}; known symbols and their volatility proxies: "
+            f"{VOL_PROXY_BY_SYMBOL}"
         )
     config = BacktestConfig(
         symbol=symbol,
@@ -201,8 +211,9 @@ def run(
     else:
         if max_concurrent is not None:
             raise StartupError(
-                "成交表引擎各笔独立计算、互不知晓，撑不起并发上限。"
-                "要用 max_concurrent 请改 engine=\"event_driven\"。"
+                "the trade-table engine computes trades independently and they know "
+                "nothing of each other, so it cannot support a concurrency limit. For "
+                "max_concurrent use engine=\"event_driven\"."
             )
         outcome = TradeTableEngine(market, chain_source, signal_set, config).run(strategy)
     return Result(outcome, market, chain_source, signal_set)
@@ -210,14 +221,15 @@ def run(
 
 @dataclass(frozen=True, slots=True)
 class Result:
-    """回测产出。``trades`` 是原始明细，其余是它的各种切面。"""
+    """What a run produces. ``trades`` is the raw log; everything else is a view
+    onto it."""
 
     raw: TradeTableResult
     _market: Any = None
     _chain: Any = None
     _signals: Any = None
 
-    # ---- 数据 ----
+    # ---- the data ----
     @property
     def trades(self) -> pd.DataFrame:
         return self.raw.trades
@@ -230,7 +242,7 @@ class Result:
     def events(self) -> pd.DataFrame:
         return self.raw.events.to_frame()
 
-    # ---- 切面 ----
+    # ---- views ----
     def stats(self) -> dict[str, Any]:
         return R.trade_stats(self.trades)
 
@@ -250,7 +262,8 @@ class Result:
         return R.data_provenance(self.trades)
 
     def manifest(self) -> dict[str, Any]:
-        """配置 + 数据来源 + 依赖版本。结果可被重新执行的凭据。"""
+        """Configuration, provenance and dependency versions — what makes the result
+        re-executable."""
         return {
             "strategy": {
                 "name": self.raw.strategy.name,
@@ -265,96 +278,114 @@ class Result:
             "provenance": self.provenance(),
         }
 
-    # ---- 呈现 ----
+    # ---- presentation ----
     def summary(self, printout: bool = True) -> str:
         lines: list[str] = []
         prov = self.provenance()
         if prov.get("all_synthetic"):
             lines += [
-                "!! 本结果基于合成期权链，不代表真实可成交价格。",
-                "!! 合成链没有波动率偏斜与真实 IV 动态；期权侧参数（选约/止盈/止损）不可据此调优。",
+                "!! This result rests on a synthetic option chain and does not "
+                "represent prices that could be traded.",
+                "!! The synthetic chain has no volatility skew and no realistic IV "
+                "dynamics; option-side parameters (selection, take profit, stop loss) "
+                "must not be tuned on it.",
                 "",
             ]
         elif prov.get("mixed"):
-            lines += [f"!! 合成数据覆盖 {prov['synthetic_share']:.1%} 的交易，结论需按比例折扣。", ""]
+            lines += [f"!! Synthetic data covers {prov['synthetic_share']:.1%} of the "
+                      f"trades; discount the conclusions accordingly.", ""]
 
         s = self.stats()
         if s["count"] == 0:
-            lines.append("区间内未产生任何交易。")
+            lines.append("No trades were produced in this range.")
             text = "\n".join(lines)
             if printout:
                 print(text)
             return text
 
         lines += [
-            f"策略 {self.raw.strategy.name} · {self.raw.config.symbol} · "
+            f"strategy {self.raw.strategy.name} · {self.raw.config.symbol} · "
             f"{self.raw.config.start} ~ {self.raw.config.end}",
-            f"交易 {s['count']} 笔 | 胜率 {s['win_rate']:.1%} | 平均持有 {s['avg_holding_days']:.1f} 个交易日",
-            f"毛盈亏 {s['gross_pnl']:,.0f} | 费用 {s['fees']:,.0f} | 净盈亏 {s['net_pnl']:,.0f}",
+            f"{s['count']} trades | win rate {s['win_rate']:.1%} | mean holding "
+            f"{s['avg_holding_days']:.1f} trading days",
+            f"gross {s['gross_pnl']:,.0f} | fees {s['fees']:,.0f} | "
+            f"net {s['net_pnl']:,.0f}",
             "",
-            "— 单笔盈亏分布 —",
+            "— per-trade P&L distribution —",
         ]
         d = self.distribution()
         q = d["quantiles_abs"]
         lines += [
-            f"  5% {q['q5']:,.0f} | 25% {q['q25']:,.0f} | 中位 {q['q50']:,.0f} | "
+            f"  5% {q['q5']:,.0f} | 25% {q['q25']:,.0f} | median {q['q50']:,.0f} | "
             f"75% {q['q75']:,.0f} | 95% {q['q95']:,.0f}",
-            f"  均值 {d['mean']:,.0f} | 最大盈 {d['max_win']:,.0f} | 最大亏 {d['max_loss']:,.0f}",
-            f"  偏度 {d['skew']:.2f} | 峰度 {d['kurtosis']:.2f}",
+            f"  mean {d['mean']:,.0f} | best {d['max_win']:,.0f} | "
+            f"worst {d['max_loss']:,.0f}",
+            f"  skew {d['skew']:.2f} | kurtosis {d['kurtosis']:.2f}",
         ]
         if d["driven_by_outliers"]:
-            lines.append("  !! 中位数与均值符号相反：平均收益由少数极值驱动，不可外推")
+            lines.append("  !! The median and the mean have opposite signs: a few "
+                         "extremes drive the average, which does not generalise")
 
-        lines += ["", "— 按了结原因 —"]
+        lines += ["", "— by exit reason —"]
         for reason, row in self.by_exit_reason().iterrows():
             lines.append(
-                f"  {reason:<12} {int(row['count']):>4} 笔 | 胜率 {row['win_rate']:.0%} | "
-                f"合计 {row['net_pnl']:>10,.0f}"
+                f"  {reason:<12} {int(row['count']):>4} trades | win rate "
+                f"{row['win_rate']:.0%} | total {row['net_pnl']:>10,.0f}"
             )
 
         c = self.costs()
         lines += [
             "",
-            "— 成本 —",
-            f"  佣金 {c['commission']:,.0f} | 监管费 {c['regulatory']:,.0f} | 滑点 {c['slippage']:,.0f}"
-            f" | 合计 {c['total']:,.0f}（占毛盈亏 {c['fees_pct_of_gross']:.1%}）",
+            "— costs —",
+            f"  commission {c['commission']:,.0f} | regulatory {c['regulatory']:,.0f} | "
+            f"slippage {c['slippage']:,.0f} | total {c['total']:,.0f} "
+            f"({c['fees_pct_of_gross']:.1%} of gross)",
         ]
         if c["eaten_by_costs"]:
-            lines.append("  !! 毛盈亏为正而净盈亏为负：收益不足以覆盖交易成本")
+            lines.append("  !! Gross is positive and net is negative: the edge does not "
+                         "cover the trading costs")
 
         cap = self.raw.capital_check()
         lines += [
             "",
-            "— 口径提醒 —",
-            "  成交表引擎各笔独立计算：不含资金约束、无组合权益曲线，因此没有回撤与夏普。",
-            f"  峰值同时持仓 {cap['peak_positions']} 笔，约需资金 {cap['peak_capital']:,.0f}"
-            f"（名义资金 {cap['notional_capital']:,.0f}）",
+            "— what this engine does not cover —",
+            "  The trade-table engine computes each trade independently: no capital "
+            "constraint and no portfolio equity curve, so no drawdown and no Sharpe.",
+            f"  Peak concurrent positions {cap['peak_positions']}, needing about "
+            f"{cap['peak_capital']:,.0f} (notional {cap['notional_capital']:,.0f})",
         ]
         if not cap["feasible"]:
-            lines.append("  !! 峰值资金需求超过名义资金，该结果在资金上不可实现，需用事件驱动引擎复核")
+            lines.append("  !! Peak capital exceeds the notional, so this result is not "
+                         "achievable with the capital given; recheck it with the "
+                         "event-driven engine")
 
         pe = R.passive_expiry_check(self.trades)
         passive = pe.get("itm", 0) + pe.get("otm", 0)
         if passive:
             lines.append(
-                f"  !! {passive} 笔走到被动到期（实值 {pe['itm']} / 虚值 {pe['otm']}）："
-                f"了结规则未能在到期前生效，通常是临近到期价差爆开导致无法成交"
+                f"  !! {passive} trades reached a passive expiry "
+                f"({pe['itm']} in the money / {pe['otm']} out): the exit rules did not "
+                f"take effect before expiry, usually because the spread blew out close "
+                f"to expiry and nothing could be filled"
             )
         if pe.get("rule_failed"):
-            lines.append("  !! 其中实值被动到期意味着本可了结的盈利头寸被拖到了结算")
+            lines.append("  !! An in-the-money passive expiry among them means a "
+                         "profitable position that could have been closed was dragged "
+                         "into settlement")
 
         ev = self.raw.events.counts()
         if ev:
-            lines += ["", "— 运行事件 —", "  " + " | ".join(f"{k}:{v}" for k, v in sorted(ev.items()))]
+            lines += ["", "— run events —",
+                      "  " + " | ".join(f"{k}:{v}" for k, v in sorted(ev.items()))]
 
         text = "\n".join(lines)
         if printout:
             print(text)
         return text
 
-    # ---- 风险与研究 ----
+    # ---- risk and research ----
     def attribution(self):
-        """盈亏归因：delta / gamma / vega / theta / 残差。"""
+        """P&L attribution: delta / gamma / vega / theta / residual."""
         from backtest.risk.attribution import attribute
 
         return attribute(self.trades)
@@ -365,52 +396,55 @@ class Result:
         return attribute_by(self.trades, column, bins)
 
     def greeks(self):
-        """逐日组合层希腊字母。只有事件驱动引擎有。"""
+        """Daily portfolio greeks. Only the event-driven engine has them."""
         frame = getattr(self.raw, "greeks_frame", None)
         if frame is None:
             raise AttributeError(
-                "成交表引擎没有组合状态，算不出逐日希腊字母。"
-                "请用 engine=\"event_driven\" 重跑。"
+                "the trade-table engine has no portfolio state, so it cannot compute "
+                "daily greeks. Rerun with engine=\"event_driven\"."
             )
         return frame
 
     def stress(self, *, day=None, days_forward: int = 5):
-        """某一日的压力网格。默认取持仓最多的那天。"""
+        """One day's stress grid. By default the day with the most positions."""
         from backtest.risk.stress import stress_grid
 
         daily = getattr(self.raw, "greeks", ())
         if not daily:
-            raise AttributeError("需要 engine=\"event_driven\" 才有逐日希腊字母")
+            raise AttributeError("daily greeks need engine=\"event_driven\"")
         pick = (max(daily, key=lambda g: g.n_positions) if day is None
                 else next((g for g in daily if g.day == day), None))
         if pick is None:
-            raise KeyError(f"{day} 不在回测区间内")
+            raise KeyError(f"{day} is not in the backtest range")
         return stress_grid(pick, days_forward=days_forward)
 
     def scenarios(self, windows=None):
-        """历史情景重放。不含任何展开近似，比压力测试更可信。"""
+        """Historical scenario replay. It contains no expansion and is therefore more
+        trustworthy than a stress test."""
         from backtest.risk.stress import KNOWN_SCENARIOS, scenario_replay
 
         equity = getattr(self.raw, "equity", None)
         if equity is None:
-            raise AttributeError("需要 engine=\"event_driven\" 才有权益曲线")
+            raise AttributeError("an equity curve needs engine=\"event_driven\"")
         return scenario_replay(equity, windows or KNOWN_SCENARIOS)
 
     def excursion(self):
-        """MFE / MAE 研究：止盈止损该设在哪。会检测分布是否被现有规则截断。"""
+        """MFE / MAE: where the take-profit and the stop belong. It detects whether
+        the distribution is censored by the current rules."""
         from backtest.research.excursion import study
 
         return study(self.trades, self.raw.strategy.exit)
 
     def equity_metrics(self) -> dict:
-        """依赖权益曲线的指标。成交表引擎给不出，会明确报错。"""
+        """The metrics that need an equity curve. The trade-table engine cannot
+        produce them and says so."""
         import numpy as np
 
         equity = getattr(self.raw, "equity", None)
         if equity is None:
             raise AttributeError(
-                "成交表引擎没有权益曲线，因此没有回撤和夏普。"
-                "请用 engine=\"event_driven\" 重跑。"
+                "the trade-table engine has no equity curve, so there is no drawdown "
+                "and no Sharpe. Rerun with engine=\"event_driven\"."
             )
         curve = equity["equity_mid"]
         liq = equity["equity_liq"]
@@ -420,23 +454,24 @@ class Result:
         vol = float(returns.std() * np.sqrt(252)) if len(returns) > 1 else float("nan")
         annual = float((curve.iloc[-1] / curve.iloc[0]) ** (1 / years) - 1)
         return {
-            "总收益": float(curve.iloc[-1] / curve.iloc[0] - 1),
-            "年化": annual,
-            "年化波动": vol,
-            "夏普": annual / vol if vol else float("nan"),
-            "最大回撤": float(drawdown.min()),
-            "最大回撤(清算价)": float((liq / liq.cummax() - 1).min()),
-            "平均资金占用": float((equity["deployed"] / curve).mean()),
-            "峰值持仓": int(equity["positions"].max()),
-            "偏度": float(returns.skew()), "峰度": float(returns.kurtosis()),
+            "total_return": float(curve.iloc[-1] / curve.iloc[0] - 1),
+            "annualised": annual,
+            "annualised_vol": vol,
+            "sharpe": annual / vol if vol else float("nan"),
+            "max_drawdown": float(drawdown.min()),
+            "max_drawdown_liq": float((liq / liq.cummax() - 1).min()),
+            "mean_capital_used": float((equity["deployed"] / curve).mean()),
+            "peak_positions": int(equity["positions"].max()),
+            "skew": float(returns.skew()), "kurtosis": float(returns.kurtosis()),
         }
 
-    # ---- 扫描 ----
     def investor_view(self) -> dict:
-        """投资人视角：这是 alpha 还是加了杠杆的 beta，水下待多久，收益集中在哪。
+        """The investor's view: is this alpha or leveraged beta, how long underwater,
+        where the returns concentrate.
 
-        基准用**同期的标的收盘价**，所以 beta 回答的正是"收益里有多少只是
-        标的本身在涨"。只有事件驱动引擎有权益曲线，成交表下会说明原因。
+        The benchmark is **the underlying's close over the same period**, so beta
+        answers exactly "how much of this return was the underlying rising". Only the
+        event-driven engine has an equity curve; under the trade table this says why.
         """
         from backtest.research.investor import summary
 
@@ -445,38 +480,42 @@ class Result:
         return summary(self.raw.equity, self.trades, benchmark=bench)
 
     def cost_sensitivity(self, multiples=(1.0, 2.0, 3.0)):
-        """成本翻倍还活着吗。实盘成本高于回测是常态。"""
+        """Does it survive costs doubling? Live costs above backtest costs is the
+        norm."""
         from backtest.research.investor import cost_sensitivity
 
         return cost_sensitivity(self.trades, multiples)
 
     def anomalies(self) -> list:
-        """扫一遍结果里真正反常的地方。什么都没触发就返回空列表。
+        """Scan the result for what is genuinely out of the ordinary. With nothing
+        triggered this returns an empty list.
 
-        规则式，不是让模型去"找找看"——规则可测试、不会编。
-        见 ``backtest.research.anomaly``。
+        Rule-based, rather than asking a model to go looking — rules are testable and
+        do not invent. See ``backtest.research.anomaly``.
         """
         from backtest.research.anomaly import scan
 
         try:
             metrics = self.equity_metrics()
         except Exception:  # noqa: BLE001
-            metrics = None          # 成交表引擎没有权益曲线，相关规则自然跳过
+            metrics = None          # no equity curve: those rules simply do not run
         return scan(self.trades, metrics=metrics, costs=self.costs())
 
     def sweep(self, grid: Mapping[str, Any]) -> SweepResult:
-        """在同一份数据与同一策略上扫描参数网格。
+        """Sweep a parameter grid on the same data and the same strategy.
 
-        排名本身不构成结论——相邻名次的差异是否超出噪音，要到研究工作台
-        （ROADMAP.md 阶段 2）的证据分级才能回答。这里只记下试验次数备用。
+        The ranking is not itself a conclusion — whether the gap between adjacent ranks
+        exceeds the noise is a separate question. This records the number of trials for
+        that purpose.
         """
         return _sweep(
             self._market, self._chain, self._signals, self.raw.config, self.raw.strategy, grid
         )
 
-    # ---- 导出 ----
+    # ---- export ----
     def export(self, directory: str | Path) -> dict[str, Path]:
-        """交易明细、逐笔盈亏、运行事件、以及可复现所需的 manifest。"""
+        """The trade log, per-trade P&L, run events, and the manifest needed to
+        reproduce it."""
         out = Path(directory)
         out.mkdir(parents=True, exist_ok=True)
         paths = {
