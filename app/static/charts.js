@@ -359,12 +359,12 @@ function renderScenarios(rows){
   $("scen").innerHTML = `<thead><tr><th>情景</th><th>起</th><th>止</th><th>交易日</th>
       <th>区间收益</th><th>最大回撤</th><th style="text-align:left">备注</th></tr></thead><tbody>` +
     rows.map(r=>{
-      const covered = r["交易日"] > 0;
-      return `<tr><td>${r["情景"]}</td><td>${r["起"]}</td><td>${r["止"]}</td>
-        <td class="n">${r["交易日"]}</td>
-        <td class="n ${covered ? sgn(r["区间收益"]) : ""}">${covered ? pct(r["区间收益"]) : "—"}</td>
-        <td class="n ${covered ? "neg" : ""}">${covered ? pct(r["最大回撤"]) : "—"}</td>
-        <td style="text-align:left;color:var(--ink-3)">${r["备注"] || ""}</td></tr>`;
+      const covered = r["sessions"] > 0;
+      return `<tr><td>${r["scenario"]}</td><td>${r["from"]}</td><td>${r["to"]}</td>
+        <td class="n">${r["sessions"]}</td>
+        <td class="n ${covered ? sgn(r["return"]) : ""}">${covered ? pct(r["return"]) : "—"}</td>
+        <td class="n ${covered ? "neg" : ""}">${covered ? pct(r["max drawdown"]) : "—"}</td>
+        <td style="text-align:left;color:var(--ink-3)">${r["note"] || ""}</td></tr>`;
     }).join("") + `</tbody>`;
 }
 
