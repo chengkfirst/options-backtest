@@ -32,10 +32,11 @@
 
 *{box-sizing:border-box}
 
-/* hidden 必须真的隐藏。
- * 浏览器默认的 [hidden]{display:none} 优先级低于任何类型选择器，所以
- * section{display:flex} 会把它盖掉——元素明明标了 hidden 却照样显示。
- * 这类错误不报任何错，只是界面不对，属于静默失败。 */
+/* `hidden` has to actually hide.
+ * The browser's default [hidden]{display:none} has lower specificity than any type
+ * selector, so section{display:flex} overrides it — an element marked hidden stays
+ * visible. That raises nothing; the interface is simply wrong, which is a silent
+ * failure. */
 [hidden]{display:none!important}
 body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55;
   -webkit-font-smoothing:antialiased}
@@ -64,7 +65,7 @@ h1{font-size:23px;font-weight:700;letter-spacing:-.015em}
 .banner b{font-weight:600}
 .banner span{color:var(--ink-2)}
 
-/* 问题带 */
+/* The problem strip */
 .issues{background:var(--loss-soft);border-left:3px solid var(--loss);padding:11px 16px;
   font-size:12.5px;border-radius:0 2px 2px 0;color:var(--ink)}
 .issues b{font-weight:600;display:block;margin-bottom:4px}
@@ -119,7 +120,7 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 @media(max-width:880px){.two{grid-template-columns:1fr}}
 
-/* AI 总结 */
+/* The AI summary */
 .ai{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);overflow:hidden}
 .ai-head{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line-soft);
   background:var(--sunk);flex-wrap:wrap}
@@ -134,7 +135,7 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .ai-body:empty{display:none}
 .ai-body em{color:var(--ink-3);font-style:normal}
 
-/* A/B 对比 */
+/* A/B comparison */
 .ab{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);
   border-radius:var(--radius);overflow:hidden;background:var(--panel)}
 @media(max-width:700px){.ab{grid-template-columns:1fr}}
@@ -152,9 +153,9 @@ footer{border-top:1px solid var(--line);padding-top:16px;font-size:12px;color:va
   display:flex;flex-direction:column;gap:6px}
 footer code{font-family:var(--mono);font-size:11.5px}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-/* ── 信号参考面板 ───────────────────────────────────────────
-   取代原先"把信号名平铺成一排"的做法。按类别分组，每行自带含义与单位，
-   因为一个只有名字的列表等于让使用者去猜口径，而猜错不会报错。      */
+/* ── the signal reference panel ────────────────────────────
+   Grouped by family, each row carrying its meaning and unit — a list of bare names
+   asks the user to guess the convention, and guessing wrong raises nothing. */
 .ref { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
 .ref > summary {
   cursor: pointer; font-size: 12px; color: var(--ink-3);
@@ -188,9 +189,10 @@ footer code{font-family:var(--mono);font-size:11.5px}
   background: var(--warn-soft); color: var(--warn); font-size: 9.5px; font-weight: 700;
 }
 
-/* ── 四层结构 ─────────────────────────────────────────────
-   取代原先七个平等的 fieldset。七个平等的框是按"组件表"排的，不是按交易里
-   发生的顺序排的，于是看不出 ④止损 和 ⑥仓位 其实是同一个数的两面。      */
+/* ── the four layers ───────────────────────────────────────
+   Seven equal fieldsets would be laid out by a table of components rather than by the
+   order things happen in a trade, which hides that (4) stop loss and (6) size are one
+   number seen from two sides. */
 .layer { margin: 16px 0 0; }
 .layer-head {
   display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
@@ -211,7 +213,7 @@ footer code{font-family:var(--mono);font-size:11.5px}
   border-left: 2px solid var(--warn); padding-left: 8px; color: var(--ink-2);
 }
 
-/* ── 本次运行的诊断 ─────────────────────────────────────── */
+/* ── this run's diagnostics ──────────────────────────────── */
 .diag-body { display: flex; flex-direction: column; gap: 4px; }
 .diag { border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--panel); }
 .diag > summary {
@@ -230,9 +232,10 @@ footer code{font-family:var(--mono);font-size:11.5px}
   border-top: 1px solid var(--line-soft);
 }
 
-/* ── 组件的双态 ─────────────────────────────────────────
-   计划模式下组件不消失，只把控件换成一句"由计划决定"。
-   原先是整块藏起来，结果默认视图里七个组件五个看不见——地图丢了。 */
+/* ── a component's two states ───────────────────────────
+   In plan mode a component does not disappear; its controls are replaced by a line
+   saying the plan decides it. Hiding the whole block left five of the seven components
+   invisible in the default view, and the map was lost. */
 .comp > legend .comp-role {
   margin-left: 8px; font-size: 10.5px; font-weight: 400; color: var(--ink-3);
 }
@@ -243,9 +246,9 @@ footer code{font-family:var(--mono);font-size:11.5px}
 .comp.by-plan { opacity: .72; }
 .comp.by-plan:hover { opacity: 1; }
 
-/* ── 顶部配置条 ────────────────────────────────────────
-   标的/区间/引擎是配置样板，不是策略。原先它们各占一个 fieldset，
-   加起来吃掉整个第一屏，七个组件全被挤到屏幕外。 */
+/* ── the configuration strip at the top ───────────────────
+   Symbol, range and engine are boilerplate, not the strategy. A fieldset each took the
+   whole first screen and pushed all seven components off it. */
 .setup-bar { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 7px; }
 .sb { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; color: var(--ink-3); flex: 1; }
 .sb.grow { flex: 2; }
@@ -256,21 +259,23 @@ footer code{font-family:var(--mono);font-size:11.5px}
 }
 .setup-note { margin: 0 0 12px; min-height: 1em; }
 
-/* 标的只有四个字母，不该和日期抢宽度——三等分会把它挤成 "QQ"。
-   必须挑出"标的"那一个：:first-child 会把第二行的「引擎」一起压窄。 */
+/* A ticker is four letters and should not compete with a date for width — an even
+   three-way split squeezes it to "QQ". The symbol field has to be singled out:
+   :first-child would also narrow the engine field on the second row. */
 .setup-bar .sb.narrow { flex: 0 0 5.5em; }
 .setup-bar .sb.grow   { flex: 3; }
 
-/* 代码框：横向不截断。写策略时看不见行尾是硬伤。 */
+/* The code box never clips horizontally. Not seeing the end of a line while writing a
+   strategy is crippling. */
 textarea.code {
   width: 100%; box-sizing: border-box; white-space: pre; overflow-x: auto;
   tab-size: 4; line-height: 1.5; resize: vertical;
 }
 
 
-/* ── 生成出来的组件表单 ──────────────────────────────────
-   专业工具是数据密、文字稀。推理在文档和代码注释里，界面只给控件和取值。
-   改之前：26 个控件配 41 段说明、1240 字——说明比控件还多。 */
+/* ── the generated component forms ────────────────────────
+   A professional tool is dense in data and sparse in prose. The reasoning lives in the
+   docs and the code comments; the interface gives controls and values. */
 .layer { margin: 14px 0 0; }
 .layer-head { padding: 0 0 5px; border-bottom: 1px solid var(--line); }
 .layer-n { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; color: var(--ink-3);
@@ -292,9 +297,9 @@ textarea.code {
 .field.wide { grid-column: 1 / -1; }
 .field > label { font-size: 10.5px; color: var(--ink-3); display: flex; gap: 4px;
                  align-items: baseline; }
-/* bench.css 里有全局的 .unit{position:absolute;opacity:0}（旧版藏单位的做法）。
-   只覆盖 opacity 会让单位可见但仍是绝对定位，飘到页面别处。
-   position 必须一起还原。 */
+/* bench.css has a global .unit{position:absolute;opacity:0}. Overriding only opacity
+   makes the unit visible while still absolutely positioned, so it floats elsewhere on
+   the page. `position` has to be restored with it. */
 .field .unit { position: static; opacity: .7; color: var(--ink-3); font-size: 10px; }
 .field input, .field select {
   width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 12px;
@@ -302,7 +307,7 @@ textarea.code {
   background: var(--panel); color: var(--ink); font-variant-numeric: tabular-nums;
 }
 
-/* ── 选合约参考表 ─────────────────────────────────────── */
+/* ── the contract-selection reference table ─────────────── */
 .to-body { display: flex; flex-direction: column; gap: 12px; }
 .to-grid { }
 .to-h { font-size: 11px; font-weight: 600; color: var(--ink); margin-bottom: 4px;
@@ -315,7 +320,7 @@ textarea.code {
 .to-grid tbody th { text-align: left; color: var(--ink-2); }
 .to-grid td { padding: 2px 4px; text-align: right; color: var(--ink); }
 
-/* ── 异常扫描 ─────────────────────────────────────────── */
+/* ── the anomaly scan ───────────────────────────────────── */
 .anom-body { display: flex; flex-direction: column; gap: 6px; }
 .anom { padding: 8px 10px; border-radius: var(--radius); border-left: 2px solid var(--line); background: var(--panel); }
 .anom.high { border-left-color: var(--warn); background: var(--warn-soft); }

@@ -1,21 +1,25 @@
-"""研究库：策略、运行、结论的持久化。
+"""The research store: persisting strategies, runs and verdicts.
 
-长期研究积累的不是某一次的数字，是**判断**——"delta 0.2 那次为什么比 0.3 差"。
-所以这里存三样东西，缺一不可：
+What accumulates over long-term research is not one run's numbers, it is the
+**judgements** — why the delta 0.2 variant did worse than 0.3. So three things are
+stored, and none can be dropped:
 
-    策略  一份命名的规则定义，改一次存一版
-    运行  某个策略版本在某个区间上跑出来的结果，**不可变**
-    结论  你在某次运行上写下的判断
+    strategy  a named rule definition; each edit is a new version
+    run       one strategy version's result over one range, **immutable**
+    verdict   the judgement you wrote down about one run
 
-三条设计约束：
+Three design constraints:
 
-1. **运行不可变。** 跑完就是历史，改不了。要改就重跑。否则三个月后回头看，
-   "我当时到底是怎么跑的"就说不清了。
-2. **策略带版本。** 运行引用的是策略的某一版，不是"策略现在长什么样"。
-   这样才能回答"v2 和 v3 差在哪"。
-3. **元数据与明细分开。** 元数据进 SQLite 好检索，交易明细进 parquet 扛体量。
+1. **A run is immutable.** Once it has run it is history and cannot be edited; to
+   change it, run again. Otherwise three months later there is no saying how it was
+   actually run.
+2. **Strategies are versioned.** A run references one version of a strategy, not "what
+   the strategy looks like now". That is what makes "how do v2 and v3 differ"
+   answerable.
+3. **Metadata and detail are kept apart.** Metadata goes to SQLite, which is good for
+   querying; trade logs go to parquet, which handles the volume.
 
-存储位置：项目下的 ``research/``，可备份、可进 git。
+Location: ``research/`` under the project, so it can be backed up and committed.
 """
 
 from __future__ import annotations
@@ -41,7 +45,7 @@ CREATE TABLE IF NOT EXISTS strategy (
     version     INTEGER NOT NULL,
     created     TEXT NOT NULL,
     spec        TEXT NOT NULL,          -- JSON：entry / select / exit / signals
-    spec_hash   TEXT NOT NULL,          -- 内容指纹，用来认出"其实没改"
+    spec_hash   TEXT NOT NULL,          -- a content fingerprint, to recognise "nothing actually changed"
     note        TEXT NOT NULL DEFAULT '',
     UNIQUE(name, version)
 );
@@ -56,14 +60,14 @@ CREATE TABLE IF NOT EXISTS run (
     symbol       TEXT NOT NULL,
     start_date   TEXT NOT NULL,
     end_date     TEXT NOT NULL,
-    config       TEXT NOT NULL,         -- JSON：完整配置，可复现的凭据
-    manifest     TEXT NOT NULL,         -- JSON：数据来源 + 依赖版本
-    events       TEXT NOT NULL,         -- JSON：运行事件计数
+    config       TEXT NOT NULL,         -- JSON: the full configuration, what makes it reproducible
+    manifest     TEXT NOT NULL,         -- JSON: provenance plus dependency versions
+    events       TEXT NOT NULL,         -- JSON: run event counts
     n_trades     INTEGER NOT NULL,
     net_pnl      REAL NOT NULL,
     win_rate     REAL NOT NULL,
     median_pnl   REAL NOT NULL,
-    synthetic    INTEGER NOT NULL,      -- 数据是不是合成的，决定结论可不可信
+    synthetic    INTEGER NOT NULL,      -- whether the data was synthetic, which decides whether the conclusions can be trusted
     trades_file  TEXT NOT NULL
 );
 
@@ -80,23 +84,26 @@ CREATE INDEX IF NOT EXISTS idx_run_started  ON run(started DESC);
 CREATE INDEX IF NOT EXISTS idx_note_run     ON note(run_id);
 """
 
-#: 结论的取值。刻意不设"成功/失败"——研究结论多数时候是"还看不出来"。
+#: The possible verdicts. Deliberately not success/failure — most research verdicts
+#: are "cannot tell yet".
 VERDICTS = {
-    "open": "待定",
-    "promising": "值得继续",
-    "rejected": "已排除",
-    "inconclusive": "样本不足，看不出",
+    "open": "open",
+    "promising": "worth continuing",
+    "rejected": "ruled out",
+    "inconclusive": "sample too small to tell",
 }
 
 
 def spec_fingerprint(spec: dict[str, Any]) -> str:
-    """策略定义的内容指纹。用来认出"点了保存但其实什么都没改"。"""
+    """A content fingerprint of a strategy definition, to recognise a save that
+    changed nothing."""
     payload = json.dumps(spec, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 class Store:
-    """研究库。所有读写都经由它，别处不直接碰 SQLite。"""
+    """The research store. Every read and write goes through it; nothing else touches
+    SQLite directly."""
 
     def __init__(self, home: Path | str = HOME) -> None:
         self.home = Path(home)
@@ -110,16 +117,17 @@ class Store:
         self._db.executescript(SCHEMA)
         self._db.commit()
 
-    # ── 策略 ──────────────────────────────────────────────
+    # ── strategies ────────────────────────────────────────
     def save_strategy(self, name: str, spec: dict[str, Any], note: str = "") -> dict[str, Any]:
-        """保存一版策略。
+        """Save one version of a strategy.
 
-        内容没变时**不新增版本**，直接返回已有的那版——否则点几次保存就多出几个
-        一模一样的版本，运行记录里再也看不出哪版是哪版。
+        When the content has not changed, **no new version is created** and the existing
+        one is returned — otherwise clicking save a few times leaves several identical
+        versions and the run history can no longer tell them apart.
         """
         name = (name or "").strip()
         if not name:
-            raise ValueError("策略必须有名字")
+            raise ValueError("a strategy must have a name")
         fp = spec_fingerprint(spec)
 
         same = self._db.execute(
@@ -144,7 +152,7 @@ class Store:
         ) | {"reused": False}
 
     def strategies(self) -> list[dict[str, Any]]:
-        """每个策略的最新版，外加它跑过多少次。"""
+        """Each strategy's latest version, with how many times it has been run."""
         rows = self._db.execute(
             """
             SELECT s.*, (SELECT COUNT(*) FROM run r WHERE r.strategy_name = s.name) AS runs
@@ -172,7 +180,7 @@ class Store:
         d["spec"] = json.loads(d["spec"])
         return d
 
-    # ── 运行 ──────────────────────────────────────────────
+    # ── runs ──────────────────────────────────────────────
     def save_run(
         self,
         *,
@@ -185,10 +193,11 @@ class Store:
         trades,
         synthetic: bool,
     ) -> dict[str, Any]:
-        """落一次运行。交易明细写 parquet，元数据写库。
+        """Record one run. The trade log goes to parquet, the metadata to the database.
 
-        parquet 而非 CSV：列式、带类型、体量小。几百次运行 × 上千笔交易在这个格式下
-        才不会把目录撑爆，pandas 读回来也不会把日期变成字符串。
+        Parquet rather than CSV: columnar, typed and compact. Hundreds of runs times
+        thousands of trades only stay manageable in this format, and pandas reads dates
+        back as dates rather than strings.
         """
         cur = self._db.execute(
             """
@@ -256,25 +265,27 @@ class Store:
         return self._unpack_run(row) if row else None
 
     def trades(self, run_id: int):
-        """读回某次运行的交易明细。
+        """Read one run's trade log back.
 
-        文件不在时**抛错而不是返回空表**——空表和"这次真没交易"长得一样，
-        而那两件事的含义完全不同。
+        A missing file **raises rather than returning an empty frame** — an empty frame
+        looks exactly like "this run really had no trades", and those two mean entirely
+        different things.
         """
         import pandas as pd
 
         row = self._db.execute("SELECT trades_file, n_trades FROM run WHERE id=?", (run_id,)).fetchone()
         if row is None:
-            raise KeyError(f"没有第 {run_id} 次运行")
+            raise KeyError(f"there is no run {run_id}")
         if not row["trades_file"]:
             if row["n_trades"]:
                 raise FileNotFoundError(
-                    f"第 {run_id} 次运行记录了 {row['n_trades']} 笔交易，但明细文件为空——数据损坏"
+                    f"run {run_id} recorded {row['n_trades']} trades but its log file "
+                    f"is empty: the data is corrupt"
                 )
             return pd.DataFrame()
         path = self.trades_dir / row["trades_file"]
         if not path.exists():
-            raise FileNotFoundError(f"第 {run_id} 次的交易明细文件丢失：{path}")
+            raise FileNotFoundError(f"run {run_id}'s trade log file is missing: {path}")
         return pd.read_parquet(path)
 
     @staticmethod
@@ -288,20 +299,20 @@ class Store:
     def delete_run(self, run_id: int) -> None:
         row = self._db.execute("SELECT trades_file FROM run WHERE id=?", (run_id,)).fetchone()
         if row is None:
-            raise KeyError(f"没有第 {run_id} 次运行")
+            raise KeyError(f"there is no run {run_id}")
         if row["trades_file"]:
             (self.trades_dir / row["trades_file"]).unlink(missing_ok=True)
         self._db.execute("DELETE FROM run WHERE id=?", (run_id,))
         self._db.commit()
 
-    # ── 结论 ──────────────────────────────────────────────
+    # ── verdicts ──────────────────────────────────────────
     def add_note(self, run_id: int, body: str, verdict: str = "open") -> dict[str, Any]:
         if verdict not in VERDICTS:
-            raise ValueError(f"未知的结论取值 {verdict!r}，可用：{sorted(VERDICTS)}")
+            raise ValueError(f"unknown verdict {verdict!r}; one of {sorted(VERDICTS)}")
         if not body.strip():
-            raise ValueError("结论不能是空的")
+            raise ValueError("a verdict cannot be empty")
         if self._db.execute("SELECT 1 FROM run WHERE id=?", (run_id,)).fetchone() is None:
-            raise KeyError(f"没有第 {run_id} 次运行")
+            raise KeyError(f"there is no run {run_id}")
         cur = self._db.execute(
             "INSERT INTO note (run_id, created, verdict, body) VALUES (?,?,?,?)",
             (run_id, _now(), verdict, body.strip()),
@@ -321,7 +332,7 @@ class Store:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    # ── 概况 ──────────────────────────────────────────────
+    # ── overview ──────────────────────────────────────────
     def overview(self) -> dict[str, Any]:
         one = lambda sql: self._db.execute(sql).fetchone()[0]  # noqa: E731
         return {

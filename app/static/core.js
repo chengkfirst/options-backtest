@@ -1,23 +1,27 @@
-/* core.js — 纯计算与格式化，不碰 DOM
+/* core.js — pure computation and formatting; it never touches the DOM
  *
- * 这一层只做两件事：把数字变成人看的字符串（money / pct / fmtVal），
- * 和把交易行变成统计量（stats / quantile / bucketize）。
- * 全文没有一处 document 引用，所以能单独测试，也能在别处复用。
+ * This layer does two things: turn numbers into strings a person reads
+ * (money / pct / fmtVal), and turn trade rows into statistics
+ * (stats / quantile / bucketize). There is not one reference to `document` in the
+ * file, so it can be tested on its own and reused elsewhere.
  *
- * 想加一个新的统计量、或改某一列的显示格式 → 改这里。
+ * To add a statistic, or change how a column is displayed, change it here.
  */
 "use strict";
 
-const LABEL={entry_iv:"进场 IV",entry_delta:"进场 delta",entry_moneyness:"进场价值状态",
- entry_dte_calendar:"进场剩余天数",entry_underlying_price:"进场标的价",entry_price:"入场权利金",
- exit_price:"出场权利金",holding_days:"持有交易日",entry_sig_rsi_14:"进场 RSI",
- entry_sig_rv_20:"进场已实现波动率",entry_sig_mom_20:"进场 20 日动量",entry_sig_atr_14:"进场 ATR",
- entry_sig_bb_width_20:"进场布林带宽",ma_gap:"价格相对 20 日均线",trend:"价格相对 200 日均线",
- exit_iv:"出场 IV",exit_delta:"出场 delta"};
+const LABEL={entry_iv:"IV at entry",entry_delta:"delta at entry",
+ entry_moneyness:"moneyness at entry",entry_dte_calendar:"days to expiry at entry",
+ entry_underlying_price:"spot at entry",entry_price:"premium paid",
+ exit_price:"premium received",holding_days:"trading days held",
+ entry_sig_rsi_14:"RSI at entry",entry_sig_rv_20:"realised vol at entry",
+ entry_sig_mom_20:"20-day momentum at entry",entry_sig_atr_14:"ATR at entry",
+ entry_sig_bb_width_20:"Bollinger width at entry",ma_gap:"price vs the 20-day",
+ trend:"price vs the 200-day",exit_iv:"IV at exit",exit_delta:"delta at exit"};
 const PCT=new Set(["entry_moneyness","ma_gap","trend","entry_sig_mom_20","entry_iv","exit_iv",
  "entry_sig_rv_20","entry_sig_bb_width_20"]);
-const REASON={take_profit:"止盈",stop_loss:"止损",time_exit:"持有期满",dte_floor:"剩余到期触底",
- expiry_itm:"被动到期·实值",expiry_otm:"被动到期·虚值",risk_forced:"风控强平"};
+const REASON={take_profit:"take profit",stop_loss:"stop loss",time_exit:"holding cap",
+ dte_floor:"days-to-expiry floor",expiry_itm:"expired in the money",
+ expiry_otm:"expired out of the money",risk_forced:"forced by risk"};
 const EXCLUDE=new Set(["trade_id","gross_pnl","fees","net_pnl","entry_sig_close",
  "entry_sig_sma_20","entry_sig_sma_50","entry_sig_sma_200"]);
 
