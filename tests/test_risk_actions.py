@@ -133,10 +133,19 @@ class TestItActsOnTheBook:
         assert (liquidated.trades["exit_reason"] == "risk_forced").any()
 
     def test_the_rule_changes_the_result(self):
-        """If the equity curves matched, the rule would be decoration."""
+        """If the equity curves matched, the rule would be decoration.
+
+        The docstring said equity and the assertion counted trades -- which is not the
+        same claim: a scale-down changes **quantities**, and a rule that only ever reduced
+        would leave the count untouched while changing every number in the book.
+        """
+        import pandas as pd
+
         plain = run(**BASE)
-        braked = run(**BASE, risk=TIGHT)
-        assert len(braked.trades) != len(plain.trades)
+        braked = run(**BASE, risk=SCALE)
+        with pytest.raises(AssertionError):
+            pd.testing.assert_series_equal(plain.raw.equity["equity_mid"],
+                                           braked.raw.equity["equity_mid"])
 
     def test_a_one_contract_position_is_left_alone_rather_than_closed(self):
         """Rounding has to go the safe way: "reduce" must never become "close", or a

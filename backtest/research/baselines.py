@@ -59,6 +59,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Sequence
 
+from collections import Counter
+
 import numpy as np
 
 from backtest.research.boundary import Boundary, Scope, header
@@ -171,19 +173,57 @@ def delta_equivalent(trades: pd.DataFrame, bars, *, multiplier: int = 100) -> Co
 
 
 def random_entry_dates(
-    sessions: Sequence[date], n: int, *, seed: int, avoid: Sequence[date] = ()
+    sessions: Sequence[date], n: int, *, seed: int, avoid: Sequence[date] = (),
+    like: Sequence[date] = (),
 ) -> list[date]:
     """``n`` session dates drawn without replacement, excluding ``avoid``.
 
-    Drawn from the **sessions the strategy could have traded**, not from the calendar, so
-    the baseline is not handed days the strategy never had access to.
+    ``like`` is the strategy's own entry dates, and the draw is **stratified to match
+    their distribution over time**. Without it the draw is uniform across the whole range,
+    which is a different experiment from the one the baseline is supposed to run: a
+    strategy whose signals cluster in one period is then compared against a baseline
+    spread over every period, so the comparison is between market environments rather than
+    between timing and no timing. Which of the two is being measured is invisible in the
+    output, and the bias has no fixed direction.
+
+    The stratum is a calendar year, which is a method choice and lives in the threshold
+    registry rather than here. Years with no strategy entry contribute none, which is the
+    point: a baseline must not be handed a period the strategy never traded.
     """
     pool = [d for d in sessions if d not in set(avoid)]
     if n > len(pool):
         n = len(pool)
     rng = np.random.default_rng(seed)
-    picked = rng.choice(len(pool), size=n, replace=False)
-    return sorted(pool[int(i)] for i in picked)
+    if not len(like):
+        picked = rng.choice(len(pool), size=n, replace=False)
+        return sorted(pool[int(i)] for i in picked)
+
+    wanted = Counter(_stratum(d) for d in like)
+    by_stratum: dict[Any, list[date]] = {}
+    for day in pool:
+        by_stratum.setdefault(_stratum(day), []).append(day)
+
+    out: list[date] = []
+    for key, count in sorted(wanted.items()):
+        available = by_stratum.get(key, [])
+        take = min(count, len(available))
+        if take:
+            idx = rng.choice(len(available), size=take, replace=False)
+            out.extend(available[int(i)] for i in idx)
+    # A stratum the strategy traded and the pool cannot fill leaves the draw short. Short
+    # is correct -- topping it up from another period is the bias this exists to remove --
+    # and `random_entry` reports the count so a short draw is visible.
+    return sorted(out)
+
+
+def _stratum(day: date):
+    """Which bucket a date falls in, for stratified sampling.
+
+    The calendar year. Coarse enough that most strata hold enough sessions to draw from,
+    fine enough to separate a bull year from a bear one -- which is the comparison the
+    unstratified draw was accidentally making.
+    """
+    return day.year
 
 
 def random_entry(
@@ -191,6 +231,7 @@ def random_entry(
     *,
     n_entries: int,
     sessions: Sequence[date],
+    like: Sequence[date] = (),
     draws: int | None = None,
     seed: int = 20260917,
     strategy_pnl: float,
@@ -221,7 +262,7 @@ def random_entry(
 
     results: list[float] = []
     for i in range(draws):
-        dates = random_entry_dates(sessions, n_entries, seed=seed + i)
+        dates = random_entry_dates(sessions, n_entries, seed=seed + i, like=like)
         results.append(float(runner(dates)))
 
     arr = np.asarray(results, dtype=float)

@@ -56,11 +56,24 @@ def _run(**over):
 class TestMigration:
     """A column added after the first release has to reach a database that exists."""
 
+    #: The `run` table as it was before the columns were added. Written out rather than
+    #: produced with ALTER TABLE DROP COLUMN, which needs SQLite 3.35 -- a test that fails
+    #: on an older interpreter is reporting the environment, not the code.
+    OLD_SCHEMA = """
+    CREATE TABLE run (
+        id INTEGER PRIMARY KEY, started TEXT NOT NULL, seconds REAL NOT NULL,
+        strategy_id INTEGER, strategy_name TEXT NOT NULL, strategy_ver INTEGER NOT NULL,
+        symbol TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL,
+        config TEXT NOT NULL, manifest TEXT NOT NULL, events TEXT NOT NULL,
+        n_trades INTEGER NOT NULL, net_pnl REAL NOT NULL, win_rate REAL NOT NULL,
+        median_pnl REAL NOT NULL, synthetic INTEGER NOT NULL, trades_file TEXT NOT NULL
+    );
+    """
+
     def test_an_older_database_gains_the_columns(self, tmp_path):
-        Store(tmp_path)
+        (tmp_path / "trades").mkdir(exist_ok=True)
         db = sqlite3.connect(tmp_path / "research.db")
-        db.executescript("ALTER TABLE run DROP COLUMN fingerprint;"
-                         "ALTER TABLE run DROP COLUMN sharpe_annualised;")
+        db.executescript(self.OLD_SCHEMA)
         db.commit()
         db.close()
 
@@ -69,6 +82,13 @@ class TestMigration:
         cols = {r[1] for r in
                 sqlite3.connect(tmp_path / "research.db").execute("PRAGMA table_info(run)")}
         assert {"fingerprint", "sharpe_annualised"} <= cols
+
+    def test_the_old_schema_really_lacks_them(self, tmp_path):
+        """Or the migration test would pass against a table that never needed migrating."""
+        db = sqlite3.connect(":memory:")
+        db.executescript(self.OLD_SCHEMA)
+        cols = {r[1] for r in db.execute("PRAGMA table_info(run)")}
+        assert not ({"fingerprint", "sharpe_annualised"} & cols)
 
     def test_opening_twice_does_not_fail(self, tmp_path):
         """ALTER TABLE on a column that already exists is an error, so the migration has

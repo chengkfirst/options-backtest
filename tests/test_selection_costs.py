@@ -64,15 +64,35 @@ class TestExpirySelection:
         assert not res.ok and "expiry" in res.contract.reason
 
     def test_executability_floor_excludes_near_expiry(self, snapshot, config, market, day):
-        """A contract expiring on or before the execution day is unusable, or an
-        exit intent would come to nothing."""
-        rule = selection(target_dte=3, dte_window=(1, 6), target_delta=0.30)
-        res = select_contract(snapshot, rule, config, market.calendar, day)
-        if res.ok:
-            remaining = market.calendar.sessions_between(day, res.contract.unwrap().expiry)
-            assert remaining >= config.min_days_to_expiry
-        else:
-            assert "executable" in res.describe() or "expiry" in res.contract.reason
+        """A contract expiring inside the execution window is unusable: an exit decided on
+        it could not be filled before it settled.
+
+        The first version asked for a 1-6 day window and then branched on whether anything
+        came back, asserting something either way -- so which path ran depended on the
+        fixture and the case it describes was never necessarily constructed. This builds
+        the contract that must be excluded and checks it is.
+        """
+        import pandas as pd
+
+        from backtest.core.types import CHAIN_COLUMNS
+
+        # An expiry one session out, which is inside the floor however the floor is set.
+        tomorrow = market.calendar.shift(day, 1)
+        row = {c: float("nan") for c in CHAIN_COLUMNS}
+        row.update(asof=day, symbol="QQQ", expiry=tomorrow, strike=400.0, right="C",
+                   bid=5.0, ask=5.2, underlying_price=400.0, delta=0.30, iv=0.22,
+                   available_at=day, source="synthetic", quality_flags="",
+                   greeks_model_derived=True)
+        only_near = pd.DataFrame([row])
+
+        res = select_contract(only_near, selection(target_dte=1, dte_window=(1, 400),
+                                                   target_delta=0.30),
+                              config, market.calendar, day)
+        assert not res.ok, (
+            f"a contract expiring on {tomorrow}, one session after the decision, was "
+            f"selected under a floor of {config.min_days_to_expiry} sessions"
+        )
+        assert "executable" in res.describe().lower() or "expiry" in res.describe().lower()
 
     def test_trace_is_explainable(self, snapshot, config, market, day):
         rule = selection(target_delta=0.30)

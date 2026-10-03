@@ -140,18 +140,75 @@ class TestDescribe:
         from backtest import run
 
         sig = set(inspect.signature(run).parameters)
-        # The front end assembles these under different names; they do not correspond
-        # to a run() parameter directly.
-        indirect = {
-            "entry_mode", "entry_code", "review_code", "exit_mode", "delta", "right",
-            "dte_lo", "dte_hi", "delta_lo", "delta_hi",
-            "max_spread", "min_open_interest", "target_vol",
-            "take_profit", "stop_loss", "hold_days", "dte_floor",
-            "sizing_method", "risk_pct", "notional", "target_vol",
-        }
+        # A field the interface offers must reach `run()` -- directly, or assembled under
+        # another name. The old version kept a hand-written exemption list, which only
+        # *excused* a field from the check: one on the list that the interface forgot to
+        # wire would be filled in and have no effect, which is the exact failure this
+        # exists to catch. (It also held `target_vol` twice.)
+        #
+        # So the indirect ones are checked against the runner that does the assembling,
+        # rather than against a list that agrees with nothing.
+        import sys
+        from pathlib import Path as _Path
+
+        app = _Path(__file__).resolve().parent.parent / "app"
+        if str(app) not in sys.path:
+            sys.path.insert(0, str(app))
+        import runner as app_runner
+
+        assembled = inspect.getsource(app_runner.run_backtest)
+        # Some fields are assembled on the front end before they are sent -- the sizing
+        # method and its parameter become one `sizing` object in `formPayload`. So the
+        # interface's own source counts as a place a field can be wired.
+        #
+        # **This is weaker than it should be**, and the weakness is named rather than
+        # hidden: matching a name in JS source is the thing the CONTRACT declaration exists
+        # to avoid. What would make it strong is an `assembles` section in CONTRACT, which
+        # is front-end work. It is still strictly better than the hand-written exemption
+        # list it replaces, which excused a field from the check without establishing that
+        # anything read it -- and so would have passed a field the interface forgot to
+        # wire, which is the failure this test is for.
+        bench = (_Path(__file__).resolve().parent.parent / "app" / "static" / "bench.js")
+        front = bench.read_text(encoding="utf-8")
+
+        # A field that exists only to decide which *other* fields are shown. It never
+        # reaches the backend and should not: `exit_mode` switches the form between a
+        # fixed ratio and a daily rule, and the fields it governs say so in their
+        # `depends`. Derived from those declarations rather than listed by hand, so a
+        # switch that stops governing anything stops being exempt.
+        switches = {d.split("=")[0]
+                    for c in COMPONENTS for f in c.inputs
+                    if (d := getattr(f, "depends", "") or "")}
+
+        missing = []
         for c in COMPONENTS:
             for f in c.inputs:
-                assert f.name in sig or f.name in indirect, (
-                    f"{f.name} is neither a run() parameter nor registered as an "
-                    f"indirect field — filling it in on the interface has no effect"
-                )
+                if f.name in sig or f.name in switches:
+                    continue
+                if f'"{f.name}"' in assembled or f"'{f.name}'" in assembled:
+                    continue
+                if f".{f.name}" in front or f'"{f.name}"' in front:
+                    continue
+                missing.append(f.name)
+        assert not missing, (
+            f"these interface fields reach neither run() nor the runner that assembles "
+            f"its arguments, and govern no other field, so filling them in has no "
+            f"effect: {sorted(set(missing))}"
+        )
+
+    def test_every_visibility_switch_governs_something(self):
+        """The other direction: a switch nothing depends on is a control with no effect.
+
+        Both halves matter. Without this one, the exemption above would quietly grow to
+        cover any field someone added a `depends` to and then removed.
+        """
+        from backtest.core.slots import COMPONENTS
+
+        governed = {d.split("=")[0]
+                    for c in COMPONENTS for f in c.inputs
+                    if (d := getattr(f, "depends", "") or "")}
+        names = {f.name for c in COMPONENTS for f in c.inputs}
+        dangling = sorted(governed - names)
+        assert not dangling, (
+            f"these fields are depended on and do not exist: {dangling}"
+        )

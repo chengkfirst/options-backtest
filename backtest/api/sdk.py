@@ -823,6 +823,12 @@ class Result:
 
         out.append(random_entry(
             one_draw, n_entries=entries, sessions=sessions, draws=draws,
+            # The strategy's own entry dates, so the draw matches their distribution over
+            # time. Without this the baseline is spread across every period while the
+            # strategy may have traded in one, and the comparison becomes one between
+            # market environments rather than between timing and no timing.
+            like=[d.date() if hasattr(d, "date") else d
+                  for d in pd.to_datetime(trades["entry_date"])],
             strategy_pnl=float(trades["net_pnl"].sum()),
         ))
         return out

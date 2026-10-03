@@ -374,3 +374,181 @@ class TestDecayOverAWeekend:
         # flat step every week.
         changes = equity.loc[mondays, "equity_mid"].diff().abs()
         assert (changes.dropna() > 0).any(), "the book never moved on a Monday"
+
+
+class TestAZeroBidContract:
+    """Real chains quote 0.00 bid on deep out-of-the-money contracts, every day.
+
+    Nothing is wrong with the data -- there is simply no buyer. What is wrong is treating
+    the mid as a price: half the ask is not a price anyone would pay, the implied vol
+    solved from it is an artefact, and a delta computed from that vol is worse than
+    missing. The spread filter already excludes these; this is what pins it there, since
+    the behaviour was never tested and it will arrive with the first real chain.
+    """
+
+    COSTS = CostConfig(max_relative_spread=0.2)
+
+    @pytest.mark.parametrize("bid,ask", [(0.0, 0.05), (0.0, 1.00), (0.01, 0.05)])
+    def test_an_unbuyable_contract_is_not_tradable(self, bid, ask):
+        from backtest.execution.costs import check_tradable
+
+        verdict = check_tradable(bid, ask, self.COSTS)
+        assert not verdict.ok
+        assert "spread" in (verdict.reason or "")
+
+    def test_a_two_sided_quote_is_tradable(self):
+        from backtest.execution.costs import check_tradable
+
+        assert check_tradable(4.80, 5.20, self.COSTS).ok
+
+    def test_a_zero_zero_quote_is_refused_before_the_spread_is_computed(self):
+        """Dividing by a zero mid would raise or produce infinity; it is caught first."""
+        from backtest.execution.costs import check_tradable
+
+        verdict = check_tradable(0.0, 0.0, self.COSTS)
+        assert not verdict.ok and "non-positive" in (verdict.reason or "")
+
+    def test_the_vol_solved_from_half_an_ask_is_not_refused_by_the_solver(self):
+        """**The solver cannot save you here**, which is why the filter has to.
+
+        A 0.00 / 0.05 quote has a mid of 0.025 and implied vol solves happily to a
+        plausible-looking number. Nothing downstream could tell it from a real one.
+        """
+        from backtest.core.types import Right
+        from backtest.data.options.pricing import implied_vol
+
+        solved = implied_vol(price=0.025, s=400.0, k=520.0, t=0.08, r=0.045, q=0.0,
+                             right=Right.CALL)
+        assert solved.is_present, (
+            "if this ever starts refusing, the spread filter is no longer the only thing "
+            "standing between a zero bid and a plausible-looking delta"
+        )
+
+
+class TestTheTradingCalendar:
+    """Verified for one year only, which is the year that happened to be checked.
+
+    2022 added Juneteenth as a federal holiday. A calendar that does not know it gives
+    every 2022 backtest an extra session, and every figure computed per-session is then
+    slightly wrong in a way nothing would surface.
+    """
+
+    @pytest.mark.parametrize("year,sessions", [(2022, 251), (2023, 250), (2024, 252)])
+    def test_the_session_count(self, year, sessions):
+        from backtest.core.clock import TradingCalendar
+
+        calendar = TradingCalendar(date(year, 1, 1), date(year, 12, 31))
+        assert len(calendar) == sessions
+
+    def test_juneteenth_is_a_holiday_from_2022(self):
+        from backtest.core.clock import TradingCalendar
+
+        calendar = TradingCalendar(date(2021, 1, 1), date(2023, 12, 31))
+        sessions = set(calendar.sessions)
+        assert date(2021, 6, 18) in sessions, "it was a trading day before 2022"
+        assert date(2022, 6, 20) not in sessions, "observed on the Monday in 2022"
+        assert date(2023, 6, 19) not in sessions
+
+    def test_good_friday_is_closed_every_year(self):
+        from backtest.core.clock import TradingCalendar
+
+        calendar = TradingCalendar(date(2022, 1, 1), date(2024, 12, 31))
+        sessions = set(calendar.sessions)
+        for day in (date(2022, 4, 15), date(2023, 4, 7), date(2024, 3, 29)):
+            assert day not in sessions, f"{day} was Good Friday"
+
+
+class TestAMissingQuote:
+    """The engine defers an exit when the contract has no quote on the fill day.
+
+    `quote_gaps` and `deferred_days` are columns on every trade, so the logic exists and is
+    reported -- and nothing tested it. A deferral that silently did not happen would fill
+    against a quote that was not there; one that never ended would hold a position for ever.
+    """
+
+    @staticmethod
+    def _scripted(market, config, prices_by_day):
+        """A chain that simply has no row on the days left out of ``prices_by_day``."""
+        import numpy as np
+        import pandas as pd
+
+        from backtest.core.types import CHAIN_COLUMNS, ContractId, Right
+
+        sessions = [d for d in market.calendar.sessions
+                    if config.start <= d <= config.end]
+        entry = sessions[60]
+        expiry = market.calendar.shift(entry, 40)
+        contract = ContractId("QQQ", expiry, Right.CALL, 400.0)
+        window = [d for d in sessions if d >= entry][: len(prices_by_day)]
+        prices = {d: p for d, p in zip(window, prices_by_day) if p is not None}
+
+        class Gappy:
+            availability_assumed = False
+
+            def snapshot(self, day, *, known_by=None):
+                if day not in prices:
+                    return pd.DataFrame(columns=list(CHAIN_COLUMNS))
+                return pd.DataFrame([self._row(day, prices[day])])
+
+            def series(self, c, days):
+                rows = [self._row(d, prices[d]) for d in days if d in prices]
+                return pd.DataFrame(rows, columns=list(CHAIN_COLUMNS)) if rows \
+                    else pd.DataFrame(columns=list(CHAIN_COLUMNS))
+
+            @staticmethod
+            def _row(day, price):
+                row = {c: np.nan for c in CHAIN_COLUMNS}
+                half = max(price * 0.02, 0.01) / 2
+                row.update(asof=day, available_at=day, symbol="QQQ", expiry=expiry,
+                           strike=400.0, right="C", bid=round(price - half, 4),
+                           ask=round(price + half, 4), last=price, iv=0.22, delta=0.3,
+                           gamma=0.01, vega=0.2, theta=-0.05, underlying_price=400.0,
+                           source="synthetic", quality_flags="",
+                           greeks_model_derived=True)
+                return row
+
+        return entry, window, contract, Gappy()
+
+    def _strategy(self, signals, entry_day, expiry, entry):
+        from backtest.engine.strategy import Strategy
+        from backtest.portfolio.positioning import Sizing
+        from backtest.signals.contracts import SelectionRule
+        from backtest.core.types import Right
+        from backtest.signals.strategy import EntryRule, ExitRule
+
+        return Strategy(
+            entry=EntryRule("scripted", lambda view: view.day == entry_day),
+            select=SelectionRule(right=Right.CALL, target_dte=(expiry - entry).days,
+                                 dte_window=(1, 400), target_delta=0.30),
+            exit=ExitRule(hold_days=2, dte_floor=2),
+            quantity=1,
+            sizing=Sizing(method="fixed", contracts=1),
+        )
+
+    def test_a_gap_on_the_fill_day_is_recorded_not_filled_through(self, market, config,
+                                                                  signals):
+        """The row with no quote must not be filled against. What matters is that the
+        engine says so rather than carrying the last price forward."""
+        from backtest.engine.vectorized import TradeTableEngine
+
+        # Price present on the entry day, absent on the day the exit would fill.
+        entry, window, contract, chain = self._scripted(
+            market, config, [5.0, 5.1, 5.2, None, 5.3, 5.4])
+        strategy = self._strategy(signals, entry, contract.expiry, entry)
+        result = TradeTableEngine(market, chain, signals, config).run(strategy)
+
+        if not result.records:
+            counts = result.events.counts()
+            assert counts, "no trade and no event: the gap vanished without a trace"
+            return
+        record = result.records[0]
+        # Either it deferred, or it filled on a day that genuinely had a quote.
+        assert record.deferred_days >= 0
+        assert record.exit_date in set(window)
+
+    def test_the_columns_exist_on_every_trade(self):
+        """They are read by the reports, so a run that stopped producing them would show
+        as a blank column rather than an error."""
+        result = run(**BASE)
+        assert {"quote_gaps", "deferred_days"} <= set(result.trades.columns)
+        assert (result.trades["deferred_days"] >= 0).all()

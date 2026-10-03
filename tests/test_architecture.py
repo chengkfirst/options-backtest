@@ -39,23 +39,58 @@ def test_detects_pricing_leak(tmp_path, monkeypatch):
     assert any("pricing is confined to the data layer" in p for p in problems)
 
 
+#: Where a float that might be absent is a **measurement**, so absence has to be
+#: `Maybe[float]`. Elsewhere -- strategy rules, selection rules, plans -- `float | None`
+#: means "no such rule" and is correct.
+DATA_MODULES = ("backtest/core/types", "backtest/data", "backtest/accounting")
+
+
 def test_no_bare_optional_floats_across_module_boundaries():
     """Scalars crossing module boundaries express absence with Maybe, never a bare
     `float | None`.
 
     A missing delta read as 0 selects a completely wrong contract and raises nothing.
     """
+    def is_bare_optional_float(node) -> bool:
+        """`float | None`, `None | float` and `Optional[float]`, which are the same type.
+
+        The first version matched only the `|` spelling, so writing `Optional[float]`
+        slipped past a check whose whole point is that the type is forbidden however it is
+        written.
+        """
+        if node is None:
+            return False
+        text = ast.unparse(node).replace(" ", "")
+        return text in {"float|None", "None|float", "Optional[float]",
+                        "typing.Optional[float]"}
+
     offenders: list[str] = []
     for path in sorted(Path("backtest").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
-                continue
-            returns = node.returns
-            if isinstance(returns, ast.BinOp) and isinstance(returns.op, ast.BitOr):
-                text = ast.unparse(returns)
-                if text.replace(" ", "") in {"float|None", "None|float"}:
-                    offenders.append(f"{path}:{node.lineno} {node.name} -> {text}")
+            # A function's return type.
+            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
+                if is_bare_optional_float(node.returns):
+                    offenders.append(f"{path}:{node.lineno} {node.name} -> "
+                                     f"{ast.unparse(node.returns)}")
+            # A dataclass field, which crosses module boundaries just as a return does
+            # and was not looked at. Only in the modules that carry **observed** data: a
+            # `delta: float | None` on a market record is read by every consumer and a
+            # missing one read as 0 picks the wrong contract.
+            #
+            # Configuration is excluded, and that is the rule rather than an exemption. On
+            # a strategy rule `stop_loss: float | None` means **there is no stop**, which
+            # is a real configuration the code branches on explicitly -- the opposite of a
+            # measurement that went missing. Forcing Maybe there would make "no rule" and
+            # "unknown" the same shape, which is the confusion this whole convention
+            # exists to prevent, in the other direction.
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if node.target.id.startswith("_") or not any(
+                        str(path).startswith(d) for d in DATA_MODULES):
+                    continue
+                if is_bare_optional_float(node.annotation):
+                    offenders.append(f"{path}:{node.lineno} {node.target.id}: "
+                                     f"{ast.unparse(node.annotation)}")
     assert offenders == [], "use Maybe[float] instead:\n" + "\n".join(offenders)
 
 

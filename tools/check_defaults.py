@@ -19,10 +19,14 @@ disguise).
 
 Two things are deliberately NOT flagged:
 
-- **Run settings.** The period, the capital, the cost model, the engine, the symbol. The
-  architecture document's register puts these among the realism and engineering groups, not
-  among the strategy choices. A default there is a starting point, not a decision taken on
-  the researcher's behalf.
+- **Run settings.** The period, the capital, the cost model, the engine, and **the
+  symbol**. The architecture document's register puts these among the realism and
+  engineering groups, not among the strategy choices -- "underlying universe (index ETFs
+  only vs single stocks)" is listed under *2. Engineering trade-offs*, beside data
+  granularity and the choice of engine. So `BacktestConfig(symbol="QQQ")` having a default
+  is permitted by the document's own classification, and the reason is recorded here
+  because it looks exactly like an oversight otherwise. If the universe ever moves into
+  group 3, this is the paragraph that has to change with it.
 - **A default a person can see.** The interface's form ships starting values for every
   field. That is the right place for one: it appears on screen, in the configuration, and
   in the saved run, and changing it is one edit. What this check forbids is a value that
