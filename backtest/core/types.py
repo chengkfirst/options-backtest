@@ -159,6 +159,15 @@ class ContractSpec:
 #: dropped from the interface.
 CHAIN_COLUMNS: tuple[str, ...] = (
     "asof",
+    #: **When this row could first have been known**, as opposed to the day it describes.
+    #:
+    #: The architecture document's first data rule is that nothing enters a backtest
+    #: without one. The two dates coincide for a clean daily snapshot, which is why
+    #: nothing has broken while the column did not exist -- and they stop coinciding the
+    #: moment a vendor delivers late, revises a figure, or backfills a gap. A row that
+    #: arrived two days after the session it describes must not be visible on that
+    #: session, and without this column there is nowhere to say so.
+    "available_at",
     "symbol",
     "expiry",
     "strike",

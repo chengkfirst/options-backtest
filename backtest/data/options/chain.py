@@ -34,7 +34,16 @@ class ChainSource(Protocol):
     """One way in to any option chain. Real sources and the synthetic chain
     implement the same protocol."""
 
-    def snapshot(self, day: date) -> pd.DataFrame:
+    #: Whether the availability dates were assumed rather than supplied.
+    #:
+    #: Part of the protocol, not an optional extra. The document's first data rule is that
+    #: nothing enters a backtest without an availability date; a source that supplies none
+    #: has that date **assumed** for it, and a reader has to be able to tell which kind of
+    #: run they are looking at. A source that omitted this would report neither, which
+    #: reads as "no assumption was made".
+    availability_assumed: bool
+
+    def snapshot(self, day: date, *, known_by: date | None = None) -> pd.DataFrame:
         """Every tradable contract on one day, in long form, with the columns
         :data:`CHAIN_COLUMNS`."""
         ...

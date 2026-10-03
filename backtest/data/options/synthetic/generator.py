@@ -38,13 +38,21 @@ class SyntheticChainSource:
     """A chain generated from the underlying's close, the volatility proxy and
     Black-Scholes."""
 
+    #: Availability is not assumed here: each row is generated on the day it describes,
+    #: so the two dates coincide by construction rather than by guess. Declared so
+    #: provenance can report it without special-casing which source it is looking at.
+    availability_assumed = False
+
     def __init__(self, market: MarketData, config: BacktestConfig | None = None) -> None:
         self.market = market
         self.config = config or market.config
         self._cache: dict[date, pd.DataFrame] = {}
 
     # ---- the protocol ----
-    def snapshot(self, day: date) -> pd.DataFrame:
+    def snapshot(self, day: date, *, known_by: date | None = None) -> pd.DataFrame:
+        """``known_by`` is accepted and has no effect: every row here is generated on the
+        day it describes, so nothing can arrive late. Accepted rather than refused so the
+        two sources stay interchangeable."""
         if day not in self._cache:
             self._cache[day] = self._build(day)
         return self._cache[day]
@@ -148,6 +156,11 @@ class SyntheticChainSource:
                     pd.DataFrame(
                         {
                             "asof": day,
+            "available_at": day,
+                            # Generated on the day it describes, so the two coincide by
+                            # construction. Carried anyway: the two sources must have the
+                            # same shape, or code that reads one breaks on the other.
+                            "available_at": day,
                             "symbol": cfg.symbol,
                             "expiry": expiry,
                             "strike": strikes,
@@ -190,6 +203,7 @@ class SyntheticChainSource:
         )
         return {
             "asof": day,
+            "available_at": day,
             "symbol": contract.symbol,
             "expiry": contract.expiry,
             "strike": contract.strike,

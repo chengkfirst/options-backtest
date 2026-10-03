@@ -1,4 +1,17 @@
-"""The data view: every read cut at ``available_at``.
+"""The data view: every read cut at what was known.
+
+## The cut has two halves, and only one of them lived here
+
+**Which day you may ask about** is this object's half: a read for a day past ``as_of``
+raises. That was always here.
+
+**Which rows within that day were actually known** is the data layer's half, and it did
+not exist -- there was no ``available_at`` column, and this docstring's first line claimed
+the cut was made on one. The two dates coincide for a clean daily snapshot, which is why
+nothing broke, and they come apart the moment a vendor delivers late, revises a figure or
+backfills a gap. The column exists now, the chain sources withhold rows not yet known, and
+a source that supplies no availability dates reports that they were **assumed** rather
+than letting the assumption pass as data.
 
 ## Why an object rather than a convention
 

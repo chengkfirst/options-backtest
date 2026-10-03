@@ -43,6 +43,7 @@ import pandas as pd
 
 from backtest.core.config import BacktestConfig
 from backtest.data.options.chain import empty_chain, validate_chain
+from backtest.core.dataview import LookAheadError
 from backtest.core.errors import DataQualityError, StartupError
 from backtest.core.types import CHAIN_COLUMNS, ContractId, Right
 
@@ -59,6 +60,12 @@ SCHEMA: dict[str, dict[str, str]] = {
     "ask":              {"required": "yes", "means": "best ask", "if absent": "—"},
     "underlying_price": {"required": "yes", "means": "spot at that moment (**the traded price, not the adjusted one**)",
                          "if absent": "—"},
+    "available_at":     {"required": "no",
+                         "means": "the date this row could first have been **known** — not "
+                                  "the date it describes. The two differ when a vendor "
+                                  "delivers late, revises, or backfills",
+                         "if absent": "assumed equal to asof, and the run records that it "
+                                      "was assumed rather than supplied"},
     "last":             {"required": "no", "means": "last traded price", "if absent": "no effect; fills are derived from bid/ask"},
     "volume":           {"required": "no", "means": "contracts traded that day", "if absent": "the volume filter is skipped and flagged"},
     "open_interest":    {"required": "no", "means": "open contracts", "if absent": "the open-interest filter is skipped and flagged"},
@@ -176,7 +183,7 @@ def normalise(
         if col in out.columns:
             out[col] = out[col].astype(float) * float(factor)
 
-    for col in ("asof", "expiry"):
+    for col in ("asof", "expiry", "available_at"):
         if col in out.columns:
             out[col] = pd.to_datetime(out[col], errors="coerce").dt.date
     return out
@@ -334,19 +341,61 @@ class FileChainSource:
                 + report.summary(printout=False)
             )
         self.report = report
+        #: Whether the availability dates were supplied or assumed. Set by `_prepare`,
+        #: read by provenance: a run whose look-ahead protection rests on an assumption
+        #: should say so rather than read the same as one where the data carried it.
+        self.availability_assumed = False
+        #: How many rows were withheld for not having been known yet. Counted rather than
+        #: silently dropped -- a feed that routinely arrives a day late should show up as
+        #: a number, not as slightly fewer trades.
+        self._withheld = 0
         self._frame = self._prepare(frame)
         self._by_day: dict[date, pd.DataFrame] = {
             d: g.reset_index(drop=True) for d, g in self._frame.groupby("asof", sort=False)
         }
 
     # ---- the protocol ----
-    def snapshot(self, day: date) -> pd.DataFrame:
+    def snapshot(self, day: date, *, known_by: date | None = None) -> pd.DataFrame:
+        """Every contract quoted on ``day`` that was known by ``known_by``.
+
+        Two different questions share this method, and conflating them is how a late feed
+        turns into silent look-ahead or into silently missing history:
+
+        - **what can be traded now**: ``known_by`` is ``day``, the default. A quote the
+          vendor had not delivered yet cannot be acted on, so it is withheld.
+        - **what is known now about then**: ``known_by`` is today. A quote for last
+          Tuesday that arrived on Thursday is perfectly good history by Friday, and a
+          signal computed on Friday may use it.
+
+        The trading path takes the default, which is why it was possible to write this
+        method with one date and not notice. Research reading history has to say when it
+        is asking from, or it either sees data that had not arrived or never sees data
+        that arrived late.
+        """
         got = self._by_day.get(day)
-        return empty_chain() if got is None else got
+        if got is None:
+            return empty_chain()
+        if "available_at" not in got.columns:
+            return got
+        cutoff = known_by or day
+        if cutoff < day:
+            raise LookAheadError(
+                f"asked what was known by {cutoff} about {day}, which is later. A view "
+                f"cannot read a day that has not happened"
+            )
+        known = got.loc[got["available_at"] <= cutoff]
+        if len(known) < len(got):
+            self._withheld += len(got) - len(known)
+        return known.reset_index(drop=True) if len(known) else empty_chain()
 
     def series(self, contract: ContractId, days: Iterable[date]) -> pd.DataFrame:
         wanted = set(days)
         f = self._frame
+        # Same cut as `snapshot`: a quote delivered after the day it describes is not
+        # available on that day, and marking a position against it would be look-ahead in
+        # the valuation rather than in the signal -- quieter, and just as wrong.
+        if "available_at" in f.columns:
+            f = f.loc[f["available_at"] <= f["asof"]]
         hit = f.loc[
             f["asof"].isin(wanted)
             & (f["symbol"] == contract.symbol)
@@ -364,6 +413,18 @@ class FileChainSource:
         for col in CHAIN_COLUMNS:
             if col not in out.columns:
                 out[col] = np.nan
+        # The document's first data rule: nothing enters without an availability date.
+        # When the source supplies none, it is assumed equal to the quote date and the
+        # assumption is **recorded**, because a run on data with no availability
+        # information is a run whose look-ahead protection rests on an assumption rather
+        # than on the data.
+        if "available_at" not in frame.columns or out["available_at"].isna().all():
+            out["available_at"] = out["asof"]
+            self.availability_assumed = True
+        else:
+            parsed = pd.to_datetime(out["available_at"], errors="coerce").dt.date
+            out["available_at"] = parsed.where(parsed.notna(), out["asof"])
+            self.availability_assumed = bool(frame["available_at"].isna().any())
         out["source"] = out["source"].astype("object").fillna(f"file:{self.path.name}")
         out["quality_flags"] = out["quality_flags"].astype("object").fillna("")
         # When the column was absent it was created as a float64 NaN column, and

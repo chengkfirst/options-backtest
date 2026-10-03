@@ -414,7 +414,30 @@ class Result:
         return R.cost_breakdown(self.trades)
 
     def provenance(self) -> dict[str, Any]:
-        return R.data_provenance(self.trades)
+        out = R.data_provenance(self.trades)
+        # Whether the look-ahead cut rests on the data or on an assumption.
+        #
+        # The document's first data rule is that nothing enters a backtest without an
+        # availability date. A source that supplies none is **assumed** to have been
+        # available on the day it describes, which is right for a clean daily snapshot and
+        # wrong for a vendor that delivers late, revises, or backfills. The assumption is
+        # defensible; being unable to tell whether it was made is not.
+        source = getattr(self, "_chain", None)
+        assumed = getattr(source, "availability_assumed", None)
+        if assumed is not None:
+            out["availability_assumed"] = bool(assumed)
+            out["availability_note"] = (
+                "the data carried no availability dates, so every row is assumed to have "
+                "been known on the day it describes. True for a clean daily snapshot; "
+                "wrong for a feed that arrives late or revises"
+                if assumed else
+                "availability dates came from the data, and rows not yet known were "
+                "withheld"
+            )
+            withheld = getattr(source, "_withheld", 0)
+            if withheld:
+                out["rows_withheld_as_unknown"] = int(withheld)
+        return out
 
     def manifest(self) -> dict[str, Any]:
         """Configuration, provenance and dependency versions — what makes the result

@@ -3,7 +3,7 @@ checks."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -265,3 +265,119 @@ class TestEarlyExerciseFlag:
         spot = float(snap["underlying_price"].iloc[0])
         otm_calls = snap.loc[(snap["right"] == "C") & (snap["strike"] > spot * 1.05)]
         assert (otm_calls["quality_flags"] == "").all()
+
+
+class TestAvailability:
+    """The document's first data rule: nothing enters a backtest without an availability
+    date.
+
+    It did not hold. There was no such column, and `DataView`'s own first line said the
+    cut was made on one. The two dates coincide for a clean daily snapshot -- which is why
+    nothing had broken -- and they come apart the moment a feed arrives late, revises a
+    figure, or backfills a gap. A row that reached you two days after the session it
+    describes is real data about that session and could not have been acted on in it.
+    """
+
+    @staticmethod
+    def _frame(late_strike: float | None = 400.0):
+        import pandas as pd
+
+        rows = []
+        for i in range(10):
+            day = date(2023, 1, 3) + timedelta(days=i)
+            for strike in (380.0, 390.0, 400.0):
+                row = {
+                    "asof": day, "symbol": "QQQ", "expiry": date(2023, 3, 17),
+                    "strike": strike, "right": "C", "bid": 5.0, "ask": 5.2,
+                    "underlying_price": 390.0,
+                }
+                if late_strike is not None:
+                    row["available_at"] = (day + timedelta(days=2)
+                                           if strike == late_strike else day)
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _source(frame, tmp_path, market, config):
+        from backtest.data.options.adapters import FileChainSource
+
+        path = tmp_path / "chain.parquet"
+        frame.to_parquet(path)
+        return FileChainSource(path, market, config)
+
+    def test_a_row_that_arrived_late_is_withheld(self, tmp_path, market, config):
+        source = self._source(self._frame(), tmp_path, market, config)
+        visible = source.snapshot(date(2023, 1, 5))
+        assert sorted(visible["strike"].tolist()) == [380.0, 390.0]
+
+    def test_withheld_rows_are_counted_not_silently_dropped(self, tmp_path, market,
+                                                            config):
+        """A feed that routinely arrives a day late should show up as a number, not as
+        slightly fewer trades."""
+        source = self._source(self._frame(), tmp_path, market, config)
+        for i in range(6):
+            source.snapshot(date(2023, 1, 3) + timedelta(days=i))
+        assert source._withheld > 0
+
+    def test_a_late_row_is_never_tradable_on_its_own_day(self, tmp_path, market, config):
+        """Not on that day, and not later either: by the time it arrives the market has
+        moved, so it is history rather than a quote to act on."""
+        source = self._source(self._frame(), tmp_path, market, config)
+        assert 400.0 not in source.snapshot(date(2023, 1, 5))["strike"].tolist()
+        assert 400.0 not in source.snapshot(date(2023, 1, 7))["strike"].tolist()
+
+    def test_a_late_row_is_good_history_once_it_has_arrived(self, tmp_path, market,
+                                                            config):
+        """The other question the same method answers: what is known **now** about
+        **then**. A quote for Tuesday that arrived Thursday is fine history by Friday."""
+        source = self._source(self._frame(), tmp_path, market, config)
+        later = source.snapshot(date(2023, 1, 5), known_by=date(2023, 1, 9))
+        assert 400.0 in later["strike"].tolist()
+
+    def test_asking_from_before_the_day_raises(self, tmp_path, market, config):
+        from backtest.core.dataview import LookAheadError
+
+        source = self._source(self._frame(), tmp_path, market, config)
+        with pytest.raises(LookAheadError):
+            source.snapshot(date(2023, 1, 5), known_by=date(2023, 1, 4))
+
+    def test_data_with_no_availability_is_assumed_and_says_so(self, tmp_path, market,
+                                                             config):
+        """The assumption is defensible. Being unable to tell whether it was made is not."""
+        source = self._source(self._frame(late_strike=None), tmp_path, market, config)
+        assert source.availability_assumed is True
+        assert len(source.snapshot(date(2023, 1, 5))) == 3
+
+    def test_supplied_availability_is_not_reported_as_assumed(self, tmp_path, market,
+                                                             config):
+        source = self._source(self._frame(), tmp_path, market, config)
+        assert source.availability_assumed is False
+
+    def test_the_synthetic_chain_assumes_nothing(self, chain):
+        """Each row is generated on the day it describes, so the two coincide by
+        construction rather than by guess."""
+        assert chain.availability_assumed is False
+
+    def test_both_sources_carry_the_column(self, chain, tmp_path, market, config):
+        """Code that reads one must not break on the other."""
+        from backtest.core.types import CHAIN_COLUMNS
+
+        assert "available_at" in CHAIN_COLUMNS
+        snap = chain.snapshot(date(2023, 1, 4))
+        if len(snap):
+            assert "available_at" in snap.columns
+
+    def test_a_run_reports_whether_availability_was_assumed(self):
+        """A run whose look-ahead protection rests on an assumption should not read the
+        same as one where the data carried it."""
+        from backtest.api.sdk import run
+
+        result = run(symbol="QQQ", start="2023-01-01", end="2023-03-31",
+                     entry="close < sma_20 * 0.98",
+                     select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                             "delta_lo": 0.25, "delta_hi": 0.45},
+                     exit={"hold_days": 20, "dte_floor": 7}, engine="event_driven",
+                     sizing={"method": "fixed"}, quantity=1)
+        provenance = result.provenance()
+        assert provenance["availability_assumed"] is False
+        assert "withheld" in provenance["availability_note"]
