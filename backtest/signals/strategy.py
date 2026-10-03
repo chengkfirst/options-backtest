@@ -27,6 +27,13 @@ class EntryRule:
     #: The signals this condition uses, validated at startup so a misspelling
     #: raises at once rather than failing part-way through a run.
     requires: tuple[str, ...] = ()
+    #: Whether ``name`` is the expression itself, or a label for a Python function.
+    #:
+    #: **Recorded rather than inferred.** A config file has to refuse a run whose entry is
+    #: a function — the file would carry code — and working that out by pattern-matching
+    #: the name missed a lambda, whose name is ``<lambda>`` and matched nothing. A fact
+    #: the producer knows should not be guessed at by the consumer.
+    is_expression: bool = False
 
 
 @dataclass(frozen=True, slots=True)

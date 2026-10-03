@@ -10,6 +10,9 @@ dependencies = [
     "pyarrow==14.0.2",
     "yfinance==1.4.1",
     "pandas-market-calendars==5.4.0",
+    # A run config is a file. Pinned like the rest: an unpinned parser is one more thing
+    # that can read the same file differently on two machines.
+    "PyYAML==6.0.1",
 ]
 
 [project.optional-dependencies]

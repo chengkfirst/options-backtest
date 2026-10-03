@@ -15,6 +15,7 @@ from backtest.core.types import ExitReason, Right
 
 __all__ = [
     "run",
+    "run_from",
     "Result",
     "BacktestConfig",
     "CostConfig",
@@ -36,3 +37,16 @@ __all__ = [
 # without inverting the dependency direction. Importing them at the call site instead
 # would make "is this variant registered" depend on import order.
 from backtest.signals import variants as _variants  # noqa: E402,F401
+
+
+def run_from(path):
+    """Run the backtest described by a config file.
+
+    The file is the complete input: the same file, the same code and the same data give
+    the same result, and the fingerprint written into it is the hash of exactly that.
+    """
+    from backtest.api.config_file import load
+    from backtest.api.sdk import run as _run
+
+    return _run(**load(path))
+

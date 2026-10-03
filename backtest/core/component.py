@@ -259,4 +259,17 @@ def build(spec: Mapping[str, Any]) -> Bound:
             'a component spec needs "slot" and "variant", for example '
             '{"slot": "stop_loss", "variant": "underlying", "params": {"fraction": 0.03}}'
         )
-    return get(str(spec["slot"]), str(spec["variant"])).bind(spec.get("params") or {})
+    variant = get(str(spec["slot"]), str(spec["variant"]))
+    # A version given -- which is what a written config file carries -- has to match.
+    # Replaying against a later version would give a different result from a file that
+    # looks unchanged, and a config file whose replay is not the same run is worse than
+    # no config file.
+    wanted = spec.get("version")
+    if wanted is not None and int(wanted) != variant.version:
+        raise StartupError(
+            f"this config asks for {variant.slot}/{variant.name}@{wanted} and version "
+            f"{variant.version} is what is registered. The form's logic changed, so this "
+            f"code cannot reproduce that run. Check out the commit the run was made on, "
+            f"or re-run under the current version knowing it is a different run"
+        )
+    return variant.bind(spec.get("params") or {})

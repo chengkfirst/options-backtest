@@ -328,6 +328,46 @@ class Store:
         ).fetchone()
         return self._unpack_run(row) if row else None
 
+    def export_config(self, run_id: int, path) -> "Path":
+        """Write a stored run out as a config file that re-runs it.
+
+        The store has held the full configuration all along; what it could not do was give
+        it back in a form anything could run. A run from six months ago was a row to read,
+        not a thing to repeat -- which is most of what the second use needs.
+
+        The **fingerprint is carried through, not recomputed**: it is what the run actually
+        produced, and a file that recomputed it would quietly agree with itself even if
+        the code had moved on. A replay that disagrees is the signal, so it must be able
+        to disagree.
+        """
+        import yaml
+
+        from backtest.api.config_file import HEADER
+
+        row = self.run(run_id)
+        if row is None:
+            raise KeyError(f"there is no run {run_id}")
+        config = dict(row["config"])
+        manifest = row.get("manifest") or {}
+        fingerprint = row.get("fingerprint") or manifest.get("run_id") or ""
+        if not fingerprint:
+            raise ValueError(
+                f"run {run_id} was saved before the reproducibility fingerprint was "
+                f"stored, so a file written from it could not be checked against the run "
+                f"it came from. Re-run the configuration to get one"
+            )
+        # `name` is the run's label and `max_concurrent` sits beside the engine; both are
+        # part of the configuration and neither is a strategy choice.
+        body = yaml.safe_dump({k: v for k, v in config.items() if v is not None},
+                              sort_keys=False, allow_unicode=False, default_flow_style=None)
+        target = Path(path)
+        target.write_text(
+            HEADER.format(path=target.name, fingerprint=fingerprint,
+                          written=str(row.get("started", ""))) + "\n" + body,
+            encoding="utf-8",
+        )
+        return target
+
     def trades(self, run_id: int):
         """Read one run's trade log back.
 

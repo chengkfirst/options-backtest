@@ -78,9 +78,25 @@ def _selection_from(spec):
     # Required, not defaulted. See SelectionRule: delta and tenor are slot 2b, and the
     # platform choosing them makes the most consequential parameters in the strategy
     # invisible in the configuration a person reads back.
+    # One tenor window, written three ways, all meaning the same thing: a band as
+    # dte_lo/dte_hi (what the interface sends), a band as dte_window (what a config file
+    # holds), or a point plus an explicit window. Accepting only some of them would mean a
+    # file this system wrote could not be read back by it.
+    spec = dict(spec)
+    if "dte_window" in spec and "dte_lo" not in spec:
+        lo_, hi_ = spec["dte_window"]
+        spec["dte_lo"], spec["dte_hi"] = int(lo_), int(hi_)
+        spec.pop("dte_window")
+    if "delta_band" in spec and "delta_lo" not in spec:
+        lo_, hi_ = spec.pop("delta_band")
+        spec["delta_lo"], spec["delta_hi"] = float(lo_), float(hi_)
+    if "iv_band" in spec and "iv_lo" not in spec:
+        lo_, hi_ = spec.pop("iv_band")
+        spec["iv_lo"], spec["iv_hi"] = float(lo_), float(hi_)
+
     missing = [k for k in ("right",) if k not in spec]
     if "dte" not in spec and not ("dte_lo" in spec and "dte_hi" in spec):
-        missing.append("dte (or dte_lo and dte_hi)")
+        missing.append("dte (or dte_lo and dte_hi, or dte_window)")
     if "delta" not in spec and "moneyness" not in spec and not (
             "delta_lo" in spec and "delta_hi" in spec):
         missing.append("delta (or delta_lo and delta_hi, or moneyness)")
@@ -127,7 +143,7 @@ def _selection_from(spec):
         min_open_interest=spec.pop("min_open_interest", None),
         delta_band=(float(dlo), float(dhi)) if dlo is not None and dhi is not None else None,
         iv_band=(float(ilo), float(ihi)) if ilo is not None and ihi is not None else None,
-        max_relative_spread=spec.pop("max_spread", None),
+        max_relative_spread=spec.pop("max_spread", spec.pop("max_relative_spread", None)),
     )
 
 
@@ -275,7 +291,7 @@ def run(
         )
     if isinstance(entry, str):
         condition, requires = parse_condition(entry, signal_set.names)
-        entry_rule = EntryRule(entry, condition, requires)
+        entry_rule = EntryRule(entry, condition, requires, is_expression=True)
     elif entry is None:
         # A plan decides its own entries, so there is no condition to parse. The rule is a
         # labelled placeholder rather than a condition, and it never fires.
@@ -376,6 +392,7 @@ class Result:
         strategy = {
             "name": self.raw.strategy.name,
             "entry": self.raw.strategy.entry.name,
+            "entry_is_expression": self.raw.strategy.entry.is_expression,
             "quantity": self.raw.strategy.quantity,
             "select": (dataclasses.asdict(self.raw.strategy.select)
                        | {"right": self.raw.strategy.select.right.value}
@@ -774,6 +791,26 @@ class Result:
 
         return [_ablate(self.raw.strategy, slot, run_one, accept_coupled=accept_coupled)
                 for slot in wanted]
+
+    def save_config(self, path) -> "Any":
+        """Write the config file that reproduces this run.
+
+        A settled strategy is what the second use revolves around, and until this it had
+        no form: it lived in the arguments of whatever call produced it. Re-run the file
+        with ``run_from(path)``.
+
+        Raises for a run whose deciding part is a Python function — a plan, a review, a
+        custom entry or selector — rather than writing a file that drops it silently.
+        """
+        from backtest.api.config_file import save
+
+        return save(self, path)
+
+    def config(self) -> dict:
+        """The same thing as plain data, without writing a file."""
+        from backtest.api.config_file import to_mapping
+
+        return to_mapping(self)
 
     def compare_forms(self, slot: str, forms) -> "Any":
         """Run several **forms** of one slot side by side.
