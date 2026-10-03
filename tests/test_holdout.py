@@ -196,18 +196,26 @@ class TestTheGuardRecord:
 
     def test_a_fast_run_does_not_count_as_green(self, tmp_path, monkeypatch):
         """It skipped the slow guards, so it cannot say the code is green -- and saying so
-        would be the quietest way to lose the distinction."""
-        import json
-        import subprocess
-        import sys
+        would be the quietest way to lose the distinction.
 
-        from backtest.core.run_id import GUARD_RECORD
+        The writer is called and the record read back. The first version searched
+        `tools/check.py` for a string, which is the same thing I had just replaced in
+        test_layer0 -- it passes while the line sits in a branch that never runs.
+        """
+        import tools.check as check
+        from backtest.core import run_id as module
 
-        # The writer is what decides this, so the writer is what is checked.
-        source = (pathlib.Path("tools") / "check.py").read_text(encoding="utf-8")
-        assert '"passed": bool(passed and not partial)' in source, (
-            "a --fast run must not be recorded as passing"
+        monkeypatch.setattr(check, "ROOT", tmp_path)
+        monkeypatch.setattr(module, "code_version", lambda root=None: "deadbee")
+
+        check._record(passed=True, partial=True)
+        assert module.guards_were_green(tmp_path)["state"] == "red", (
+            "a --fast run that passed was recorded as green, so a result produced on it "
+            "would claim backing from guards that never ran"
         )
+
+        check._record(passed=True, partial=False)
+        assert module.guards_were_green(tmp_path)["state"] == "green"
 
     def test_a_run_reports_which_state_it_was_in(self):
         """It belongs in the manifest, beside the commit, not in a log nobody reads."""

@@ -97,7 +97,7 @@ class TestDistribution:
         got = R.pnl_distribution(make_trades([-100.0, -100.0, -100.0, 1000.0]), 100_000.0)
         assert got["mean_unlike_median"]
 
-    @pytest.mark.req("6.4.daily_pnl")
+    @pytest.mark.req("6.1.metrics")
     def test_it_is_quiet_when_they_agree(self):
         got = R.pnl_distribution(make_trades([100.0, 120.0, 90.0, 400.0]), 100_000.0)
         assert not got["mean_unlike_median"]

@@ -45,7 +45,7 @@ class SyntheticChainSource:
 
     def __init__(self, market: MarketData, config: BacktestConfig | None = None) -> None:
         self.market = market
-        self.config = config or market.config
+        self.config = config if config is not None else market.config
         self._cache: dict[date, pd.DataFrame] = {}
 
     # ---- the protocol ----
@@ -72,9 +72,17 @@ class SyntheticChainSource:
         return pd.DataFrame(rows, columns=list(CHAIN_COLUMNS))
 
     # ---- generation ----
-    def _early_exercise_flags(self, strikes, theo, s: float, day: date, expiry: date, right: Right):
-        """A deep in-the-money call may have early-exercise value before a
-        dividend, and the European price is wrong there.
+    def _early_exercise_flags(self, strikes, theo, s: float, day: date, expiry: date,
+                              right: Right, rate: float, years: float):
+        """Where the European price is wrong because the option is American.
+
+        Two cases, and this file used to be able to reach only one of them. It returned
+        early when no dividend fell in the window, which is right for the call -- a call
+        is exercised early to capture a dividend, so no dividend means no case -- and
+        wrong for the put, which is exercised early to collect the strike and earn
+        interest on it. With that return in place, and with ``rate`` and ``years`` never
+        passed, the put branch of ``has_early_exercise_value`` could not be reached from
+        the only caller it had.
 
         Flagged in ``quality_flags`` rather than left for the layers above to work
         out: they consume the chain's columns and do not care how the numbers
@@ -83,7 +91,9 @@ class SyntheticChainSource:
         if self.config.contract.exercise.value != "american":
             return [""] * len(strikes)
         cash = self.market.dividends_between(day, expiry)
-        if cash <= 0:
+        if right is Right.CALL and cash <= 0:
+            return [""] * len(strikes)
+        if right is Right.PUT and rate <= 0:
             return [""] * len(strikes)
         intrinsic = (
             np.maximum(s - strikes, 0.0) if right is Right.CALL else np.maximum(strikes - s, 0.0)
@@ -91,10 +101,11 @@ class SyntheticChainSource:
         return [
             "early_exercise_value"
             if has_early_exercise_value(
-                right=right, option_price=float(p), intrinsic=float(i), dividend_in_window=cash
+                right=right, option_price=float(p), intrinsic=float(i), strike=float(k),
+                dividend_in_window=cash, rate=rate, years_to_expiry=years,
             )
             else ""
-            for p, i in zip(theo, intrinsic)
+            for p, i, k in zip(theo, intrinsic, strikes)
         ]
 
     def _inputs(self, day: date, expiry: date):
@@ -156,7 +167,6 @@ class SyntheticChainSource:
                     pd.DataFrame(
                         {
                             "asof": day,
-            "available_at": day,
                             # Generated on the day it describes, so the two coincide by
                             # construction. Carried anyway: the two sources must have the
                             # same shape, or code that reads one breaks on the other.
@@ -178,7 +188,7 @@ class SyntheticChainSource:
                             "underlying_price": s,
                             "source": QuoteSource.SYNTHETIC.value,
                             "quality_flags": self._early_exercise_flags(
-                                strikes, theo, s, day, expiry, right
+                                strikes, theo, s, day, expiry, right, r, t
                             ),
                             # These greeks come from the same model that made the
                             # quotes: self-consistent model output, not market
@@ -221,7 +231,8 @@ class SyntheticChainSource:
             "underlying_price": s,
             "source": QuoteSource.SYNTHETIC.value,
             "quality_flags": self._early_exercise_flags(
-                np.array([contract.strike]), theo, s, day, contract.expiry, contract.right
+                np.array([contract.strike]), theo, s, day, contract.expiry,
+                contract.right, r, t,
             )[0],
             "greeks_model_derived": True,
         }

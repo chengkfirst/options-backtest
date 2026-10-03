@@ -127,6 +127,18 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("0.4.lookahead", "0.4",
                 "Look-ahead is prevented by the data view cutting at available_at",
                 "a signal at t computed from a bar after t"),
+    Requirement("0.4.delay", "0.4",
+                "A delay test beside the data view's cut: does the result survive acting "
+                "a day later",
+                "a strategy whose edge disappears entirely with one more day of delay "
+                "being reported without that being visible"),
+    Requirement("4.2.illegal", "4.2",
+                "Orders breaking trading hours, halts, position limits or borrow "
+                "availability are rejected",
+                "an order filling on a day the underlying was halted",
+                not_built="halts and borrow need data this system does not have; "
+                          "trading hours are moot at daily resolution, where every bar is "
+                          "a session; OCC position limits per underlying are not modelled"),
     Requirement("0.4.fills", "0.4",
                 "Buys fill at the ask or worse, sells at the bid or worse",
                 "a fill between the bid and the ask at lambda >= 1"),
@@ -245,17 +257,20 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "an in-the-money contract expiring worthless, or the subtraction the "
                 "wrong way round for a put"),
     Requirement("4.2.exercise", "4.2",
-                "OCC exercise by exception at $0.01, early exercise before ex-dividend, "
-                "physical delivery of shares",
+                "OCC exercise by exception at $0.01, and physical delivery of shares",
                 "an in-the-money call settling to cash when the account should have "
-                "received shares",
-                not_built="settlement is to intrinsic in cash, **and says so where it "
-                          "happens**. Measured rather than assumed: the default "
-                          "days-to-expiry floor reaches an in-the-money expiry zero times "
-                          "over three years, and the only case that does comes from a "
-                          "close that failed -- already its own event. The error there is "
-                          "one overnight gap, not a bias on every trade. Early exercise is "
-                          "flagged and never acted on; there is no $0.01 threshold"),
+                "received shares, or a contract a cent in the money expiring worthless"),
+    Requirement("4.2.early_exercise", "4.2",
+                "Early exercise before an ex-dividend date, and of a deep in-the-money "
+                "put while rates are positive",
+                "a position being held through a date where exercising it was worth more",
+                not_built="the chain **flags** where the European price is wrong -- both "
+                          "the call before a dividend and the put against the carry on "
+                          "the strike -- and nothing acts on the flag. Acting on it needs "
+                          "an American pricing model to say what the position is worth "
+                          "unexercised, which this does not have; a rule that exercised "
+                          "on the flag alone would be exercising on the failure of the "
+                          "European approximation rather than on a comparison"),
     Requirement("4.2.reject", "4.2",
                 "Reject orders where the spread or open interest fails the limit, and "
                 "log every rejection",
@@ -304,6 +319,14 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "Every slot researched with the same tools, each comparison a pair of "
                 "runs differing in one component",
                 "a slot with only one form, which cannot be compared"),
+    Requirement("6.3.interaction", "6.3",
+                "Researching one slot in isolation is not always enough; interaction "
+                "tests say when two have to be researched together",
+                "two slots whose joint effect differs from the sum of their separate "
+                "effects being tuned one at a time, with nothing saying so"),
+    Requirement("R1.lambda_one", "R1",
+                "A strategy must hold at lambda = 1 or worse; run 0.5, 1 and 1.5",
+                "a conclusion drawn from a run that only survives at the mid"),
     Requirement("6.4.holdout", "6.4",
                 "A final hold-out locked at the start and used once",
                 "a result scored on data already looked at without saying so"),
@@ -353,8 +376,25 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 not_built="no Armed state; a candidate re-enters as soon as the "
                           "condition is true, the most permissive policy there is"),
     Requirement("S.context", "S",
-                "One shared trade context, written by the slots that run before",
-                "two slots reading different values for one trade on one day"),
+                "A per-trade record of the market state the decisions saw, built once and "
+                "read by everything downstream",
+                "two parts of the system reading different values for one trade on one "
+                "day"),
+    Requirement("S.namespaces", "S",
+                "Each slot writes only to its own namespace in the trade context "
+                "(setup, entry, take_profit, stop_loss, headwind, hedge), and a "
+                "candidate context is copied in when the trade opens",
+                "one slot overwriting another's value, or a reader unable to say which "
+                "slot produced a field",
+                not_built="the context is a flat snapshot of market state, not a "
+                          "partitioned record: the slots do not write to it at all, so "
+                          "there is nothing yet to partition. It arrives with the "
+                          "component protocol reaching every slot"),
+    Requirement("S.view", "S",
+                "Every slot reads through the DataView, so the availability cut applies "
+                "to all of them",
+                "a slot reading market data by a route that is not cut at the decision "
+                "day"),
     Requirement("S.range", "S",
                 "A trade is reported only if the range can resolve it",
                 "a trade settled from prices after the backtest ended"),

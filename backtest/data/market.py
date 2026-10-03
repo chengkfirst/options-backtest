@@ -22,6 +22,12 @@ from backtest.core.errors import StartupError
 from backtest.core.run_log import EventKind, EventLog
 from backtest.core.maybe import Maybe
 
+#: How far past the last bar the trading calendar is built. LEAPS run about two years, and
+#: every days-to-expiry question about a held contract is asked against this calendar, so
+#: it has to cover the longest expiry a run can hold -- plus room for the calendar library
+#: to have published the holidays.
+CALENDAR_MARGIN_DAYS = 830
+
 #: Each underlying's own volatility index. Nasdaq volatility runs systematically
 #: above the S&P's, so reusing one proxy for both understates QQQ option prices
 #: across the board.
@@ -57,8 +63,8 @@ class MarketData:
         source of non-determinism.
         """
         self.config = config
-        self.events = events or EventLog()
-        self._cache = cache or ParquetCache()
+        self.events = events if events is not None else EventLog()
+        self._cache = cache if cache is not None else ParquetCache()
         symbol = config.symbol
 
         expected = VOL_PROXY_BY_SYMBOL.get(symbol)
@@ -74,7 +80,18 @@ class MarketData:
         fetch_start = config.start - timedelta(days=400)
         self._offline = bars is not None
         self._bars = bars if bars is not None else self._load_bars(symbol, fetch_start, config.end, refresh)
-        self.calendar = TradingCalendar(self._bars.dates[0], self._bars.dates[-1])
+        # The calendar runs **past** the bars, by the longest tenor a contract in this
+        # system can have plus a margin. A position's expiry routinely falls outside the
+        # backtest range, and every days-to-expiry question about it is asked against
+        # this calendar -- so a calendar that stopped with the data would undercount
+        # those, and the floor would fire on an expiry that was not near.
+        #
+        # Extending it is cheap: sessions are dates, and two extra years is five hundred
+        # of them. Asking the calendar beyond its extent now raises rather than clamping,
+        # so the margin has to be real rather than hopeful.
+        self.calendar = TradingCalendar(
+            self._bars.dates[0],
+            self._bars.dates[-1] + timedelta(days=CALENDAR_MARGIN_DAYS))
         if self._offline:
             self._rates = rates if rates is not None else pd.Series(dtype=float)
             self._vol_proxy = vol_proxy if vol_proxy is not None else pd.Series(dtype=float)

@@ -17,7 +17,10 @@ import pytest
 from backtest.core.component import Bound, Param, Variant, build, get, register, variants
 from backtest.core.errors import StartupError
 
-from tests.kinds import labels
+from backtest.api.sdk import run
+from backtest.core.config import CostConfig
+
+from tests.kinds import kind, labels
 
 #: What a failure here means, and where it is. See ``tests/kinds.py``.
 pytestmark = labels("unit", "0")
@@ -134,8 +137,7 @@ class TestParameters:
             if not required:
                 continue
             with pytest.raises(StartupError, match="needs"):
-                v.bind({p.name: 0.1 for p in v.params if p.required}
-                       | {required[0]: None} if False else {})
+                v.bind({})
 
     def test_build_round_trips_a_spec(self):
         bound = build({"slot": "stop_loss", "variant": "underlying",
@@ -310,3 +312,114 @@ class TestExitContext:
                            days_held=3, days_to_expiry=20)
         assert not get("stop_loss", "premium").bind({"fraction": 0.3}).__call__(ctx)
         assert not get("stop_loss", "underlying").bind({"fraction": 0.01}).__call__(ctx)
+
+
+class TestASlotReadsThroughTheView:
+    """The document: "every slot reads only through the DataView, so the available_at cut
+    applies to all of them", and "a variant may read less than its default, or more
+    **within** the DataView".
+
+    The shipped forms were safe by poverty rather than by construction -- they could not
+    look ahead because the context handed them four numbers and nothing else. That is not
+    the same property, and it ends the moment a variant needs the volatility proxy or a
+    signal: its author would have reached around the context, where nothing is cut.
+    """
+
+    @pytest.mark.req("S.view")
+    def test_an_exit_component_is_handed_a_cut_view(self):
+        from backtest.core.component import Param, Variant, register
+        from backtest.core.dataview import LookAheadError
+
+        seen: dict = {}
+
+        def peeking(ctx, *, fraction):
+            view = ctx.get("view")
+            if view is not None and "type" not in seen:
+                seen["type"] = type(view).__name__
+                seen["as_of"] = view.as_of
+                try:
+                    view.spot(view.as_of.replace(year=view.as_of.year + 1))
+                    seen["guard"] = "did not raise"
+                except LookAheadError:
+                    seen["guard"] = "raised"
+            ratio = ctx.get("premium_ratio")
+            return ratio is not None and ratio <= -fraction
+
+        register(Variant(
+            slot="stop_loss", name="peeking_probe", version=1,
+            describes="a probe that reads the view it is handed",
+            params=(Param("fraction", "float", "how much may be lost", lo=0.0, hi=1.0),),
+            decide=peeking,
+        ))
+        _run(components={"stop_loss": {"variant": "peeking_probe",
+                                       "params": {"fraction": 0.4}}})
+
+        assert seen, "no exit decision was taken, so this proves nothing"
+        assert seen["type"] == "DataView"
+        assert seen["guard"] == "raised"
+
+    def test_the_view_is_cut_at_the_day_being_decided(self):
+        """Not at the run's end, which would make the cut decorative."""
+        from backtest.core.component import Param, Variant, register
+
+        days: list = []
+
+        def recorder(ctx, *, fraction):
+            view = ctx.get("view")
+            if view is not None:
+                days.append(view.as_of)
+            return False
+
+        register(Variant(
+            slot="stop_loss", name="day_recorder", version=1,
+            describes="a probe that records which day its view was cut at",
+            params=(Param("fraction", "float", "unused", lo=0.0, hi=1.0),),
+            decide=recorder,
+        ))
+        result = _run(components={"stop_loss": {"variant": "day_recorder",
+                                                "params": {"fraction": 0.4}}})
+        assert len(set(days)) > 1, "the view was cut at one day for the whole run"
+        assert max(days) <= result.raw.config.end
+
+
+#: A short run used by the guards below: a real strategy on real sessions, small enough
+#: to run several times in a test. Moved here with the tests that use it when
+#: ``test_gaps.py`` was split up -- that file was organised by **when** its tests were
+#: written ("the ones a review found missing"), which is a provenance rather than a
+#: subject, so no behaviour in it had an owner.
+GAP_RUN = dict(
+    symbol="QQQ", start="2023-01-01", end="2023-06-30",
+    entry="close < sma_20 * 0.98",
+    select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+            "delta_lo": 0.25, "delta_hi": 0.45},
+    exit={"hold_days": 20, "dte_floor": 7},
+    engine="event_driven", sizing={"method": "fixed"}, quantity=1,
+)
+
+
+class TestTheFingerprintCoversCosts:
+    """The cost model decides the result and was not in the end-to-end fingerprint check.
+
+    Lambda is the realism assumption the document says moves results most. Two runs that
+    differ only in lambda are two different runs, and an id that cannot tell them apart
+    makes a search look smaller than it was -- which flatters the deflated result.
+    """
+
+    def _id(self, **over):
+        return run(**(GAP_RUN | over)).manifest()["run_id"]
+
+    @pytest.mark.req("0.5.hash")
+    def test_lambda_changes_it(self):
+        assert self._id(costs=CostConfig(adverse_fraction=1.0)) != \
+               self._id(costs=CostConfig(adverse_fraction=1.5))
+
+    def test_commission_changes_it(self):
+        assert self._id(costs=CostConfig(commission_per_contract=0.65)) != \
+               self._id(costs=CostConfig(commission_per_contract=1.30))
+
+    def test_slippage_changes_it(self):
+        assert self._id(costs=CostConfig(slippage_per_contract=0.0)) != \
+               self._id(costs=CostConfig(slippage_per_contract=0.05))
+
+    def test_capital_changes_it(self):
+        assert self._id(capital=100_000.0) != self._id(capital=250_000.0)

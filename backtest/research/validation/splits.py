@@ -70,7 +70,13 @@ def walk_forward(
     """
     if train < 1 or test < 1:
         raise ValueError(f"train and test must be at least 1 day, got {train} and {test}")
-    step = step or test
+    if step is not None and step < 1:
+        raise ValueError(
+            f"a step of {step} does not advance the fold. `step or test` read 0 as "
+            f"'not given' and silently used {test}, so a caller asking for a step of "
+            f"zero got contiguous folds and no error"
+        )
+    step = step if step is not None else test
     days = list(sessions)
     if len(days) < train + test:
         raise ValueError(

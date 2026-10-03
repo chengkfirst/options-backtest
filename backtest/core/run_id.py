@@ -42,7 +42,7 @@ def code_version(root: Path | None = None) -> str:
     reproduced from the commit alone, and saying so is the difference between a
     reproducible run and one that merely looks it.
     """
-    root = root or Path(__file__).resolve().parent.parent.parent
+    root = root if root is not None else Path(__file__).resolve().parent.parent.parent
     try:
         rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root,
                              capture_output=True, text=True, timeout=5)
@@ -74,7 +74,7 @@ def guards_were_green(root: Path | None = None) -> "dict[str, object]":
     """
     import json
 
-    root = root or Path(__file__).resolve().parent.parent.parent
+    root = root if root is not None else Path(__file__).resolve().parent.parent.parent
     commit = code_version(root)
     record = root / GUARD_RECORD
     if not record.exists():

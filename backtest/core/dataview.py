@@ -108,7 +108,7 @@ class DataView:
     def spot(self, day: date | None = None) -> Maybe[float]:
         """The underlying's **traded** close. Never the adjusted price: a strike was set
         against the price that traded."""
-        day = day or self.as_of
+        day = day if day is not None else self.as_of
         self._guard(day, "the underlying close")
         return self._market.spot(day)
 
@@ -136,7 +136,7 @@ class DataView:
         """The contracts quoted as of a day. Requires a chain source."""
         if self._chain is None:
             raise StartupError("this view was built without a chain source")
-        day = day or self.as_of
+        day = day if day is not None else self.as_of
         self._guard(day, "the option chain")
         return self._chain.snapshot(day)
 
@@ -144,18 +144,18 @@ class DataView:
         """One contract's quotes on a day."""
         if self._chain is None:
             raise StartupError("this view was built without a chain source")
-        day = day or self.as_of
+        day = day if day is not None else self.as_of
         self._guard(day, f"quotes for {contract}")
         return self._chain.series(contract, [day])
 
     def volatility(self, day: date | None = None) -> Maybe[float]:
         """The volatility proxy — real market data, so it holds on a synthetic chain."""
-        day = day or self.as_of
+        day = day if day is not None else self.as_of
         self._guard(day, "the volatility proxy")
         return self._market.volatility(day)
 
     def risk_free_rate(self, day: date | None = None) -> float:
-        day = day or self.as_of
+        day = day if day is not None else self.as_of
         self._guard(day, "the risk-free rate")
         return self._market.risk_free_rate(day)
 

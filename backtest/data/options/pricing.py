@@ -176,6 +176,7 @@ def has_early_exercise_value(
     right: Right,
     option_price: float,
     intrinsic: float,
+    strike: float,
     dividend_in_window: float,
     rate: float = 0.0,
     years_to_expiry: float = 0.0,
@@ -201,6 +202,8 @@ def has_early_exercise_value(
     assessed and this returns ``False`` **because there is nothing to test against**, not
     because the answer is no. The caller that has those figures should pass them -- which
     is why they are arguments rather than a constant read from somewhere.
+
+    It also needs the ``strike``, for the reason given at ``_strike_carry``.
     """
     time_value = option_price - intrinsic
     if intrinsic <= 0:
@@ -210,23 +213,30 @@ def has_early_exercise_value(
     # The interest earned on the strike over the remaining life, which is what early
     # exercise of a put buys. A dividend works the other way for a put -- it lowers the
     # stock and so makes holding more attractive -- so it is subtracted.
-    carry = _strike_carry(intrinsic, option_price, rate, years_to_expiry)
+    carry = _strike_carry(strike, rate, years_to_expiry)
     if carry <= 0:
         return False
     return time_value < carry - dividend_in_window
 
 
-def _strike_carry(intrinsic: float, option_price: float, rate: float,
-                  years: float) -> float:
-    """Interest on the strike over the remaining life, approximated.
+def _strike_carry(strike: float, rate: float, years: float) -> float:
+    """Interest on the strike over the remaining life: ``K x (1 - exp(-r x T))``.
 
-    ``strike x (1 - exp(-r x T))`` is the exact figure and the strike is not passed here;
-    the intrinsic value is a lower bound on it for an in-the-money put, so this
-    **understates** the carry and therefore understates how often early exercise is worth
-    it. Understating is the right direction for a flag whose job is to say "the European
-    price may be wrong here": a false negative leaves the existing approximation in place,
-    a false positive would disqualify prices that are fine.
+    This used the **intrinsic value** in place of the strike, on the argument that
+    intrinsic is a lower bound on the strike for an in-the-money put, so the carry would
+    be understated and a flag that errs towards silence is the safe direction.
+
+    The bound is true and the conclusion does not follow. Intrinsic approaches the strike
+    only for a put whose underlying has gone to nearly nothing; for an ordinary deep
+    in-the-money put it is a small fraction of it, and the figure was out by an order of
+    magnitude rather than slightly conservative. At a $400 strike and 4.5% over a year the
+    carry is about $18 -- against which a $2 dividend is immaterial -- while $40 of
+    intrinsic gives $1.80, which a $2 dividend reverses outright. The flag was being
+    decided by the dividend in the one case that is not about dividends.
+
+    The strike is in the caller's hand at every call site, so the approximation bought
+    nothing.
     """
     if rate <= 0 or years <= 0:
         return 0.0
-    return intrinsic * (1.0 - math.exp(-rate * years))
+    return strike * (1.0 - math.exp(-rate * years))

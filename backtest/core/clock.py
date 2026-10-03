@@ -88,9 +88,34 @@ class TradingCalendar:
         """Sessions between ``start`` and ``end``, excluding the first.
 
         This is the convention for days to expiry: 0 on the expiry day itself.
+
+        **Raises past either end of the calendar** rather than clamping. Bisecting a date
+        beyond the last session returns the length of the list, so an expiry a year past
+        the calendar's end counted as a handful of sessions away -- and the days-to-expiry
+        floor then closed the position for a reason that was not true, recording a floor
+        that was never reached. The outcome was conservative and the exit-reason statistics
+        were wrong, which is the worse half: a conservative number that is attributed to
+        the wrong cause cannot be corrected by anyone reading it.
+
+        This was previously recorded as a test labelled ``limit``, which froze it. A
+        limitation is something the data or the method cannot do; an undercount with a
+        plausible-looking answer is a bug, and labelling one as the other leaves it there
+        for good.
         """
         if end < start:
             return -self.sessions_between(end, start)
+        for name, day in (("start", start), ("end", end)):
+            if day < self.first or day > self.last:
+                raise StartupError(
+                    f"the {name} of this count, {day}, is outside the calendar "
+                    f"({self.first} to {self.last}), so the number of sessions between "
+                    f"them is not known.\n\n"
+                    f"Clamping to the nearest end would return a small number for a date "
+                    f"far outside, which is how a days-to-expiry floor comes to fire on "
+                    f"an expiry that is a year away. Build the calendar over the range "
+                    f"the question needs -- `MarketData` extends it past the bars for "
+                    f"exactly this reason."
+                )
         lo = self.position(start) if start in self._index else self._bisect(start)
         hi = self.position(end) if end in self._index else self._bisect(end)
         return hi - lo

@@ -50,17 +50,26 @@ def _claimed() -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for path in sorted(pathlib.Path("tests").glob("test_*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-                continue
-            for decorator in node.decorator_list:
-                if not isinstance(decorator, ast.Call):
+
+        def walk(body, prefix: str) -> None:
+            for node in body:
+                if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                     continue
-                if ast.unparse(decorator.func) not in ("pytest.mark.req", "mark.req"):
-                    continue
-                for arg in decorator.args:
-                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                        out.setdefault(arg.value, []).append(f"{path}::{node.name}")
+                for decorator in node.decorator_list:
+                    if not isinstance(decorator, ast.Call):
+                        continue
+                    if ast.unparse(decorator.func) not in ("pytest.mark.req", "mark.req"):
+                        continue
+                    for arg in decorator.args:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                            # The class is in the name, so two same-named tests in one
+                            # file are two entries rather than one overwriting the other.
+                            out.setdefault(arg.value, []).append(
+                                f"{path}::{prefix}{node.name}")
+                if isinstance(node, ast.ClassDef):
+                    walk(node.body, f"{prefix}{node.name}::")
+
+        walk(tree.body, "")
     return out
 
 

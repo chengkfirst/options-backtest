@@ -24,6 +24,21 @@ found sitting beside it.
 Updating the baseline is an **explicit act** (``python -m tools.baseline update``), and
 the difference is printed when it happens — otherwise "just update the baseline while
 I am here" makes this defence worthless.
+
+## What has moved it, and why
+
+Recorded here because a baseline with no history of its own revisions is a number nobody
+can audit: a reader looking at the file cannot tell a deliberate correction from a
+regression that was accepted.
+
+- **223 -> 230 trades, net -8,612 -> -11,822.** The trading calendar used to stop with
+  the data, so an expiry past the end of the range counted as a few sessions away rather
+  than hundreds. The days-to-expiry floor then fired on the day of entry, and the trade
+  was dropped as one the range could not resolve. Seven entries in December 2023 holding
+  January 2024 contracts were removed that way -- every one of them a loss, closed by the
+  stop inside the range once the count was right. **The baseline was flattered by 3,210
+  of losses that were being discarded**, which is the direction this kind of error always
+  takes: a trade dropped for being unresolvable is dropped after its outcome is known.
 """
 
 from __future__ import annotations

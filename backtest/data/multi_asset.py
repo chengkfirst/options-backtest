@@ -120,8 +120,8 @@ def load_cross_market(
     should not stop a backtest. But what is missing has to be stated, or regime
     classification quietly drops a dimension without the user knowing.
     """
-    cache = cache or ParquetCache()
-    events = events or EventLog()
+    cache = cache if cache is not None else ParquetCache()
+    events = events if events is not None else EventLog()
     # The warm-up has to match MarketData's (400 days). Fetch less and long-window
     # dimensions like the 200-day average cannot be computed at the start of the
     # range, leaving a long stretch of "unknown" regime — which is not missing

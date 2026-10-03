@@ -315,7 +315,7 @@ class Ledger:
         stale: dict[ContractId, bool] | None = None,
     ) -> Snapshot:
         """Mark to the close. ``quotes`` is {contract: (bid, ask)}."""
-        stale = stale or {}
+        stale = stale if stale is not None else {}
         mid_total = liq_total = deployed = 0.0
         missing = 0
         for pos in self._positions.values():

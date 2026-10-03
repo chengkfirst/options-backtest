@@ -479,6 +479,14 @@ class TestBlackScholesIdentity:
         The pricer can be right while the chain feeds it the wrong spot, the wrong tenor
         or the wrong volatility -- in which case every number downstream is wrong and
         every engine-versus-engine test still passes.
+
+        **Every input comes from where the chain gets it**, which is the correction here.
+        This passed a dividend yield of 0.0 and a tenor of ``days / 365``, neither of
+        which is what the chain uses, and it matched to 1e-6 anyway -- because this
+        fixture has no ex-dividend date inside its range and because the year fraction
+        happens to agree on these expiries. Both are properties of the data, not of the
+        code, and a test that depends on them is a test that stops meaning anything when
+        the data changes without anything saying so.
         """
         import numpy as np
 
@@ -492,13 +500,14 @@ class TestBlackScholesIdentity:
 
         checked = 0
         for _, row in snap.head(12).iterrows():
-            years = (row["expiry"] - day).days / 365.0
+            years = config.time.year_fraction(day, row["expiry"])
             if years <= 0 or not np.isfinite(row["iv"]):
                 continue
             right = Right.CALL if row["right"] == "C" else Right.PUT
+            div = market.dividend_yield(day, row["expiry"], spot)
             expected = float(np.asarray(
                 bs_price(spot, float(row["strike"]), years, rate, float(row["iv"]),
-                         0.0, right)))
+                         div, right)))
             mid = (float(row["bid"]) + float(row["ask"])) / 2.0
             assert mid == pytest.approx(expected, rel=1e-6), (
                 f"{right.value} {row['strike']} expiring {row['expiry']}: the chain's mid "
@@ -506,3 +515,52 @@ class TestBlackScholesIdentity:
             )
             checked += 1
         assert checked >= 5, "too few contracts checked for this to mean anything"
+
+    def test_the_match_above_is_sensitive_to_every_input_it_takes(self, chain, market,
+                                                                  config):
+        """The match is only evidence if a wrong input would break it.
+
+        Taking each input from the right place is half the fix; the other half is knowing
+        the comparison would notice if one were wrong. The dividend yield is the one that
+        matters most here -- this fixture's is zero over most of its range, so a test
+        that passed q = 0 by hand agreed with the chain for the wrong reason, and would
+        have gone on agreeing if the pricer had ignored q entirely.
+
+        So each input is perturbed by a realistic amount and the match has to fail.
+        """
+        import numpy as np
+
+        from backtest.data.options.pricing import bs_price
+
+        day = next(d for d in market.calendar.sessions
+                   if config.start <= d <= config.end and len(chain.snapshot(d)))
+        row = next(r for _, r in chain.snapshot(day).iterrows()
+                   if np.isfinite(r["iv"])
+                   and config.time.year_fraction(day, r["expiry"]) > 0.05)
+        spot = market.spot(day).unwrap()
+        right = Right.CALL if row["right"] == "C" else Right.PUT
+        base = dict(s=spot, k=float(row["strike"]),
+                    t=config.time.year_fraction(day, row["expiry"]),
+                    r=market.risk_free_rate(day), vol=float(row["iv"]),
+                    q=market.dividend_yield(day, row["expiry"], spot))
+
+        def price(**over):
+            a = base | over
+            return float(np.asarray(bs_price(a["s"], a["k"], a["t"], a["r"], a["vol"],
+                                             a["q"], right)))
+
+        mid = (float(row["bid"]) + float(row["ask"])) / 2.0
+        assert price() == pytest.approx(mid, rel=1e-6)
+
+        # Each of these is the size of a plausible mistake, not a token nudge: a 1%
+        # dividend yield, a rate off by a quarter point, a tenor off by a week, a spot
+        # off by a dollar, an IV off by a point.
+        for what, over in (("the dividend yield", {"q": base["q"] + 0.01}),
+                           ("the rate", {"r": base["r"] + 0.0025}),
+                           ("the tenor", {"t": base["t"] + 7 / 365}),
+                           ("the spot", {"s": base["s"] + 1.0}),
+                           ("the volatility", {"vol": base["vol"] + 0.01})):
+            assert price(**over) != pytest.approx(mid, rel=1e-6), (
+                f"{what} was changed and the price still matched the chain to 1e-6, so "
+                f"the comparison above is not actually testing it"
+            )

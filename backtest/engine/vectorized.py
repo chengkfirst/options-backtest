@@ -77,8 +77,14 @@ class TradeTableEngine:
         self.market = market
         self.chain = chain
         self.signals = signals
-        self.config = config or market.config
-        self.events = events or market.events
+        self.config = config if config is not None else market.config
+        # ``is not None``, not ``or``. ``EventLog`` defines ``__len__``, so an empty one
+        # is falsy -- and a caller passing a fresh log to keep its events separate had it
+        # silently replaced by the shared one. Nothing failed; the events simply went
+        # somewhere else, which is how a test asserting "nothing was recorded" came to
+        # read another test's events.
+        self.events = (events if events is not None
+                       else market.events)
 
     # ---- guards ----
     #: Strategy features this engine does not support. Returning an approximation is

@@ -122,7 +122,13 @@ def describe_signals(names: "tuple[str, ...] | None" = None) -> pd.DataFrame:
     description registered)" rather than left blank — blank looks like the system
     failed to find something, whereas the label says the user did not write one.
     """
-    names = names or tuple(DEFAULT_SIGNALS)
+    if names is not None and not names:
+        raise StartupError(
+            "no signal names were given to describe. An empty tuple used to be replaced "
+            "by every default signal, so asking for none returned all of them -- pass "
+            "the names, or omit the argument for the defaults"
+        )
+    names = names if names is not None else tuple(DEFAULT_SIGNALS)
     rows = []
     for name in names:
         m = SIGNAL_META.get(name)

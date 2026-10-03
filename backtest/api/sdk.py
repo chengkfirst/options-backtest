@@ -908,6 +908,74 @@ class Result:
 
         return to_mapping(self)
 
+    def delay_test(self, extra=(1, 2)) -> "Any":
+        """Does the result survive acting a day later.
+
+        The document names this beside the data view's cut as a defence against look-ahead,
+        and it catches what a cut cannot: a signal that is legitimately readable and whose
+        edge lives entirely in acting on it immediately. Every read is in range and the
+        result is still not reachable.
+
+        Read it as a shape, not a verdict — a real short-horizon effect decays fast and so
+        does an artefact.
+        """
+        from backtest.research.delay import decay
+
+        config = self.raw.config
+        market, chain, signals = self._market, self._chain, self._signals
+        event_driven = getattr(self.raw, "ledger", None) is not None
+        strategy = self.raw.strategy
+
+        def at_lag(lag: int) -> tuple[float, int]:
+            from backtest.engine.loop import EventDrivenEngine
+
+            # The floor has to clear the lag, or an exit decided on T cannot be filled
+            # before the contract expires — the same rule run() applies.
+            moved = dataclasses.replace(
+                config, execution_lag_days=lag,
+                min_days_to_expiry=max(config.min_days_to_expiry, lag + 1))
+            engine = (EventDrivenEngine(market, chain, signals, moved) if event_driven
+                      else TradeTableEngine(market, chain, signals, moved))
+            out = engine.run(strategy)
+            return float(sum(r.net_pnl for r in out.records)), len(out.records)
+
+        return decay(at_lag, base_lag=config.execution_lag_days, extra=tuple(extra))
+
+    def realism_test(self, fractions=None) -> "Any":
+        """How much of this result is the fill assumption, and does it survive the
+        honest one.
+
+        The document's first research rule: a realism assumption is tested for
+        sensitivity and never optimised. ``adverse_fraction`` is the assumption results
+        move most on -- about 9% of gross between the mid and the ask on this data -- and
+        the least observable, since the fill a strategy would have got is the one fact a
+        backtest cannot have.
+
+        1.0 must be among the fractions and the result names no best one. A sweep that
+        omits 1.0 reports how the result improves as the assumption is relaxed, which is
+        a search rather than a test.
+        """
+        from backtest.research.realism import DOCUMENT_FRACTIONS, sensitivity
+
+        config = self.raw.config
+        market, chain, signals = self._market, self._chain, self._signals
+        event_driven = getattr(self.raw, "ledger", None) is not None
+        strategy = self.raw.strategy
+
+        def at_fraction(fraction: float) -> tuple[float, int]:
+            from backtest.engine.loop import EventDrivenEngine
+
+            moved = dataclasses.replace(
+                config,
+                costs=dataclasses.replace(config.costs, adverse_fraction=fraction))
+            engine = (EventDrivenEngine(market, chain, signals, moved) if event_driven
+                      else TradeTableEngine(market, chain, signals, moved))
+            out = engine.run(strategy)
+            return float(sum(r.net_pnl for r in out.records)), len(out.records)
+
+        return sensitivity(at_fraction,
+                           fractions=tuple(fractions or DOCUMENT_FRACTIONS))
+
     def compare_forms(self, slot: str, forms) -> "Any":
         """Run several **forms** of one slot side by side.
 

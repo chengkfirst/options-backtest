@@ -103,7 +103,6 @@ class TestCounterfactualExits:
         assert got.scored == 0 and got.censored == 1
         assert "nothing could be scored" in got.verdict()
 
-    @pytest.mark.req("6.4.in_sample")
     def test_the_stop_fires_when_the_path_reaches_it(self):
         """Renamed from "the stop wins a same-day tie", which it never tested.
 
@@ -146,6 +145,28 @@ class TestCounterfactualExits:
     def test_a_replay_needs_a_level(self):
         with pytest.raises(ValueError, match="needs a take_profit or a stop_loss"):
             replay_exit(_trade(), _path(1, [0.0]), _path(1, [0.0]))
+
+    @pytest.mark.req("6.4.in_sample")
+    def test_the_grid_says_every_cell_is_in_sample(self):
+        """The requirement is two things and the caveat is the half that gets dropped.
+
+        A counterfactual grid chooses the exit level after seeing which one would have
+        paid, so every cell in it is in sample by construction. The grid is still worth
+        having -- it says how much of the result rests on the exit rule -- and it is worth
+        having only if nobody reads a cell as a result. That makes the sentence part of
+        the output rather than part of the documentation, and this is what holds it there.
+
+        The mark for this requirement was on the replay arithmetic test, which does not
+        mention in-sample anywhere.
+        """
+        report = grid_report(sweep_levels(_trade(), _path(1, [0.0, 0.4]),
+                                          _path(1, [0.0]),
+                                          take_profits=(0.3, 1.5), stop_losses=(0.5,)),
+                             synthetic=True)
+        assert "in-sample" in report or "in sample" in report, (
+            "the counterfactual grid was printed without saying its cells are in "
+            "sample, which is the one thing a reader has to know before reading one"
+        )
 
     def test_the_grid_reports_the_censored_share_per_cell(self):
         """A cell that scored a third of the trades is not comparable with one that
@@ -578,3 +599,108 @@ class TestLevelGrid:
         heavy = self.GRID.copy()
         heavy.loc[0, "censored_share"] = 0.8
         assert "not comparable" in grid_report(heavy, synthetic=False)
+
+
+class TestSlotInteraction:
+    """The document: "researching one slot in isolation is not always enough. Section 6.3
+    adds interaction tests for that."
+
+    The tool existed and nothing tested it. It is the check that decides whether the whole
+    one-slot-at-a-time research plan is valid for a given pair -- tuning two slots
+    separately when their effects do not add is measuring the wrong thing, and the result
+    looks ordinary either way.
+    """
+
+    @staticmethod
+    def _runner(table):
+        """A scripted runner: strategy -> P&L, keyed by which slots are neutral."""
+        def run_one(strategy):
+            off = tuple(sorted(
+                name for name, value in (("take_profit", strategy.exit.take_profit),
+                                         ("stop_loss", strategy.exit.stop_loss))
+                if value is None))
+            return table[off], 10
+        return run_one
+
+    def _strategy(self):
+        from backtest.engine.strategy import Strategy
+        from backtest.portfolio.positioning import Sizing
+        from backtest.signals.contracts import SelectionRule
+        from backtest.core.types import Right
+        from backtest.signals.strategy import EntryRule, ExitRule
+
+        return Strategy(
+            entry=EntryRule("x", lambda view: False),
+            select=SelectionRule(right=Right.CALL, target_dte=30, dte_window=(21, 45),
+                                 target_delta=0.30),
+            exit=ExitRule(hold_days=20, dte_floor=7, take_profit=1.0, stop_loss=0.5),
+            quantity=1, sizing=Sizing(method="fixed", contracts=1),
+        )
+
+    @pytest.mark.req("6.3.interaction")
+    def test_additive_slots_are_called_additive(self):
+        """Full 100; each slot off costs 10; both off costs 20. The effects add, so the
+        two may be tuned separately."""
+        from backtest.research.ablation import interaction
+
+        table = {(): 100.0, ("take_profit",): 90.0, ("stop_loss",): 90.0,
+                 ("stop_loss", "take_profit"): 80.0}
+        got = interaction(self._strategy(), "take_profit", "stop_loss",
+                          self._runner(table))
+        assert got.alone_a == pytest.approx(10.0)
+        assert got.alone_b == pytest.approx(10.0)
+        assert got.together == pytest.approx(20.0)
+        assert "additive" in got.verdict().lower()
+
+    def test_slots_that_overlap_are_not_called_additive(self):
+        """Both off costs 12 where the parts cost 10 each: they divide the same price path
+        and tuning them one at a time double-counts the shared part."""
+        from backtest.research.ablation import interaction
+
+        table = {(): 100.0, ("take_profit",): 90.0, ("stop_loss",): 90.0,
+                 ("stop_loss", "take_profit"): 88.0}
+        got = interaction(self._strategy(), "take_profit", "stop_loss",
+                          self._runner(table))
+        assert got.together == pytest.approx(12.0)
+        assert "additive" not in got.verdict().lower()
+
+    def test_the_verdict_names_both_numbers(self):
+        """So a reader can draw the line somewhere else than the threshold does."""
+        from backtest.research.ablation import interaction
+
+        table = {(): 100.0, ("take_profit",): 90.0, ("stop_loss",): 90.0,
+                 ("stop_loss", "take_profit"): 88.0}
+        verdict = interaction(self._strategy(), "take_profit", "stop_loss",
+                              self._runner(table)).verdict()
+        assert "12" in verdict and "20" in verdict
+
+
+class TestLambdaOne:
+    """The document: "the strategy must hold at lambda = 1 or worse; run 0.5, 1 and 1.5".
+
+    The default is 1, so an ordinary run is already honest. What this pins is that it
+    **stays** 1: a default of 0.5 would make every result in the system better by about
+    nine percent of gross and nothing would say so.
+    """
+
+    @pytest.mark.req("R1.lambda_one")
+    def test_the_default_is_the_full_adverse_side(self):
+        from backtest.core.config import CostConfig
+
+        assert CostConfig().adverse_fraction == 1.0, (
+            "a default below 1 fills between the bid and the ask, which no order does"
+        )
+
+    def test_below_one_is_allowed_only_as_a_sensitivity_run(self):
+        """0.5 is in the document's list, so it must be expressible -- it is simply not
+        the default, and a result drawn there is not a result."""
+        from backtest.core.config import CostConfig
+
+        assert CostConfig(adverse_fraction=0.5).adverse_fraction == 0.5
+
+    def test_the_cap_refuses_a_figure_unrelated_to_the_quote(self):
+        from backtest.core.errors import StartupError
+        from backtest.core.config import CostConfig
+
+        with pytest.raises(StartupError):
+            CostConfig(adverse_fraction=5.0)

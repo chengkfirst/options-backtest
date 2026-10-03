@@ -41,7 +41,7 @@ from backtest.core.actions import Action, TradeAction
 from backtest.core.config import BacktestConfig
 from backtest.core.dataview import DataView
 from backtest.core.thresholds import get as _threshold
-from backtest.execution.costs import check_tradable, execute
+from backtest.execution.costs import ZERO_FEES, check_tradable, execute
 from backtest.data.options.chain import ChainSource
 from backtest.data.market import MarketData
 from backtest.signals.plan import Context, Plan
@@ -177,6 +177,14 @@ class OpenTrade:
     fees: float
     entry_quote: dict
     entry_signals: dict
+    #: The entry fees **broken out**. The total alone was carried, and the record then
+    #: reported all of it as commission -- so a report whose whole purpose is showing what
+    #: ate the money attributed 8.00 of slippage to commission. The total was right, which
+    #: is why nothing raised.
+    entry_fee_parts: "Any | None" = None
+    #: Sessions between the day the entry was due to fill and the day it did. Zero unless
+    #: a quote was missing on the execution day.
+    entry_deferred: int = 0
     #: Maximum favourable / adverse excursion while held, for MFE/MAE research
     mfe: float = 0.0
     mae: float = 0.0
@@ -226,8 +234,14 @@ class EventDrivenEngine:
         self.market = market
         self.chain = chain
         self.signals = signals
-        self.config = config or market.config
-        self.events = events or market.events
+        self.config = config if config is not None else market.config
+        # ``is not None``, not ``or``. ``EventLog`` defines ``__len__``, so an empty one
+        # is falsy -- and a caller passing a fresh log to keep its events separate had it
+        # silently replaced by the shared one. Nothing failed; the events simply went
+        # somewhere else, which is how a test asserting "nothing was recorded" came to
+        # read another test's events.
+        self.events = (events if events is not None
+                       else market.events)
         #: None means no limit. With None and enforce_capital=False, this engine
         #: should agree with the trade-table engine.
         self.max_concurrent = max_concurrent
@@ -303,6 +317,10 @@ class EventDrivenEngine:
         actions: list[TradeAction] = []
         #: trade_id -> what is needed to keep quoting a contract after its trade closed.
         shadowing: dict[int, dict] = {}
+        #: symbol -> the day its shares were delivered, so they can be sold on the next
+        #: session. Delivery is overnight, so selling on the delivery day itself would be
+        #: a fill before the shares existed.
+        deliveries: dict[str, date] = {}
         self._brake_state = "none"
         self._risk = NOTHING
         self._daily_return = 0.0
@@ -312,17 +330,59 @@ class EventDrivenEngine:
 
         for day in self.market.sessions():
             # 3  fill yesterday's intents
-            due, queue = [i for i in queue if i.execute_on == day], [i for i in queue if i.execute_on > day]
+            # **Due now, and anything that was due and could not fill.** The second half
+            # was missing: an intent whose execution day had no quote was dropped, not
+            # retried -- the position still exited, because the next day's rules decided
+            # again, but the decision was remade rather than carried, `deferred_days` never
+            # left zero, and the trade-table engine (which does carry it) reported a
+            # different number for the same path.
+            #
+            # Carried rather than remade matters beyond the field: a stop that fired on
+            # Monday and could not fill until Wednesday is a stop that fired on Monday.
+            # Re-deciding on Wednesday asks whether it would fire *now*, which is a
+            # different question and the kinder one.
+            due = [i for i in queue if i.execute_on <= day]
+            queue = [i for i in queue if i.execute_on > day]
             for intent in due:
+                # No quote today: the order stands and waits, rather than being dropped.
+                # Bounded by the contract's own expiry, which settles whatever is left --
+                # so a contract that never trades again cannot hold an order for ever.
+                if intent.contract.expiry > day and \
+                        self.chain.series(intent.contract, [day]).empty:
+                    self.events.record(
+                        EventKind.EXIT_DEFERRED, day,
+                        f"no quote, so the {intent.kind.value} decided on "
+                        f"{intent.created} still stands and waits",
+                        str(intent.contract))
+                    queue.append(intent)
+                    continue
                 closed = self._execute(intent, ledger, open_trades, day, actions)
                 if closed is not None:
                     records.append(closed)
                     self._start_shadow(closed, shadowing)
 
+            # 3b  dispose of shares delivered at a physical settlement
+            #
+            # ``Ledger.liquidate_stock`` says in its own docstring that shares arriving
+            # from exercise should not be kept, because holding them is no longer an
+            # option strategy -- and nothing called it. Delivered shares sat in the book
+            # for the rest of the run as unhedged exposure to the underlying, inside a
+            # result reported as an options result.
+            #
+            # Sold on the **next** session rather than on the expiry day: delivery is
+            # overnight, and selling at the close of the day the option expired would be
+            # a fill before the shares existed. The overnight gap is a real cost of the
+            # approximation and is named in the event rather than removed.
+            self._dispose_deliveries(ledger, deliveries, day)
+
             # 4  settle expiries
             for pos in list(ledger.positions):
                 if pos.contract.expiry <= day:
+                    before = {p.symbol for p in ledger.stock_positions}
                     rec = self._settle(pos, ledger, open_trades, day)
+                    for p in ledger.stock_positions:
+                        if p.symbol not in before or p.symbol in deliveries:
+                            deliveries[p.symbol] = day
                     if rec is not None:
                         records.append(rec)
                         # An expiry leaves nothing to shadow: the contract is gone, and
@@ -485,12 +545,16 @@ class EventDrivenEngine:
         # reason statistics. What is wrong is saying nothing, because fewer trades with no
         # explanation reads exactly like a signal that did not fire.
         if len(ledger):
+            # Every one of them, not the first five. The list was truncated to five with
+            # nothing saying so, in the one notice whose whole purpose is that a position
+            # missing from the trade log does not go unmentioned -- so with seven open,
+            # two were as absent as before.
             self.events.record(
                 EventKind.UNRESOLVED_POSITION, self.config.end,
                 f"{len(ledger)} position(s) were still open when the range ended and are "
                 f"not in the trade log: they have no exit, and inventing one would be "
                 f"either a fill outside the range or an exit reason that did not happen",
-                ", ".join(str(p.contract) for p in list(ledger.positions)[:5]))
+                "; ".join(f"{p.contract} x{p.abs_quantity}" for p in ledger.positions))
 
         return EventDrivenResult(
             paths=tuple(paths), shadow=tuple(shadow), actions=tuple(actions),
@@ -727,6 +791,11 @@ class EventDrivenEngine:
                 days_to_expiry=cal.sessions_between(day, pos.contract.expiry),
                 iv=float(quote[2]["iv"]) if len(quote) > 2 and quote[2] is not None
                    and "iv" in quote[2] else float("nan"),
+                # Cut at today, so a variant that reaches for more reads only what had
+                # happened. The document: every slot reads through the DataView, and a
+                # variant may read more **within** it.
+                view=DataView.at(day, market=self.market, signals=self.signals,
+                                 chain=self.chain),
             )
             take = strategy.components.get("take_profit")
             stop = strategy.components.get("stop_loss")
@@ -1130,6 +1199,9 @@ class EventDrivenEngine:
                 fees=fees.total, entry_quote=row.to_dict(),
                 entry_signals={n: self.signals.on(day)[n] for n in self.signals.names},
                 exit_rule=intent.exit_rule, tag=intent.tag, note=intent.note,
+                entry_fee_parts=fees,
+                entry_deferred=self.market.calendar.sessions_between(
+                    intent.execute_on, day),
                 entry_spot=_as_float(row.get("underlying_price")),
                 # Favourable means the direction this position profits from: up for a
                 # long call and a short put, down for a long put and a short call.
@@ -1171,9 +1243,41 @@ class EventDrivenEngine:
             raise InvariantError(f"the exit intent {intent.trade_id} has no matching "
                                  f"open trade")
         reason = resolve_exit_reason(list(intent.exit_reasons)) if intent.exit_reasons else ExitReason.TIME_EXIT
-        return self._record(trade, exit_day=day, exit_price=price, exit_fees=fees.total,
+        return self._record(trade, exit_day=day, exit_price=price, exit_fees=fees,
+                            exit_deferred=self.market.calendar.sessions_between(
+                                intent.execute_on, day),
                             exit_quote=row.to_dict(), reason=reason,
                             suppressed=tuple(r for r in intent.exit_reasons if r is not reason))
+
+    def _dispose_deliveries(self, ledger: Ledger, deliveries: dict, day: date) -> None:
+        """Sell shares delivered at a physical settlement, on the session after delivery.
+
+        A method rather than inline in the day loop so it can be driven directly. The
+        tests for it previously reached for a run that happened to produce an
+        in-the-money expiry, and skipped themselves when one did not occur -- which on the
+        offline fixture is always, so they covered nothing at all.
+        """
+        for symbol in list(deliveries):
+            if deliveries[symbol] >= day:
+                continue
+            spot = self.market.spot(day)
+            if spot.is_missing:
+                continue
+            # ZERO_FEES, and said rather than assumed: the cost model in this system
+            # prices option orders -- per contract, with an option's regulatory fees. A
+            # share sale has neither, and charging an option commission on it would be a
+            # made-up number in a cost model whose whole purpose is that its numbers are
+            # not made up. The omission is small and it is stated.
+            proceeds = ledger.liquidate_stock(symbol, spot.unwrap(), day, ZERO_FEES)
+            self.events.record(
+                EventKind.PASSIVE_EXPIRY, day,
+                f"sold the {symbol} shares delivered on {deliveries[symbol]} at "
+                f"{spot.unwrap():.2f} for {proceeds:,.2f}, with no commission -- this "
+                f"cost model prices option orders and has no share rate. They were held "
+                f"overnight because delivery is, so one gap in the underlying sits in "
+                f"this figure and is not a cost the strategy chose",
+                symbol)
+            del deliveries[symbol]
 
     def _settle(self, pos: Position, ledger: Ledger, open_trades, day: date) -> TradeRecord | None:
         spot = self.market.spot(day)
@@ -1188,32 +1292,31 @@ class EventDrivenEngine:
         self.events.record(EventKind.PASSIVE_EXPIRY, day,
                            f"expired passively ({kind}), intrinsic {intrinsic:.2f}",
                            str(pos.contract))
-        if reason is ExitReason.EXPIRY_ITM:
-            # **Named where it bites, rather than implemented for a path that happens
-            # 0.55% of the time and never at all under the default floor.**
-            #
-            # Measured across four configurations over three years: the default
-            # (dte_floor=7) reaches an in-the-money expiry zero times, and the only case
-            # that does arises from a close that *failed* -- the contract was untradable
-            # on the day the floor fired -- which is already recorded as its own event.
-            # So the honest thing is to say what the approximation is, not to build
-            # physical delivery for it.
+        if reason is ExitReason.EXPIRY_ITM and kind == "physical":
+            # The note used to say this settled to intrinsic in cash and that physical
+            # delivery was an approximation not built. The ledger delivers the shares
+            # now, so the note described the opposite of what the code does -- which is
+            # worse than the gap it was written for, because a reader checks the note and
+            # stops. What remains true is the capital: taking delivery needs the strike
+            # in cash, and the entry check sizes the trade on the premium.
+            needed = (pos.contract.strike * pos.abs_quantity
+                      * self.config.contract.multiplier)
             self.events.record(
                 EventKind.EARLY_EXERCISE_RISK, day,
-                f"settled to intrinsic in cash, which is an approximation: these are "
-                f"physically settled, so a real account would have received "
+                f"settled physically: "
                 f"{pos.abs_quantity * self.config.contract.multiplier} shares at "
-                f"{pos.contract.strike:.2f}, needed "
-                f"{pos.contract.strike * pos.abs_quantity * self.config.contract.multiplier:,.0f} "
-                f"in cash to take delivery, and carried them overnight. The entry capital "
-                f"check does not see that requirement",
+                f"{pos.contract.strike:.2f}, needing {needed:,.0f} in cash to take "
+                f"delivery, which the entry capital check does not see -- it sized this "
+                f"trade on the premium. The shares are sold on the next session, so one "
+                f"overnight gap in the underlying lands in the result",
                 str(pos.contract))
         quote = dict(trade.entry_quote)
         quote.update({"asof": day, "underlying_price": s, "bid": intrinsic, "ask": intrinsic})
-        return self._record(trade, exit_day=day, exit_price=intrinsic, exit_fees=0.0,
+        return self._record(trade, exit_day=day, exit_price=intrinsic, exit_fees=None,
                             exit_quote=quote, reason=reason, suppressed=())
 
-    def _record(self, trade: OpenTrade, *, exit_day, exit_price, exit_fees, exit_quote, reason, suppressed):
+    def _record(self, trade: OpenTrade, *, exit_day, exit_price, exit_fees, exit_quote,
+                reason, suppressed, exit_deferred: int = 0):
         mult = self.config.contract.multiplier
         direction = 1 if trade.side is Side.BUY else -1
         # The remaining contracts' P&L plus what reductions already banked. Without
@@ -1222,7 +1325,10 @@ class EventDrivenEngine:
         # to notice.
         gross = ((exit_price - trade.entry_price) * mult * trade.quantity * direction
                  + trade.realised_gross)
-        fees = trade.fees + exit_fees
+        # The parts, not just the total. `exit_fees` is a FeeBreakdown, or None when the
+        # contract settled at expiry and nothing was traded.
+        parts = (trade.entry_fee_parts or ZERO_FEES) + (exit_fees or ZERO_FEES)
+        fees = parts.total
         cal = self.market.calendar
         ctx_in = trade_context(trade.entry_quote, trade.entry_date, trade.contract,
                                calendar=cal, signals=trade.entry_signals)
@@ -1234,7 +1340,8 @@ class EventDrivenEngine:
             entry_date=trade.entry_date, exit_date=exit_day, contract=trade.contract,
             quantity=trade.quantity, entry_price=trade.entry_price, exit_price=exit_price,
             multiplier=mult, gross_pnl=gross, fees=fees,
-            fee_commission=fees, fee_regulatory=0.0, fee_slippage=0.0,
+            fee_commission=parts.commission, fee_regulatory=parts.regulatory,
+            fee_slippage=parts.slippage,
             net_pnl=gross - fees, exit_reason=reason, suppressed_reasons=suppressed,
             holding_days=self.market.calendar.sessions_between(trade.entry_date, exit_day),
             source=QuoteSource.SYNTHETIC
@@ -1242,5 +1349,6 @@ class EventDrivenEngine:
             entry_context=ctx_in, exit_context=ctx_out,
             mfe=trade.mfe, mae=trade.mae,
             mfe_underlying=trade.mfe_underlying, mae_underlying=trade.mae_underlying,
+            deferred_days=trade.entry_deferred + exit_deferred,
             tag=trade.tag, note=trade.note,
         )

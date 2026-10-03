@@ -258,15 +258,78 @@ class TestASellIsSizedAtTheFill:
     PARAMS = {"reduce_at": 0.05, "halt_at": 0.30, "keep": 0.5}
 
     def test_a_rule_that_fires_daily_does_not_oversell(self):
+        """It used to raise. The ledger refuses a fill larger than the position, so the
+        run either completes or does not -- and "it completed" is the assertion."""
+        from backtest.core.errors import InvariantError
+
         result = run(**BASE, risk={"variant": "daily_loss", "params": self.PARAMS})
         assert len(result.trades) > 0
 
-    def test_a_resized_sell_is_recorded(self):
-        """Silently selling less than the order said is a fill that does not match its
-        order, which is the quietest kind of accounting error."""
-        result = run(**BASE, risk={"variant": "daily_loss", "params": self.PARAMS})
-        kinds = result.raw.events.counts()
-        assert kinds, "the run recorded no events at all"
+        # And every sell that happened was no larger than the position it came from,
+        # which is the property the ledger enforces and this exercises.
+        actions = result.raw.actions_frame
+        sells = actions[actions["action"].isin(["reduce", "close"])]
+        assert len(sells), "nothing was sold, so the sizing was never exercised"
+        assert (sells["quantity"] > 0).all()
+
+    def test_a_sell_larger_than_the_position_is_resized_and_said_so(
+            self, market, chain, signals, config):
+        """Constructed directly rather than hoped for.
+
+        The first version asserted the event list was non-empty, which every run
+        satisfies. Reaching for a run that produces the overlap then stopped working --
+        making an unfilled order wait instead of dropping it removed the route by which
+        two sells queued against one position. The mechanism still has to hold: a fill
+        larger than the position is what the ledger refuses outright, and silently selling
+        less than the order said is a fill that does not match its order.
+        """
+        from backtest.accounting.ledger import Ledger
+        from backtest.core.run_log import EventKind
+        from backtest.core.types import ContractId, Right, Side
+        from backtest.engine.loop import EventDrivenEngine, Intent
+        from backtest.core.actions import Action
+        from backtest.execution.costs import order_fees
+
+        day = next(d for d in market.calendar.sessions
+                   if config.start <= d <= config.end and len(chain.snapshot(d)))
+        row = chain.snapshot(day).iloc[0]
+        contract = ContractId(symbol="QQQ", expiry=row["expiry"],
+                              strike=float(row["strike"]),
+                              right=Right.CALL if row["right"] == "C" else Right.PUT)
+
+        from backtest.engine.loop import OpenTrade
+
+        # Its own event log: the engine falls back to ``market.events``, and ``market``
+        # is session-scoped, so a shared log would let another test's events satisfy the
+        # assertion below.
+        from backtest.core.run_log import EventLog
+
+        engine = EventDrivenEngine(market, chain, signals, config, EventLog())
+        ledger = Ledger(initial_cash=1_000_000.0, spec=config.contract)
+        ledger.apply_fill(contract=contract, side=Side.BUY, quantity=2, price=5.0,
+                          fees=order_fees(2, config.costs, config.contract.multiplier),
+                          when=day, trade_id=1)
+        open_trades = {1: OpenTrade(
+            trade_id=1, contract=contract, entry_date=day, entry_price=5.0, quantity=2,
+            side=Side.BUY, fees=0.0, entry_quote=dict(row),
+            entry_signals={},
+        )}
+
+        # A reduction of four, against a position of two, decided when four were held.
+        # A reduction rather than a close, so nothing downstream needs the trade record --
+        # the resizing is what is under test, not the bookkeeping after it.
+        oversized = Intent(contract=contract, side=Side.SELL, quantity=4, created=day,
+                           execute_on=day, trade_id=1, kind=Action.REDUCE, keep=0.5)
+        engine._execute(oversized, ledger, open_trades, day, [])
+
+        # Keeping half of two leaves one, so one is sold -- not the four that were asked
+        # for, and not the two that would have closed it.
+        assert ledger.position(contract).abs_quantity == 1
+
+        notices = [e for e in engine.events.of_kind(EventKind.EXIT_DEFERRED)
+                   if "was held at the fill" in e.detail]
+        assert notices, "the sell was resized and nothing said so"
+        assert "4" in notices[0].detail and "2" in notices[0].detail
 
     def test_the_reduction_keeps_its_own_ratio(self):
         """Recomputed from the ratio the rule gave, not clamped to whatever is left --

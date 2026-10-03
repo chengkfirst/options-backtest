@@ -205,10 +205,28 @@ class TestPortfolioState:
     def test_concurrency_limit_respected(self, result):
         assert result.equity["positions"].max() <= 3
 
-    def test_no_position_left_open(self, result):
-        """Nothing should still be open at the end of the range — that would mean a
-        hole in the exit paths."""
-        assert len(result.ledger) == 0
+    def test_anything_left_open_is_open_because_the_range_ended(self, result):
+        """Not "nothing is left open", which the engine deliberately does not promise.
+
+        The loop has no forced close at the range end: an exit decided with no session
+        left to fill it is skipped and the position stays, because inventing a fill
+        outside the range or an exit reason that did not happen are both worse. This
+        asserted zero and passed only because the trading calendar stopped with the data
+        -- an expiry past the end counted as a few sessions away, so the days-to-expiry
+        floor closed these positions for a reason that was not true.
+
+        What has to hold is the distinction between the two causes. A position open at
+        the end because its expiry is still ahead is the documented behaviour. One whose
+        expiry has passed is a hole in the exit paths, and the ledger's own invariant
+        already refuses it -- so this says which of the two every open position is.
+        """
+        stuck = [p for p in result.ledger.positions
+                 if p.contract.expiry <= result.config.end]
+        assert not stuck, (
+            f"{len(stuck)} position(s) are open with an expiry inside the range: "
+            f"{[str(p.contract) for p in stuck]}. An expiry in range is settled, so this "
+            f"is a hole in the exit paths rather than the range ending"
+        )
 
     @pytest.mark.req("S.context")
     def test_every_trade_has_both_contexts(self, result):

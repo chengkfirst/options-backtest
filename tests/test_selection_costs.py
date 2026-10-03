@@ -16,7 +16,9 @@ from backtest.signals.contracts import SelectionRule, select_contract
 from tests.conftest import selection
 from backtest.core.types import CHAIN_COLUMNS, Right, Side
 
-from tests.kinds import labels
+from backtest.api.sdk import run
+
+from tests.kinds import kind, labels
 
 #: What a failure here means, and where it is. See ``tests/kinds.py``.
 pytestmark = labels("unit", "2")
@@ -243,3 +245,131 @@ class TestCosts:
             bid=2.0, ask=2.2, side=Side.BUY, quantity=2, multiplier=100, costs=CostConfig()
         )
         assert price == pytest.approx(2.2) and fees.total > 0
+
+
+#: A short run used by the guards below: a real strategy on real sessions, small enough
+#: to run several times in a test. Moved here with the tests that use it when
+#: ``test_gaps.py`` was split up -- that file was organised by **when** its tests were
+#: written ("the ones a review found missing"), which is a provenance rather than a
+#: subject, so no behaviour in it had an owner.
+GAP_RUN = dict(
+    symbol="QQQ", start="2023-01-01", end="2023-06-30",
+    entry="close < sma_20 * 0.98",
+    select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+            "delta_lo": 0.25, "delta_hi": 0.45},
+    exit={"hold_days": 20, "dte_floor": 7},
+    engine="event_driven", sizing={"method": "fixed"}, quantity=1,
+)
+
+
+class TestSlippageIsChargedOnce:
+    """It was charged twice: added to the fill price and again as a fee.
+
+    Every test set slippage to 0 and so does the default, so nothing noticed -- and the
+    architecture document's register lists slippage among the realism assumptions to run a
+    **sensitivity test** on, which is exactly when the doubling would have started
+    producing wrong numbers.
+    """
+
+    COSTS = CostConfig(adverse_fraction=1.0, commission_per_contract=0.0,
+                       min_commission_per_order=0.0, regulatory_fee_per_contract=0.0,
+                       slippage_per_contract=0.10)
+
+    def test_a_buy_pays_it_once(self):
+        # No spread, so the only cost is slippage: 0.10 per contract x 100 multiplier.
+        price, fees = execute(bid=5.0, ask=5.0, side=Side.BUY, quantity=1,
+                              multiplier=100, costs=self.COSTS)
+        paid = price * 100 + fees.total
+        assert paid == pytest.approx(500.0 + 10.0), (
+            f"paid {paid:,.2f} for a 500.00 position with 10.00 of slippage"
+        )
+
+    def test_a_sell_pays_it_once(self):
+        price, fees = execute(bid=5.0, ask=5.0, side=Side.SELL, quantity=1,
+                              multiplier=100, costs=self.COSTS)
+        received = price * 100 - fees.total
+        assert received == pytest.approx(500.0 - 10.0)
+
+    def test_the_fill_price_itself_carries_no_slippage(self):
+        """It is a cash fee, which is where this module's docstring always said it was --
+        "listed separately, because folded into the fill price it is invisible"."""
+        price, _ = execute(bid=5.0, ask=5.0, side=Side.BUY, quantity=1,
+                           multiplier=100, costs=self.COSTS)
+        assert price == pytest.approx(5.0)
+
+    def test_a_run_with_slippage_costs_more_by_exactly_the_slippage(self):
+        """End to end, which is where a double charge would have shown up as a strategy
+        that stopped working under a sensitivity test it should have survived."""
+        # Fixed sizing and no capital constraint, so slippage cannot change **which**
+        # trades happen -- only what they cost. The first version skipped when the counts
+        # differed, which would have made it skip for ever if slippage always moved them,
+        # with nobody noticing.
+        fixed = GAP_RUN | {"sizing": {"method": "fixed", "contracts": 1}, "capital": 1e9}
+        plain = run(**fixed)
+        slipped = run(**fixed, costs=CostConfig(slippage_per_contract=0.05))
+        assert len(plain.trades) == len(slipped.trades), (
+            "slippage changed which trades happened under fixed sizing with no capital "
+            "constraint, which it cannot do by any route this test knows about"
+        )
+        multiplier = plain.raw.config.contract.multiplier
+        # 0.05 per contract per **fill**, times the multiplier. A trade that was traded
+        # out has two fills; one settled at expiry has only the entry, because nothing is
+        # traded at settlement.
+        settled = plain.trades["exit_reason"].isin(["expiry_itm", "expiry_otm"])
+        fills = (~settled).sum() * 2 + settled.sum()
+        expected = 0.05 * multiplier * fills * plain.trades["quantity"].iloc[0]
+        extra = plain.trades["net_pnl"].sum() - slipped.trades["net_pnl"].sum()
+        assert extra == pytest.approx(expected, rel=1e-6), (
+            f"{fills} fills at 0.05 x {multiplier} should cost {expected:,.2f}; the "
+            f"difference was {extra:,.2f}"
+        )
+@kind("guard")
+class TestAZeroBidContract:
+    """Real chains quote 0.00 bid on deep out-of-the-money contracts, every day.
+
+    Nothing is wrong with the data -- there is simply no buyer. What is wrong is treating
+    the mid as a price: half the ask is not a price anyone would pay, the implied vol
+    solved from it is an artefact, and a delta computed from that vol is worse than
+    missing. The spread filter already excludes these; this is what pins it there, since
+    the behaviour was never tested and it will arrive with the first real chain.
+    """
+
+    COSTS = CostConfig(max_relative_spread=0.2)
+
+    @pytest.mark.parametrize("bid,ask", [(0.0, 0.05), (0.0, 1.00), (0.01, 0.05)])
+    @pytest.mark.req("4.2.reject")
+    def test_an_unbuyable_contract_is_not_tradable(self, bid, ask):
+        from backtest.execution.costs import check_tradable
+
+        verdict = check_tradable(bid, ask, self.COSTS)
+        assert not verdict.ok
+        assert "spread" in (verdict.reason or "")
+
+    def test_a_two_sided_quote_is_tradable(self):
+        from backtest.execution.costs import check_tradable
+
+        assert check_tradable(4.80, 5.20, self.COSTS).ok
+
+    def test_a_zero_zero_quote_is_refused_before_the_spread_is_computed(self):
+        """Dividing by a zero mid would raise or produce infinity; it is caught first."""
+        from backtest.execution.costs import check_tradable
+
+        verdict = check_tradable(0.0, 0.0, self.COSTS)
+        assert not verdict.ok and "non-positive" in (verdict.reason or "")
+
+    @kind("limit")
+    def test_the_vol_solved_from_half_an_ask_is_not_refused_by_the_solver(self):
+        """**The solver cannot save you here**, which is why the filter has to.
+
+        A 0.00 / 0.05 quote has a mid of 0.025 and implied vol solves happily to a
+        plausible-looking number. Nothing downstream could tell it from a real one.
+        """
+        from backtest.core.types import Right
+        from backtest.data.options.pricing import implied_vol
+
+        solved = implied_vol(price=0.025, s=400.0, k=520.0, t=0.08, r=0.045, q=0.0,
+                             right=Right.CALL)
+        assert solved.is_present, (
+            "if this ever starts refusing, the spread filter is no longer the only thing "
+            "standing between a zero bid and a plausible-looking delta"
+        )

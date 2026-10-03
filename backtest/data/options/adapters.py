@@ -261,6 +261,43 @@ def check_frame(frame: pd.DataFrame, *, path: str = "(in-memory frame)") -> File
                             "and no term structure; option-side conclusions do not "
                             "hold on data like this")
 
+    # **A price below intrinsic value is arbitrage, which means it is bad data.**
+    #
+    # The document lists it among the validation checks and it was missing. It is the
+    # commonest real defect in an option feed -- a stale or crossed quote on a deep
+    # in-the-money contract -- and it is **silent**: the price looks ordinary, the implied
+    # vol solves to something plausible-looking or fails quietly, and a backtest that buys
+    # there books a profit that could not have been taken.
+    #
+    # A warning rather than fatal, and the share is what matters: a handful of rows is a
+    # feed hiccup, and a tenth of the file is a systematic problem with how it was built.
+    if {"underlying_price", "strike", "right"} <= set(frame.columns):
+        spot = frame["underlying_price"].astype(float)
+        strike = frame["strike"].astype(float)
+        is_call = frame["right"].astype(str).str.upper().str[0] == "C"
+        intrinsic = np.where(is_call, (spot - strike).clip(lower=0),
+                             (strike - spot).clip(lower=0))
+        # Against the ask: a price you could have *paid* below intrinsic is the arbitrage.
+        # The bid being below it is ordinary -- nobody is obliged to bid fair value.
+        below = frame["ask"].astype(float) < intrinsic - 0.005
+        if below.any():
+            share = float(below.mean())
+            warnings.append(
+                f"{int(below.sum())} rows ({share:.1%}) are offered below their intrinsic "
+                f"value, which is arbitrage and therefore bad data. A backtest buying "
+                f"there books a profit that could not have been taken"
+            )
+
+    # A locked market: bid equal to ask. Not crossed, so the crossed check misses it, and
+    # not tradable either -- a real quote has a spread, and a zero-width one is a feed
+    # artefact or a halt. Flagged separately because the fill model would happily use the
+    # mid and report a cost of zero.
+    locked = (frame["bid"].astype(float) == frame["ask"].astype(float)) & \
+             (frame["ask"].astype(float) > 0)
+    if locked.any():
+        warnings.append(f"{int(locked.sum())} rows have bid equal to ask (a locked "
+                        f"market), so a fill there would be modelled at no cost")
+
     # Stale quotes: the same contract's mid unchanged over consecutive days.
     stale = _stale_share(frame)
     if stale > 0.20:
@@ -338,7 +375,7 @@ class FileChainSource:
     ) -> None:
         self.path = Path(path)
         self.market = market
-        self.config = config or market.config
+        self.config = config if config is not None else market.config
         frame = normalise(_read_any(self.path), column_map, scale)
         report = check_frame(frame, path=str(self.path))
         if strict and not report.ok:

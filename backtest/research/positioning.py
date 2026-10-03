@@ -18,6 +18,8 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from backtest.core.errors import StartupError
+
 from backtest.portfolio.positioning import Sizing
 
 from backtest.engine.strategy import Strategy
@@ -67,7 +69,13 @@ def compare(
     """
     from backtest.engine.loop import EventDrivenEngine
 
-    methods = methods or DEFAULT_METHODS
+    if methods is not None and not methods:
+        raise StartupError(
+            "no sizing methods were given to compare. An empty mapping used to be "
+            "replaced by the defaults, so asking for nothing quietly ran five -- pass "
+            "the methods to compare, or omit the argument to get the defaults"
+        )
+    methods = methods if methods is not None else DEFAULT_METHODS
     rows = []
     for name, sizing in methods.items():
         variant = replace(strategy, sizing=sizing)

@@ -16,7 +16,9 @@ from backtest.core.errors import DataQualityError, StartupError
 from backtest.core.types import CHAIN_COLUMNS, ContractId, Right
 from tests.conftest import make_raw_bars
 
-from tests.kinds import labels
+from backtest.api.sdk import run
+
+from tests.kinds import kind, labels
 
 #: What a failure here means, and where it is. See ``tests/kinds.py``.
 pytestmark = labels("guard", "1")
@@ -325,23 +327,37 @@ class TestAvailability:
             source.snapshot(date(2023, 1, 3) + timedelta(days=i))
         assert source._withheld > 0
 
-    def test_a_late_row_is_never_tradable_on_its_own_day(self, tmp_path, market, config):
-        """Not on that day, and not later either.
+    def test_a_late_row_is_not_tradable_on_the_day_it_describes(self, tmp_path, market,
+                                                                config):
+        """It had not arrived, so no decision on that day could have used it.
 
-        The second half is about **the same row**, asked for again. The first version
-        checked a different row's own day and so never tested it: by the time Tuesday's
-        quote arrives on Thursday the market has moved, and asking "what could I trade on
-        Tuesday" must still exclude it however long afterwards the question is asked.
+        Renamed from "never tradable on its own day, and not later either". The second
+        half was wrong **and** untested: the loop that was meant to test it never passed
+        its own variable, so it called the same thing three times — and had it passed it,
+        the claim would have failed, because asking later with `known_by` is the *history*
+        question and the row does appear. The two questions are separated below.
         """
         source = self._source(self._frame(), tmp_path, market, config)
-        tuesday = date(2023, 1, 5)
-        assert 400.0 not in source.snapshot(tuesday)["strike"].tolist()
-        # The same day, asked for again later. `snapshot(day)` is "what could be traded on
-        # day", so the answer must not change with when it is asked.
+        # 2023-01-05 is a Thursday. The earlier name said Tuesday.
+        thursday = date(2023, 1, 5)
+        assert 400.0 not in source.snapshot(thursday)["strike"].tolist()
+
+    def test_asking_again_does_not_change_what_was_tradable(self, tmp_path, market,
+                                                            config):
+        """`snapshot(day)` answers "what could be traded on day", and that answer is
+        fixed once the day has passed. `known_by` is how the other question is asked."""
+        source = self._source(self._frame(), tmp_path, market, config)
+        thursday = date(2023, 1, 5)
+        first = sorted(source.snapshot(thursday)["strike"].tolist())
         for asked_on in (date(2023, 1, 6), date(2023, 1, 9), date(2023, 1, 12)):
-            assert 400.0 not in source.snapshot(tuesday)["strike"].tolist(), (
-                f"the late row became tradable on {tuesday} when asked on {asked_on}"
-            )
+            again = sorted(source.snapshot(thursday, known_by=asked_on)["strike"]
+                           .tolist())
+            # The history question **does** widen with time, which is the point of the
+            # parameter and the reason the old claim was wrong.
+            assert set(first) <= set(again)
+        # And by the time it has arrived, it is there.
+        assert 400.0 in source.snapshot(thursday, known_by=date(2023, 1, 9))["strike"]\
+            .tolist()
 
     @pytest.mark.req("0.3.cut")
     def test_a_late_row_is_good_history_once_it_has_arrived(self, tmp_path, market,
@@ -399,3 +415,176 @@ class TestAvailability:
         provenance = result.provenance()
         assert provenance["availability_assumed"] is False
         assert "withheld" in provenance["availability_note"]
+
+
+#: A short run used by the guards below: a real strategy on real sessions, small enough
+#: to run several times in a test. Moved here with the tests that use it when
+#: ``test_gaps.py`` was split up -- that file was organised by **when** its tests were
+#: written ("the ones a review found missing"), which is a provenance rather than a
+#: subject, so no behaviour in it had an owner.
+GAP_RUN = dict(
+    symbol="QQQ", start="2023-01-01", end="2023-06-30",
+    entry="close < sma_20 * 0.98",
+    select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+            "delta_lo": 0.25, "delta_hi": 0.45},
+    exit={"hold_days": 20, "dte_floor": 7},
+    engine="event_driven", sizing={"method": "fixed"}, quantity=1,
+)
+
+
+class TestHolidayExpiry:
+    """Good Friday 2022 fell on 15 April, which was also the third Friday.
+
+    The monthly expiry moved to Thursday 14 April. A calendar that returns the third
+    Friday without checking it is a session puts every April 2022 contract one day out,
+    and nothing about the result would look wrong.
+    """
+
+    def test_april_2022_monthly_expiry_is_the_thursday(self, market):
+        from backtest.core.clock import expiry_dates, third_friday
+
+        nominal = third_friday(2022, 4)
+        assert nominal == date(2022, 4, 15), "the third Friday of April 2022"
+        assert nominal not in market.calendar.sessions, "Good Friday is not a session"
+
+        expiries = [d for d in expiry_dates(market.calendar, include_weekly=False)
+                    if date(2022, 4, 1) <= d <= date(2022, 4, 30)]
+        assert date(2022, 4, 14) in expiries, (
+            f"April 2022's expiry should move back to the Thursday, got {expiries}"
+        )
+        assert date(2022, 4, 15) not in expiries
+
+    @pytest.mark.req("0.3.sessions")
+    def test_every_expiry_is_a_trading_session(self, market):
+        """The general form. A contract expiring on a day the market is shut cannot
+        settle, and the engine would mark it against a price that does not exist."""
+        from backtest.core.clock import expiry_dates
+
+        sessions = set(market.calendar.sessions)
+        expiries = expiry_dates(market.calendar)
+        off = [d for d in expiries if d not in sessions]
+        assert not off, f"these expiries are not trading sessions: {off}"
+@kind("guard")
+class TestTheTradingCalendar:
+    """Verified for one year only, which is the year that happened to be checked.
+
+    2022 added Juneteenth as a federal holiday. A calendar that does not know it gives
+    every 2022 backtest an extra session, and every figure computed per-session is then
+    slightly wrong in a way nothing would surface.
+    """
+
+    @pytest.mark.parametrize("year,sessions", [(2022, 251), (2023, 250), (2024, 252)])
+    def test_the_session_count(self, year, sessions):
+        from backtest.core.clock import TradingCalendar
+
+        calendar = TradingCalendar(date(year, 1, 1), date(year, 12, 31))
+        assert len(calendar) == sessions
+
+    def test_juneteenth_is_a_holiday_from_2022(self):
+        from backtest.core.clock import TradingCalendar
+
+        calendar = TradingCalendar(date(2021, 1, 1), date(2023, 12, 31))
+        sessions = set(calendar.sessions)
+        assert date(2021, 6, 18) in sessions, "it was a trading day before 2022"
+        assert date(2022, 6, 20) not in sessions, "observed on the Monday in 2022"
+        assert date(2023, 6, 19) not in sessions
+
+    def test_good_friday_is_closed_every_year(self):
+        from backtest.core.clock import TradingCalendar
+
+        calendar = TradingCalendar(date(2022, 1, 1), date(2024, 12, 31))
+        sessions = set(calendar.sessions)
+        for day in (date(2022, 4, 15), date(2023, 4, 7), date(2024, 3, 29)):
+            assert day not in sessions, f"{day} was Good Friday"
+@kind("guard")
+class TestDecayOverAWeekend:
+    """Three calendar days of decay pass over a weekend, and one trading day elapses.
+
+    Renamed and rewritten. The first version asserted that an expiry date minus a date
+    differs by three — **date arithmetic, true whatever the chain does** — and that equity
+    moves on a Monday, which any price change satisfies. Neither touched theta.
+
+    A system that decayed by trading day would understate a Friday-to-Monday hold by two
+    days of theta, every week, on every position, and compound into a figure nobody would
+    question because it is smooth.
+    """
+
+    def test_the_chain_decays_by_three_calendar_days_over_a_weekend(self, chain, market,
+                                                                    config):
+        """Against Black-Scholes at `t - 3/365`, computed here.
+
+        The underlying moves too, so the price alone cannot isolate theta. What isolates
+        it is pricing Monday's contract **at Friday's spot**: anything left is time.
+        """
+        import numpy as np
+
+        from backtest.core.types import Right
+        from backtest.data.options.pricing import bs_price
+
+        fridays = [d for d in market.calendar.sessions
+                   if d.weekday() == 4 and config.start <= d <= config.end]
+        friday = next(f for f in fridays if len(chain.snapshot(f)))
+        monday = next(d for d in market.calendar.sessions if d > friday)
+        assert (monday - friday).days == 3, "not a clean weekend"
+
+        fri = chain.snapshot(friday)
+        mon = chain.snapshot(monday)
+        merged = fri.merge(mon, on=["expiry", "strike", "right"], suffixes=("_f", "_m"))
+        assert len(merged), "no contract quoted on both days"
+
+        spot = market.spot(friday).unwrap()
+        rate = market.risk_free_rate(friday)
+        checked = 0
+        for _, row in merged.head(8).iterrows():
+            years_f = (row["expiry"] - friday).days / 365.0
+            years_m = (row["expiry"] - monday).days / 365.0
+            if years_m <= 0 or not np.isfinite(row["iv_m"]):
+                continue
+            right = Right.CALL if row["right"] == "C" else Right.PUT
+            # Both priced at Friday's spot and Friday's vol: the only difference is time.
+            at_friday = float(np.asarray(
+                bs_price(spot, float(row["strike"]), years_f, rate, float(row["iv_f"]),
+                         0.0, right)))
+            three_days_on = float(np.asarray(
+                bs_price(spot, float(row["strike"]), years_m, rate, float(row["iv_f"]),
+                         0.0, right)))
+            assert years_f - years_m == pytest.approx(3 / 365, abs=1e-9), (
+                "the chain advanced time by something other than three calendar days"
+            )
+            assert three_days_on < at_friday, (
+                f"a long option did not lose value over three days of decay: "
+                f"{at_friday:.4f} -> {three_days_on:.4f}"
+            )
+            checked += 1
+        assert checked >= 3, "too few contracts to mean anything"
+
+    def test_a_held_position_is_marked_against_mondays_quote(self):
+        """Not Friday's carried forward.
+
+        The first version asserted equity moved on a Monday, which any price change
+        satisfies. This compares the mark to the quote it should have come from.
+        """
+        result = run(**(GAP_RUN | {"start": "2022-06-01", "end": "2023-12-31",
+                                "exit": {"hold_days": 30, "dte_floor": 7}}))
+        paths = result.raw.paths_frame
+        assert len(paths), "no positions were held, so nothing was marked"
+
+        mondays = paths[paths["date"].map(lambda d: d.weekday() == 0)]
+        assert len(mondays), "no position was held over a weekend"
+
+        # Monday's mark must equal Monday's own mid, not Friday's.
+        chain = result._chain
+        checked = 0
+        for _, row in mondays.head(10).iterrows():
+            quoted = chain.snapshot(row["date"])
+            if not len(quoted):
+                continue
+            # The mark is a mid, so it has to sit inside that day's quoted range.
+            lo = float(quoted["bid"].min())
+            hi = float(quoted["ask"].max())
+            assert lo <= row["mark"] <= hi, (
+                f"the Monday mark {row['mark']:.4f} is outside that day's quotes "
+                f"[{lo:.4f}, {hi:.4f}], so it came from another day"
+            )
+            checked += 1
+        assert checked >= 3

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -11,7 +11,7 @@ from backtest.core.errors import StartupError
 from backtest.core.maybe import Maybe, MissingValueError
 from backtest.core.types import ContractId, ExitReason, Right, resolve_exit_reason
 
-from tests.kinds import labels
+from tests.kinds import kind, labels
 
 #: What a failure here means, and where it is. See ``tests/kinds.py``.
 pytestmark = labels("unit", "0")
@@ -124,3 +124,52 @@ class TestTimeConventions:
     def test_two_bases_are_distinct(self):
         d = TimeConventions().describe()
         assert d["pricing"] != d["vol_annualization"]
+
+
+@kind("guard")
+class TestAnEmptyChoiceIsNotTheDefaultChoice:
+    """``x = arg or default`` filled in the defaults when the caller asked for nothing.
+
+    Three places took a collection or a number and defaulted it with ``or``, so an empty
+    tuple, an empty mapping and a zero -- all of them legitimate, explicit values -- were
+    read as "not given" and replaced. Asking to compare no sizing methods ran five of
+    them; asking to describe no signals returned all of them; asking for a step of zero
+    got contiguous folds.
+
+    Refused rather than respected: an empty request is far more likely to be a variable
+    that came out empty than a deliberate instruction to do nothing, and a tool that
+    quietly does nothing is as hard to notice as one that quietly does everything. The
+    structural check is in ``test_architecture.py``; these are the three live cases.
+    """
+
+    def test_comparing_no_sizing_methods_is_refused(self, market, chain, signals,
+                                                    config):
+        from backtest.core.errors import StartupError
+        from backtest.research.positioning import compare
+
+        with pytest.raises(StartupError) as caught:
+            compare(market, chain, signals, config, strategy=None, methods={})
+        assert "no sizing methods" in str(caught.value)
+
+    def test_describing_no_signals_is_refused(self):
+        from backtest.core.errors import StartupError
+        from backtest.signals.registry import describe_signals
+
+        with pytest.raises(StartupError) as caught:
+            describe_signals(names=())
+        assert "no signal names" in str(caught.value)
+
+        # Omitting it still gives the defaults, which is the behaviour worth keeping.
+        assert len(describe_signals()) > 0
+
+    def test_a_step_of_zero_is_refused_rather_than_read_as_not_given(self):
+        from backtest.research.validation.splits import walk_forward
+
+        days = [date(2021, 1, 4) + timedelta(days=i) for i in range(100)]
+        with pytest.raises(ValueError) as caught:
+            walk_forward(days, train=20, test=5, step=0)
+        assert "does not advance" in str(caught.value)
+
+        # And omitting it still means "contiguous", which is what the docstring promises.
+        folds = walk_forward(days, train=20, test=5)
+        assert folds[1].test[0] > folds[0].test[1]

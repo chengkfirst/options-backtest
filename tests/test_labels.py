@@ -72,7 +72,7 @@ def resolve() -> dict[str, tuple[str, str]]:
                 module_kind = (_call_args(node, ("kind",)) or [module_kind])[0]
                 module_layer = (_call_args(node, ("layer",)) or [module_layer])[0]
 
-        def walk(body, inherited: tuple[str, str]) -> None:
+        def walk(body, inherited: tuple[str, str], prefix: str) -> None:
             for node in body:
                 if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                     own_kind = _call_args(ast.Module(body=list(node.decorator_list),
@@ -82,11 +82,16 @@ def resolve() -> dict[str, tuple[str, str]]:
                     here = (own_kind[0] if own_kind else inherited[0],
                             own_layer[0] if own_layer else inherited[1])
                     if isinstance(node, ast.ClassDef):
-                        walk(node.body, here)
+                        walk(node.body, here, f"{prefix}{node.name}::")
                     elif node.name.startswith("test_"):
-                        found[f"{path.name}::{node.name}"] = here
+                        # **The class is in the key.** Without it, two classes in one file
+                        # with a same-named test collapse to one entry and the second
+                        # silently replaces the first -- which is the case in
+                        # test_research_tools, where two classes each have a
+                        # `test_the_boundary_comes_before_the_numbers`.
+                        found[f"{path.name}::{prefix}{node.name}"] = here
 
-        walk(tree.body, (module_kind, module_layer))
+        walk(tree.body, (module_kind, module_layer), "")
     return found
 
 

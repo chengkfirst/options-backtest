@@ -109,54 +109,169 @@ class TestImpliedVol:
 
 
 class TestEarlyExercise:
+    """Where the European price is wrong because the option is American.
+
+    Every case here is written at a $100 strike with the fixture's 4.5% and a year to
+    run, so the carry on the strike is ``100 x (1 - exp(-0.045)) = 4.40`` and each
+    assertion below can be checked against that figure by hand.
+    """
+
+    #: ``100 x (1 - exp(-0.045))``, to 2dp. The number every put case here turns on.
+    CARRY = 4.40
+
+    def test_the_carry_is_the_interest_on_the_strike(self):
+        """The arithmetic the rest of this class rests on, stated once.
+
+        It is here because the carry was computed from the **intrinsic value** rather than
+        the strike, on the argument that intrinsic bounds the strike from below and an
+        understated carry errs towards silence. At a $400 strike and 4.5% the real figure
+        is $17.60 and the intrinsic of an ordinary deep in-the-money put gives something
+        under $2 -- not conservative, out by an order of magnitude, and small enough that
+        an ordinary dividend decided the answer in the one case that is not about
+        dividends.
+        """
+        from backtest.data.options.pricing import _strike_carry
+
+        assert _strike_carry(100.0, 0.045, 1.0) == pytest.approx(self.CARRY, abs=0.005)
+        assert _strike_carry(400.0, 0.045, 1.0) == pytest.approx(17.60, abs=0.005)
+        # No rate or no time left: nothing to earn, so nothing to collect early for.
+        assert _strike_carry(100.0, 0.0, 1.0) == 0.0
+        assert _strike_carry(100.0, 0.045, 0.0) == 0.0
+
     def test_flags_deep_itm_call_before_dividend(self):
+        """A call is exercised early to capture a dividend, so the test is the dividend
+        against the time value -- 0.20 of time value against 0.50 of dividend."""
         assert has_early_exercise_value(
-            right=Right.CALL, option_price=20.2, intrinsic=20.0, dividend_in_window=0.5
+            right=Right.CALL, option_price=20.2, intrinsic=20.0, strike=100.0,
+            dividend_in_window=0.5,
         )
 
     def test_quiet_for_otm(self):
         assert not has_early_exercise_value(
-            right=Right.CALL, option_price=1.2, intrinsic=0.0, dividend_in_window=0.5
+            right=Right.CALL, option_price=1.2, intrinsic=0.0, strike=100.0,
+            dividend_in_window=0.5,
         )
 
     def test_a_deep_itm_put_has_early_exercise_value_when_rates_are_positive(self):
         """The old version of this asserted that puts never do, which is not true.
 
         Exercising a put hands over the stock now and receives the strike now, and the
-        strike earns interest for the remaining life. With the fixture's 4.5% and a year
-        to run, a put whose time value is a few cents is worth exercising -- and a
-        European price for it is simply wrong.
+        strike earns interest for the remaining life: 0.20 of time value against 4.40 of
+        carry, so exercising wins and a European price for it is simply wrong.
         """
         assert has_early_exercise_value(
-            right=Right.PUT, option_price=20.2, intrinsic=20.0,
+            right=Right.PUT, option_price=20.2, intrinsic=20.0, strike=100.0,
+            dividend_in_window=0.0, rate=0.045, years_to_expiry=1.0,
+        )
+
+    def test_the_carry_comes_from_the_strike_and_not_the_intrinsic(self):
+        """The regression guard for the case above, where the two differ by enough to
+        change the answer.
+
+        A $400-strike put 5 in the money with 1.00 of time value. The carry on the strike
+        is 17.60, so exercising wins comfortably. Computed from the intrinsic it is 0.22,
+        and 1.00 of time value is above that -- the same option reads as quiet, which is
+        how this went unnoticed: both answers are plausible and only one is arithmetic.
+        """
+        assert has_early_exercise_value(
+            right=Right.PUT, option_price=6.0, intrinsic=5.0, strike=400.0,
             dividend_in_window=0.0, rate=0.045, years_to_expiry=1.0,
         )
 
     def test_a_put_is_quiet_when_rates_are_zero(self):
         """With no carry on the strike there is nothing to gain by exercising early."""
         assert not has_early_exercise_value(
-            right=Right.PUT, option_price=20.2, intrinsic=20.0,
+            right=Right.PUT, option_price=20.2, intrinsic=20.0, strike=100.0,
             dividend_in_window=0.0, rate=0.0, years_to_expiry=1.0,
         )
 
     def test_a_put_with_plenty_of_time_value_is_quiet(self):
-        """Time value above the carry means holding is worth more than exercising."""
+        """5.00 of time value against 4.40 of carry: holding is worth more."""
         assert not has_early_exercise_value(
-            right=Right.PUT, option_price=25.0, intrinsic=20.0,
+            right=Right.PUT, option_price=25.0, intrinsic=20.0, strike=100.0,
             dividend_in_window=0.0, rate=0.045, years_to_expiry=1.0,
         )
 
     def test_a_dividend_makes_a_put_less_worth_exercising(self):
         """It works the other way for a put: the coming drop in the stock makes holding
-        more attractive, so the same option can flip to quiet."""
-        kwargs = dict(right=Right.PUT, option_price=20.2, intrinsic=20.0,
+        more attractive, so the same option can flip to quiet.
+
+        **How large a dividend that takes is the point.** It has to exceed the whole
+        remaining carry, 4.40, before 0.20 of time value looks like the better side -- so
+        the figure here is 5.00, a 5% dividend on the strike. The earlier version of this
+        test used 2.00, which flipped the answer only because the carry was being computed
+        from the intrinsic and was therefore 0.88 rather than 4.40. The claim was right
+        and the number proving it was not.
+        """
+        kwargs = dict(right=Right.PUT, option_price=20.2, intrinsic=20.0, strike=100.0,
                       rate=0.045, years_to_expiry=1.0)
         assert has_early_exercise_value(dividend_in_window=0.0, **kwargs)
-        assert not has_early_exercise_value(dividend_in_window=2.0, **kwargs)
+        assert not has_early_exercise_value(dividend_in_window=5.0, **kwargs)
+        # And a dividend below the carry does not: the direction is right, the size matters.
+        assert has_early_exercise_value(dividend_in_window=2.0, **kwargs)
 
     def test_a_put_without_the_rate_cannot_be_assessed(self):
         """False because there is nothing to test against, not because the answer is no.
         The caller holding the rate should pass it."""
         assert not has_early_exercise_value(
-            right=Right.PUT, option_price=20.2, intrinsic=20.0, dividend_in_window=0.5
+            right=Right.PUT, option_price=20.2, intrinsic=20.0, strike=100.0,
+            dividend_in_window=0.5,
         )
+
+
+class TestTheChainReachesBothCases:
+    """The flag is only worth having if the chain's own call site can reach it.
+
+    It could not. The generator returned early when no dividend fell in the window --
+    correct for the call, wrong for the put, which has nothing to do with dividends -- and
+    never passed the rate or the time to expiry, without which the put branch returns
+    False by construction. Two independently sufficient reasons for the same silence,
+    which is why neither showed up as a failure.
+    """
+
+    @staticmethod
+    def _flags(right: Right, spot: float, *, dividend: float = 0.0):
+        """``_early_exercise_flags`` on a $100 strike, 20 in the money, a year to run.
+
+        The method is called on an instance built without the constructor, deliberately:
+        what is under test is the branching inside it, and a real chain would also have to
+        produce the quote, the dividend and the rate -- any of which going missing would
+        make this pass or fail for a reason that is not the one named above.
+        """
+        from datetime import date
+
+        import numpy as np
+
+        from backtest.data.options.synthetic.generator import SyntheticChainSource
+
+        class Market:
+            def dividends_between(self, start, end):
+                return dividend
+
+        class Config:
+            class contract:
+                class exercise:
+                    value = "american"
+
+        source = SyntheticChainSource.__new__(SyntheticChainSource)
+        source.market = Market()
+        source.config = Config
+        return SyntheticChainSource._early_exercise_flags(
+            source, np.array([100.0]), np.array([20.2]), spot,
+            date(2020, 1, 2), date(2021, 1, 4), right, 0.045, 1.0,
+        )
+
+    def test_a_put_can_be_flagged_with_no_dividend_in_the_window(self):
+        assert self._flags(Right.PUT, 80.0) == ["early_exercise_value"], (
+            "a deep in-the-money put with positive rates was not flagged, so the put "
+            "branch is unreachable from the chain again"
+        )
+
+    def test_a_call_is_still_quiet_with_no_dividend_in_the_window(self):
+        """The early return was right for the call and has to stay right for it: a call
+        is exercised early to capture a dividend, and there is none."""
+        assert self._flags(Right.CALL, 120.0) == [""]
+
+    def test_a_call_is_flagged_when_a_dividend_exceeds_its_time_value(self):
+        """The case the early return was guarding, still reachable."""
+        assert self._flags(Right.CALL, 120.0, dividend=0.5) == ["early_exercise_value"]

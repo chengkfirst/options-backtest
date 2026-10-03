@@ -20,7 +20,7 @@ import pytest
 from backtest.data.options.adapters import SCHEMA, check_frame, describe_schema, normalise
 from backtest.core.errors import DataQualityError
 
-from tests.kinds import labels
+from tests.kinds import kind, labels
 
 #: What a failure here means, and where it is. See ``tests/kinds.py``.
 pytestmark = labels("guard", "1")
@@ -167,3 +167,39 @@ class TestRegistry:
 
         with pytest.raises(StartupError, match="already registered"):
             register("synthetic", lambda *a: None)
+
+
+class TestTheAdapterAcceptsWhatVendorsActuallySend:
+    """A file that loads on one machine and fails on another is worse than one that never
+    loads: the failure looks like a data problem rather than a parsing one."""
+
+    @staticmethod
+    def _frame(rights):
+        import pandas as pd
+
+        return pd.DataFrame({
+            "right": rights, "asof": ["2023-01-03"] * 2, "symbol": ["QQQ"] * 2,
+            "expiry": ["2023-03-17"] * 2, "strike": [400.0, 400.0],
+            "bid": [5.0, 5.0], "ask": [5.2, 5.2], "underlying_price": [400.0, 400.0],
+        })
+
+    @pytest.mark.parametrize("rights", [
+        ["C", "P"], ["call", "put"], ["Call", "PUT"],
+        [1, -1],            # integers
+        [1.0, -1.0],        # the same column after parquet makes it float
+        ["1.0", "-1.0"],    # and after that float is stringified
+        [1, 0],             # the other integer convention
+    ])
+    def test_every_spelling_a_vendor_uses(self, rights):
+        from backtest.data.options.adapters import normalise
+
+        assert list(normalise(self._frame(rights))["right"]) in (["C", "P"], ["C", "P"])
+
+    def test_an_unrecognised_spelling_raises_with_what_is_accepted(self):
+        """Not a silent drop: a right nobody can parse means every row is a contract of
+        unknown kind, and guessing would price half of them backwards."""
+        from backtest.core.errors import DataQualityError
+        from backtest.data.options.adapters import normalise
+
+        with pytest.raises(DataQualityError, match="Accepted spellings"):
+            normalise(self._frame(["CALL_OPTION", "PUT_OPTION"]))
