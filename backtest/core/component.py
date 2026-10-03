@@ -30,10 +30,18 @@ such a method to receive, and defining an empty one would be a shape that reads 
 and does nothing. What is here instead is the part the engine actually calls: ``decide``.
 When the bus lands, ``decide`` is what ``on_event`` will dispatch to.
 
-``get_state`` / ``set_state`` are here and are real: a component that keeps state across
-days (a trailing stop remembering its high-water mark) has to be able to hand that state
-over for a resumed run, and a component that silently keeps state without declaring it
-would make a resumed run differ from a continuous one.
+``get_state`` / ``set_state`` are **not** here either, and the honest reason is that
+nothing needs them yet: no shipped form keeps state across days. What is here is the
+``stateful`` flag and a refusal -- :func:`register` rejects a variant that declares itself
+stateful, naming what is missing. The first stateful form (a trailing stop remembering its
+high-water mark) is what will make the state protocol worth building, and until then a
+component that quietly kept state would make a resumed run differ from a continuous one
+with nothing raising.
+
+An earlier version of this docstring claimed both methods were "here and are real". They
+were not. The claim is recorded rather than deleted because a file that describes
+machinery it does not have is the precise failure this project refuses, and it is easier
+to make in a docstring than in code.
 """
 
 from __future__ import annotations
@@ -44,15 +52,22 @@ from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
 from backtest.core.errors import StartupError
 
-#: The slots a component may fill. Taken from the architecture document's seven, plus the
-#: daily review, which is a hook rather than a slot but is swappable in the same way.
-#:
-#: A slot not listed here cannot be registered. The list is short and explicit because a
-#: typo in a slot name would otherwise create a slot nobody fills and nobody notices.
-SLOTS: tuple[str, ...] = (
-    "setup", "entry", "select", "take_profit", "stop_loss", "headwind", "position",
-    "hedge", "review",
-)
+def _slot_names() -> tuple[str, ...]:
+    """The slots a component may fill, from the one place they are defined.
+
+    Taken from :data:`backtest.core.slots.COMPONENTS` rather than written out again here.
+    A second hand-written list of the same thing drifts -- and this one already had, by
+    one entry, within an hour of being written.
+
+    ``review`` is added: it is a hook rather than one of the document's seven, and it is
+    swappable in the same way, so a component may fill it.
+    """
+    from backtest.core.slots import COMPONENTS
+
+    return tuple(c.key for c in COMPONENTS) + ("review",)
+
+
+SLOTS: tuple[str, ...] = _slot_names()
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +217,13 @@ def register(variant: Variant) -> Variant:
     if variant.slot not in SLOTS:
         raise StartupError(
             f"{variant.slot!r} is not a slot; one of {', '.join(SLOTS)}"
+        )
+    if variant.stateful:
+        raise StartupError(
+            f"{variant.ref} declares itself stateful, and there is no state protocol yet: "
+            f"nothing saves a component's state at the end of a run or restores it at the "
+            f"start of the next. A stateful form would make a resumed run differ from a "
+            f"continuous one with nothing raising, so it is refused rather than run"
         )
     key = f"{variant.slot}/{variant.name}"
     existing = _REGISTRY.get(key)

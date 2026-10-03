@@ -82,6 +82,54 @@ class TestItReproduces:
         assert run(**data).manifest()["run_id"] != before
 
 
+class TestTheDocumentsShape:
+    """The architecture document gives its own config example. The file follows it."""
+
+    def test_the_three_blocks(self, result):
+        """strategy / data / run, plus the document's lifecycle and timing beside them."""
+        written = to_mapping(result)
+        assert set(written) <= set(KEYS)
+        assert {"strategy", "data", "run", "lifecycle", "timing"} <= set(written)
+
+    def test_what_the_strategy_is_sits_apart_from_where_it_ran(self, result):
+        """The separation a researcher uses: the same strategy on a later period, or two
+        strategies on the same one."""
+        written = to_mapping(result)
+        assert "engine" not in written["strategy"]
+        assert "symbol" not in written["strategy"]
+        assert "entry" in written["strategy"]
+
+    def test_a_component_is_variant_version_params(self):
+        """The document's own spelling for every slot."""
+        r = run(**BASE, components={"stop_loss": {"variant": "premium",
+                                                  "params": {"fraction": 0.4}}})
+        one = to_mapping(r)["strategy"]["components"]["stop_loss"]
+        assert set(one) == {"variant", "version", "params"}
+
+    def test_all_five_lifecycle_settings_are_written(self, result):
+        """Omitting them would leave a reader assuming they were considered."""
+        from backtest.signals.lifecycle import SETTINGS
+
+        written = to_mapping(result)["lifecycle"]
+        assert {s.name for s in SETTINGS} == set(written)
+
+    def test_an_edited_lifecycle_value_is_refused(self, result, tmp_path):
+        """Four of the five are fixed in the engine. A file carrying an edited value the
+        run then ignores is a setting that looks honoured and is not."""
+        path = save(result, tmp_path / "edited.yaml")
+        raw = path.read_text(encoding="utf-8")
+        path.write_text(raw.replace("reentry_policy: nothing enforces it",
+                                    "reentry_policy: wait 5 days"), encoding="utf-8")
+        with pytest.raises(StartupError, match="fixed in the engine"):
+            load(path)
+
+    def test_an_unknown_key_inside_a_block_is_refused(self, tmp_path):
+        path = tmp_path / "nested.yaml"
+        path.write_text("strategy:\n  entyr: close > sma_20\n", encoding="utf-8")
+        with pytest.raises(StartupError, match="entyr"):
+            load(path)
+
+
 class TestTheFile:
     def test_the_fingerprint_is_written_as_a_comment(self, result, tmp_path):
         """Derived, not a field: a field would invite editing the hash instead of
@@ -93,12 +141,12 @@ class TestTheFile:
     def test_the_right_is_written_as_a_word(self, result, tmp_path):
         """A file is read by a person before it is read by the parser, and "C" tells
         them nothing."""
-        assert to_mapping(result)["select"]["right"] == "call"
+        assert to_mapping(result)["strategy"]["select"]["right"] == "call"
 
     def test_a_component_carries_its_version(self, tmp_path):
         r = run(**BASE, components={"stop_loss": {"variant": "premium",
                                                   "params": {"fraction": 0.4}}})
-        assert to_mapping(r)["components"]["stop_loss"]["version"] == 1
+        assert to_mapping(r)["strategy"]["components"]["stop_loss"]["version"] == 1
 
     def test_a_stale_component_version_is_refused(self, tmp_path):
         """Replaying against a later version would give a different result from a file
@@ -112,7 +160,13 @@ class TestTheFile:
 
     def test_every_written_key_is_a_known_key(self, result, tmp_path):
         """Otherwise a file this system writes could not be read back by it."""
-        assert set(to_mapping(result)) <= set(KEYS)
+        from backtest.api.config_file import DATA_KEYS, RUN_KEYS, STRATEGY_KEYS
+
+        written = to_mapping(result)
+        assert set(written) <= set(KEYS)
+        assert set(written["strategy"]) <= set(STRATEGY_KEYS)
+        assert set(written["data"]) <= set(DATA_KEYS)
+        assert set(written["run"]) <= set(RUN_KEYS)
 
 
 class TestLoading:

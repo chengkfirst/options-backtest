@@ -40,14 +40,30 @@ import yaml
 
 from backtest.core.errors import StartupError
 
-#: The top-level keys a config file may hold. Anything else raises, as the document asks:
-#: a misspelled key that was ignored would run something other than what the file says,
-#: and the file is the whole point.
+#: The file's shape, from the architecture document's own example: a ``strategy`` block
+#: holding the slots, a ``lifecycle`` block and a ``timing`` block beside it, and the run
+#: settings outside all three.
+#:
+#: The document nests the slots under ``strategy`` for a reason worth keeping: it separates
+#: **what the strategy is** from **where and how it was run**, and those are the two halves
+#: a researcher compares separately -- the same strategy on a later period, or two
+#: strategies on the same one.
 KEYS: tuple[str, ...] = (
-    "symbol", "start", "end", "entry", "select", "exit", "components", "sizing",
-    "quantity", "engine", "max_concurrent", "capital", "execution_lag_days",
-    "shadow_days", "name", "chain",
+    "strategy", "lifecycle", "timing", "data", "run",
 )
+
+#: Inside ``strategy``.
+STRATEGY_KEYS: tuple[str, ...] = (
+    "name", "entry", "select", "exit", "components", "sizing", "quantity", "risk",
+)
+
+#: Inside ``run``: where and how, not what.
+RUN_KEYS: tuple[str, ...] = (
+    "engine", "capital", "max_concurrent", "shadow_days",
+)
+
+#: Inside ``data``.
+DATA_KEYS: tuple[str, ...] = ("symbol", "start", "end", "chain")
 
 #: Keys that carry a Python object rather than data, and so cannot be written to a file.
 #: The value is the reason, shown to whoever tried.
@@ -110,49 +126,116 @@ def to_mapping(result) -> dict[str, Any]:
 
     select = dict(strategy["select"])
     out: dict[str, Any] = {
-        "symbol": config["symbol"],
-        "start": config["start"],
-        "end": config["end"],
-        "entry": strategy["entry"],
-        "select": {
-            # The word, not the enum's letter. A file is read by a person before it is
-            # read by the parser, and "C" tells them nothing.
-            "right": "call" if str(select["right"]).upper().startswith("C") else "put",
-            "dte_window": list(select["dte_window"]),
-            **({"delta": select["target_delta"]} if select.get("target_delta") is not None
-               else {}),
-            **({"moneyness": select["moneyness"]} if select.get("moneyness") is not None
-               else {}),
-            **({"delta_band": list(select["delta_band"])}
-               if select.get("delta_band") else {}),
-            **({"iv_band": list(select["iv_band"])} if select.get("iv_band") else {}),
-            **{k: select[k] for k in ("min_volume", "min_open_interest",
-                                      "max_relative_spread") if select.get(k) is not None},
+        # What the strategy is.
+        "strategy": {
+            "name": strategy["name"],
+            "entry": strategy["entry"],
+            "select": {
+                # The word, not the enum's letter. A file is read by a person before it is
+                # read by the parser, and "C" tells them nothing.
+                "right": "call" if str(select["right"]).upper().startswith("C") else "put",
+                "dte_window": list(select["dte_window"]),
+                **({"delta": select["target_delta"]}
+                   if select.get("target_delta") is not None else {}),
+                **({"moneyness": select["moneyness"]}
+                   if select.get("moneyness") is not None else {}),
+                **({"delta_band": list(select["delta_band"])}
+                   if select.get("delta_band") else {}),
+                **({"iv_band": list(select["iv_band"])} if select.get("iv_band") else {}),
+                **{k: select[k] for k in ("min_volume", "min_open_interest",
+                                          "max_relative_spread")
+                   if select.get(k) is not None},
+            },
+            "exit": {k: v for k, v in strategy["exit"].items() if v is not None},
+            "sizing": {k: v for k, v in strategy["sizing"].items() if v is not None},
+            "quantity": strategy["quantity"],
         },
-        "exit": {k: v for k, v in strategy["exit"].items() if v is not None},
-        "sizing": {k: v for k, v in strategy["sizing"].items() if v is not None},
-        "quantity": strategy["quantity"],
-        "engine": execution["engine"],
-        "capital": config["notional_capital"],
-        "execution_lag_days": config["execution_lag_days"],
-        "name": strategy["name"],
+        # Which data, over what period.
+        "data": {
+            "symbol": config["symbol"],
+            "start": config["start"],
+            "end": config["end"],
+        },
+        # Where and how it was run -- not what the strategy is. The document keeps these
+        # apart, and the separation is the one a researcher uses: the same strategy on a
+        # later period, or two strategies on the same one.
+        "run": {
+            "engine": execution["engine"],
+            "capital": config["notional_capital"],
+            **({"max_concurrent": execution["max_concurrent"]}
+               if execution.get("max_concurrent") is not None else {}),
+            **({"shadow_days": execution["shadow_days"]}
+               if execution.get("shadow_days") else {}),
+        },
+        # The document's two blocks beside the slots. Both are **written from what this
+        # run actually did**, not from what was asked for, and loading raises if a value
+        # differs from what the system enforces -- see `_check_fixed`. A file carrying
+        # settings that can be edited to no effect is the silent failure this format is
+        # supposed to prevent, so they are either honoured or refused.
+        "lifecycle": _lifecycle(execution),
+        "timing": {"execution_lag_days": config["execution_lag_days"],
+                   "signal_snapshot": "close",
+                   "fill_latency": f"{config['execution_lag_days']} trading day(s)"},
     }
     if strategy.get("components"):
         # The version is written, and loading checks it. Without it a file would replay
         # against whatever version of the form happens to be registered later -- the file
         # would look unchanged and the run would not be the same run, which is the exact
         # drift this file exists to prevent.
-        out["components"] = {
+        out["strategy"]["components"] = {
             slot: {"variant": c["ref"].split("/")[1].split("@")[0],
                    "version": int(c["ref"].split("@")[1]),
                    "params": dict(c["params"])}
             for slot, c in strategy["components"].items()
         }
-    if execution.get("max_concurrent") is not None:
-        out["max_concurrent"] = execution["max_concurrent"]
-    if execution.get("shadow_days"):
-        out["shadow_days"] = execution["shadow_days"]
     return _plain(out)
+
+
+def _lifecycle(execution: Mapping[str, Any]) -> dict[str, Any]:
+    """The document's five lifecycle settings, as this run actually resolved them.
+
+    Four of the five are **not configurable yet**; what they are here is what the engine
+    fixes. Written out anyway, because the alternative is a file that silently omits the
+    settings the document says decide how a trade is managed, and a reader who assumes
+    they were considered.
+
+    The values come from ``signals.lifecycle.SETTINGS``, which already records what
+    enforces each one, so this cannot drift from the system's own account of itself.
+    """
+    from backtest.signals.lifecycle import SETTINGS
+
+    fixed = {s.name: s.enforced_by or "nothing enforces it" for s in SETTINGS}
+    fixed["max_concurrent_trades"] = (
+        f"{execution['max_concurrent']} book-wide"
+        if execution.get("max_concurrent") is not None
+        else "unlimited book-wide, one per contract"
+    )
+    return fixed
+
+
+def _check_fixed(data: Mapping[str, Any]) -> None:
+    """Refuse a file whose lifecycle or timing block was edited.
+
+    Four of the five lifecycle settings and both timing settings are fixed in the engine.
+    Letting a file carry an edited value that the run then ignores would be a setting that
+    looks honoured and is not -- which is worse than the file not carrying them at all.
+    """
+    block = data.get("lifecycle") or {}
+    if not block:
+        return
+    from backtest.signals.lifecycle import SETTINGS
+
+    expected = {s.name: s.enforced_by or "nothing enforces it" for s in SETTINGS}
+    edited = [k for k, v in block.items()
+              if k in expected and k != "max_concurrent_trades" and v != expected[k]]
+    if edited:
+        raise StartupError(
+            f"the lifecycle block was edited ({', '.join(edited)}), and these are fixed "
+            f"in the engine rather than configurable. The file records what this run did; "
+            f"changing the record does not change the run. See "
+            f"`backtest.signals.lifecycle.SETTINGS` for what enforces each one and what "
+            f"is missing before it becomes a setting"
+        )
 
 
 #: What goes at the top of a written file. The fingerprint is a comment rather than a
@@ -206,13 +289,74 @@ def load(path: str | Path) -> dict[str, Any]:
         raise StartupError(
             f"{target} should hold a mapping of settings, got {type(data).__name__}"
         )
-    unknown = sorted(set(data) - set(KEYS))
-    if unknown:
-        raise StartupError(
-            f"{target} has keys this does not understand: {', '.join(unknown)}. "
-            f"Known: {', '.join(KEYS)}"
-        )
-    return dict(data)
+    for block, allowed in (("", KEYS), ("strategy", STRATEGY_KEYS),
+                           ("run", RUN_KEYS), ("data", DATA_KEYS)):
+        held = data if not block else (data.get(block) or {})
+        if not isinstance(held, Mapping):
+            raise StartupError(f"{target}: {block!r} should hold a mapping")
+        unknown = sorted(set(held) - set(allowed))
+        if unknown:
+            where = f"{target} -> {block}" if block else str(target)
+            raise StartupError(
+                f"{where} has keys this does not understand: {', '.join(unknown)}. "
+                f"Known: {', '.join(allowed)}"
+            )
+    _check_fixed(data)
+    return flatten(data)
+
+
+def from_flat(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Reshape a flat set of ``run()`` arguments into the document's three blocks.
+
+    The inverse of :func:`flatten`, and the reason both exist in one module: the store
+    holds a run's configuration flat, and writing it out in a different shape from the one
+    :func:`load` reads would produce a file this system wrote and could not read back.
+    That is the failure these two functions being adjacent is meant to prevent.
+
+    No lifecycle or timing block: those describe how the run was executed, and this is
+    reshaping a record rather than describing a run in progress.
+    """
+    flat = dict(config)
+    out: dict[str, Any] = {"strategy": {}, "data": {}, "run": {}}
+    for key, value in flat.items():
+        if value is None:
+            continue
+        if key in DATA_KEYS:
+            out["data"][key] = value
+        elif key in RUN_KEYS:
+            out["run"][key] = value
+        elif key in STRATEGY_KEYS:
+            out["strategy"][key] = value
+        elif key == "execution_lag_days":
+            out.setdefault("timing", {})["execution_lag_days"] = value
+        else:
+            raise StartupError(
+                f"a stored config holds {key!r}, which has no place in the file format. "
+                f"Either it belongs in one of the blocks -- add it to STRATEGY_KEYS, "
+                f"RUN_KEYS or DATA_KEYS -- or it should not have been stored"
+            )
+    return {k: v for k, v in out.items() if v}
+
+
+def flatten(data: Mapping[str, Any]) -> dict[str, Any]:
+    """The document's three blocks, as keyword arguments for :func:`backtest.run`.
+
+    The blocks are how a person reads the file; the flat form is how the function takes
+    its arguments. Translating between them here keeps the file in the document's shape
+    without that shape leaking into every call site.
+
+    ``lifecycle`` and ``timing`` are not passed on. Four of the five lifecycle settings
+    are fixed in the engine and ``load`` has already refused an edited one; ``timing``
+    carries ``execution_lag_days``, which **is** honoured and is lifted out.
+    """
+    out: dict[str, Any] = {}
+    out.update(dict(data.get("strategy") or {}))
+    out.update(dict(data.get("data") or {}))
+    out.update(dict(data.get("run") or {}))
+    timing = data.get("timing") or {}
+    if "execution_lag_days" in timing:
+        out["execution_lag_days"] = timing["execution_lag_days"]
+    return out
 
 
 def fingerprint_of(path: str | Path) -> str | None:

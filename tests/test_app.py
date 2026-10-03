@@ -128,6 +128,68 @@ class TestRunRecords:
         assert store.run_records()[0]["sharpe"] is not None
 
 
+class TestExportConfig:
+    """A stored run has to come back as something runnable, in the shape the loader reads.
+
+    The first version dumped the stored flat configuration, which is not the file format,
+    so it wrote a file this system could not read back. Nothing caught it, because nothing
+    ran the export through the loader -- which is what this does.
+    """
+
+    def test_an_exported_run_replays_to_the_same_fingerprint(self, store, tmp_path):
+        from backtest import run_from
+
+        rec = _run()
+        path = store.export_config(rec["id"], tmp_path / "exported.yaml")
+        assert run_from(path).manifest()["run_id"] == rec["manifest"]["run_id"]
+
+    def test_the_export_is_in_the_documents_shape(self, store, tmp_path):
+        import yaml
+
+        rec = _run()
+        path = store.export_config(rec["id"], tmp_path / "shape.yaml")
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert {"strategy", "data", "run"} <= set(data)
+
+    def test_the_fingerprint_is_carried_not_recomputed(self, store, tmp_path):
+        """A recomputed one would agree with itself even if the code had moved on, and
+        disagreeing is the entire signal."""
+        from backtest.api.config_file import fingerprint_of
+
+        rec = _run()
+        path = store.export_config(rec["id"], tmp_path / "fp.yaml")
+        assert fingerprint_of(path) == rec["manifest"]["run_id"]
+
+    def test_a_run_with_no_fingerprint_refuses_rather_than_writing_one(self, store,
+                                                                      tmp_path):
+        """A row saved before the column existed cannot be checked against the run it
+        came from, so it does not get a file that claims it can."""
+        rec = _run()
+        # Both places it could come from: the column, and the manifest JSON the column was
+        # lifted out of. A row with the column blank but the manifest intact is recoverable
+        # and is recovered -- this is the genuinely old row, from before either existed.
+        store._db.execute("UPDATE run SET fingerprint='', manifest='{}' WHERE id=?",
+                          (rec["id"],))
+        store._db.commit()
+        with pytest.raises(ValueError, match="before the reproducibility fingerprint"):
+            store.export_config(rec["id"], tmp_path / "old.yaml")
+
+    def test_a_blank_column_falls_back_to_the_manifest(self, store, tmp_path):
+        """A row saved before the column existed still carries the fingerprint inside its
+        manifest. Recovering it beats refusing a run that can in fact be identified."""
+        from backtest.api.config_file import fingerprint_of
+
+        rec = _run()
+        store._db.execute("UPDATE run SET fingerprint='' WHERE id=?", (rec["id"],))
+        store._db.commit()
+        path = store.export_config(rec["id"], tmp_path / "recovered.yaml")
+        assert fingerprint_of(path) == rec["manifest"]["run_id"]
+
+    def test_a_missing_run_says_so(self, store, tmp_path):
+        with pytest.raises(KeyError):
+            store.export_config(9999, tmp_path / "nope.yaml")
+
+
 class TestValidationsOffered:
     def test_a_run_declares_what_it_can_answer(self, store):
         assert "counterfactual" in _run()["validations"]

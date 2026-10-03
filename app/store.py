@@ -342,13 +342,16 @@ class Store:
         """
         import yaml
 
-        from backtest.api.config_file import HEADER
+        from backtest.api.config_file import HEADER, from_flat
 
         row = self.run(run_id)
         if row is None:
             raise KeyError(f"there is no run {run_id}")
         config = dict(row["config"])
         manifest = row.get("manifest") or {}
+        # The column first, then the manifest it was lifted out of. A row saved before the
+        # column existed still carries the fingerprint inside its manifest, and recovering
+        # it beats refusing a run that can in fact be identified.
         fingerprint = row.get("fingerprint") or manifest.get("run_id") or ""
         if not fingerprint:
             raise ValueError(
@@ -356,10 +359,11 @@ class Store:
                 f"stored, so a file written from it could not be checked against the run "
                 f"it came from. Re-run the configuration to get one"
             )
-        # `name` is the run's label and `max_concurrent` sits beside the engine; both are
-        # part of the configuration and neither is a strategy choice.
-        body = yaml.safe_dump({k: v for k, v in config.items() if v is not None},
-                              sort_keys=False, allow_unicode=False, default_flow_style=None)
+        # Reshaped into the document's blocks by the same module that reads them back.
+        # Dumping the stored flat form instead would write a file this system could not
+        # read -- which is what it did until a test ran the export through run_from.
+        body = yaml.safe_dump(from_flat(config), sort_keys=False, allow_unicode=False,
+                              default_flow_style=None)
         target = Path(path)
         target.write_text(
             HEADER.format(path=target.name, fingerprint=fingerprint,
