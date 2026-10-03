@@ -38,6 +38,7 @@ import pandas as pd
 
 from backtest.core.actions import Action
 from backtest.core.config import BacktestConfig
+from backtest.core.dataview import DataView
 from backtest.execution.costs import check_tradable, execute
 from backtest.data.options.chain import ChainSource
 from backtest.data.market import MarketData
@@ -46,6 +47,7 @@ from backtest.signals.review import Add, Close, PositionView, Reduce
 from backtest.signals.strategy import ExitRule
 from backtest.engine.strategy import Strategy
 from backtest.core.errors import InvariantError, StartupError
+from backtest.core.invariants import check_all as check_invariants
 from backtest.core.run_log import EventKind, EventLog
 from backtest.accounting.tradebook import (
     EventDrivenResult,
@@ -236,7 +238,19 @@ class EventDrivenEngine:
             # 5  mark to market
             quotes = self._quotes(day, ledger.positions)
             snap = ledger.snapshot(day, quotes, self.market.spot(day))
+            # Two layers of checking, deliberately. The ledger's identity is about money
+            # (equity = opening + realised − fees + unrealised); the invariant set is
+            # about state (cash non-negative, nothing expired still held, equity equal to
+            # what is actually held). A bug can satisfy one and break the other.
             ledger.check_invariant(snap)
+            check_invariants(
+                when=day,
+                cash=snap.cash,
+                equity=snap.equity_mid,
+                position_value=snap.option_value_mid,
+                stock_value=snap.stock_value,
+                contracts=[p.contract for p in ledger.positions],
+            )
             snapshots.append(snap)
             self._last_equity = snap.equity_mid
             self._peak_equity = max(self._peak_equity, snap.equity_mid)
@@ -493,6 +507,8 @@ class EventDrivenEngine:
             day=day, chain=pd.DataFrame(), spot=self.market.spot(day).or_else(float("nan")),
             equity=self._last_equity, cash=ledger.cash, positions=len(ledger),
             drawdown=self._drawdown, _view=self.signals.on(day),
+            data=DataView.at(day, market=self.market, signals=self.signals,
+                             chain=self.chain),
         )
 
     def _review_action(self, strategy, ctx, pos, trade, quotes, day):
@@ -551,6 +567,11 @@ class EventDrivenEngine:
             day=day, chain=chain, spot=self.market.spot(day),
             equity=self._last_equity, cash=ledger.cash, positions=len(ledger),
             drawdown=self._drawdown, _view=self.signals.on(day),
+            # Cut at the **decision** day, not the execution day. The chain above is the
+            # execution day's on purpose; everything a plan reads through ctx.data is the
+            # decision day's, so a plan cannot use the fill day's move to pick a strike.
+            data=DataView.at(day, market=self.market, signals=self.signals,
+                             chain=self.chain),
         )
         try:
             plan = strategy.plan(ctx)

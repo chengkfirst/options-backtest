@@ -51,8 +51,15 @@ class TimeConventions:
 class CostConfig:
     """Cost assumptions. Shared by both engines; these must not diverge."""
 
-    #: Where the fill sits between mid and the adverse side: 0 = mid,
-    #: 1 = fully adverse (pay the ask, receive the bid).
+    #: Where the fill sits relative to the mid, as a multiple of the half-spread.
+    #: 0 = the mid, 1 = fully adverse (pay the ask, receive the bid), and **above 1 is
+    #: worse than the ask** — the architecture document's λ.
+    #:
+    #: λ > 1 is not a pessimism knob for its own sake. It is the sensitivity test the
+    #: document names as one of the five things that move results most: a strategy that
+    #: only survives at the mid survives nothing, and one that holds at λ = 1.5 has room
+    #: for a bad fill. The cap of 3 exists because beyond it the "fill" is no longer
+    #: related to the quote it came from.
     adverse_fraction: float = 1.0
     commission_per_contract: float = 0.65
     min_commission_per_order: float = 1.00
@@ -64,8 +71,10 @@ class CostConfig:
 
     def __post_init__(self) -> None:
         require(
-            0.0 <= self.adverse_fraction <= 1.0,
-            f"adverse_fraction must lie between 0 and 1, got {self.adverse_fraction}",
+            0.0 <= self.adverse_fraction <= 3.0,
+            f"adverse_fraction (the document's λ) must lie between 0 and 3, got "
+            f"{self.adverse_fraction}. Above 1 is worse than the ask, which is the "
+            f"point; above 3 the fill no longer relates to the quote",
         )
         require(self.max_relative_spread > 0, "max_relative_spread must be positive")
         for name in (

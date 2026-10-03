@@ -238,8 +238,51 @@ r.scenarios()        # historical scenario replay
 r.excursion()        # the MFE / MAE distribution, with **censoring detection**
 r.equity_metrics()   # return, drawdown, Sharpe, capital used
 r.events             # run events: selection failures, untradable, deferrals, dropped candidates
-r.manifest()         # configuration, provenance and dependency versions (what makes it reproducible)
+r.manifest()         # the run_id, the commit, the data version, the config, provenance
 ```
+
+## Before refining anything, run the baselines
+
+```python
+# skip (each random draw is a full backtest)
+from backtest.research.baselines import report
+
+r = run(symbol="QQQ", start="2022-01-01", end="2023-12-31",
+        entry="close < sma_20 * 0.98",
+        exit={"hold_days": 20, "take_profit": 0.8, "stop_loss": 0.4, "dte_floor": 7},
+        engine="event_driven", sizing={"method": "risk_pct", "risk_pct": 0.02})
+
+print(report(r.baselines(draws=50), synthetic=r.provenance()["all_synthetic"]))
+```
+
+Two comparisons, and they ask different questions:
+
+- **a delta-equivalent position in the underlying** — if shares with the same entry
+  exposure beat the option, the option added nothing, and the work spent on selection and
+  exit levels was spent on a worse instrument
+- **random entries with the same structure** — the same contract rules, sizing and exits,
+  on dates drawn at random. The result is a **percentile in a distribution**, never a
+  single draw: a strategy at the 60th percentile of random has found nothing
+
+Run these first. Tuning a take-profit level on a strategy that cannot beat random entries
+is work on a number that does not matter.
+
+## What is each slot worth
+
+```python
+# skip (one extra backtest per slot)
+from backtest.research.ablation import report
+
+print(report(r.ablate()))
+```
+
+Each slot switched off in turn, the rest fixed. A slot whose contribution is small is a
+parameter you are tuning for nothing.
+
+It **refuses** the stop-loss ablation under `risk_pct` sizing unless you accept the joint
+reading, because removing the stop also changes the size — `size = risk budget / stop
+distance`. Two variables moved, so the difference cannot be attributed to one. Ablate with
+fixed sizing for a clean reading.
 
 The **distribution** of per-trade P&L matters far more than the mean. An option buyer has a
 low win rate, positive skew and fat tails: 30% winners and profitable, or 60% winners and
@@ -337,6 +380,9 @@ The shape of the modules that do exist:
 
 ```
 core/       maybe.py     values that may be absent — no bare None / NaN / 0
+            dataview.py  every read cut at as_of; reading the future raises
+            invariants.py the five that hold on every day of every run
+            run_id.py    the hash of config, commit, data and settings
             types.py     ContractId, TradeRecord, exit reasons and their precedence
             actions.py   the nine-action vocabulary, and which six are executable
             slots.py     the seven slots: what each decides in a trade (the UI's source)
@@ -354,7 +400,9 @@ execution/  costs.py       buy at the ask, sell at the bid, never the mid
 engine/     loop.py        day by day        vectorized.py  screening
 accounting/ ledger.py      the accounting identity checked every day
             attribution.py the greeks split, with the residual as a diagnostic
-research/   excursion.py   MFE / MAE, with censoring detection
+research/   baselines.py   is it the signal, the structure, or the drift
+            ablation.py    what each slot is worth, with the coupling refused
+            excursion.py   MFE / MAE, with censoring detection
             events.py      event studies, with the unconditional baseline
             tradeoff.py    the moneyness × tenor surface from the day's real chain
             anomaly.py     eight rules that stay silent when nothing fires

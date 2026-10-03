@@ -68,9 +68,12 @@ def check_tradable(bid, ask, costs: CostConfig) -> Tradability:
 def fill_price(bid: float, ask: float, side: Side, costs: CostConfig) -> float:
     """The fill price.
 
-    ``adverse_fraction`` of 0 takes the mid, 1 takes the adverse side, and values
-    in between interpolate. Slippage is added on top, always in the direction
-    **against the order**.
+    ``adverse_fraction`` is the document's λ: 0 takes the mid, 1 takes the adverse side
+    (pay the ask, receive the bid), and **above 1 is worse than the ask**. Slippage is
+    added on top, always in the direction **against the order**.
+
+    Extrapolating past the quote is deliberate. A strategy whose edge survives only at
+    the mid has no edge; testing at λ = 1.5 is how much of it survives a bad fill.
     """
     mid = (bid + ask) / 2.0
     adverse = ask if side is Side.BUY else bid

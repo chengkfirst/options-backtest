@@ -265,19 +265,45 @@ class Result:
 
     def manifest(self) -> dict[str, Any]:
         """Configuration, provenance and dependency versions — what makes the result
-        re-executable."""
+        re-executable — and the ``run_id`` that identifies this exact combination.
+
+        The ``run_id`` is the hash of the four things the architecture document says
+        determine a result: the strategy config, the code commit, the data version and
+        the run settings. It answers the question a counter cannot: **have I run this
+        exact thing before.** A dirty working tree shows up as ``+dirty`` on the commit,
+        because a result from uncommitted code cannot be reproduced from the commit alone.
+        """
+        from backtest.core.run_id import code_version, run_id
+
+        strategy = {
+            "name": self.raw.strategy.name,
+            "entry": self.raw.strategy.entry.name,
+            "quantity": self.raw.strategy.quantity,
+            "select": (dataclasses.asdict(self.raw.strategy.select)
+                       | {"right": self.raw.strategy.select.right.value}
+                       if not callable(self.raw.strategy.select) else "<callable>"),
+            "exit": dataclasses.asdict(self.raw.strategy.exit),
+            "sizing": dataclasses.asdict(self.raw.strategy.sizing),
+            "plan": self.raw.strategy.plan is not None,
+            "review": self.raw.strategy.review is not None,
+        }
+        settings = self.raw.config.describe()
+        provenance = self.provenance()
+        # The data version: with a real source this is its snapshot id. On the synthetic
+        # chain it is the generator's parameters, because those are what decide the
+        # prices — calling it "synthetic" alone would hash two different chains alike.
+        data_version = ("synthetic:" + str(sorted(settings.get("synthetic", {}).items()))
+                        if provenance.get("all_synthetic") else "vendor")
+        commit = code_version()
         return {
-            "strategy": {
-                "name": self.raw.strategy.name,
-                "entry": self.raw.strategy.entry.name,
-                "quantity": self.raw.strategy.quantity,
-                "select": dataclasses.asdict(self.raw.strategy.select)
-                | {"right": self.raw.strategy.select.right.value},
-                "exit": dataclasses.asdict(self.raw.strategy.exit),
-            },
-            "config": self.raw.config.describe(),
+            "run_id": run_id(strategy=strategy, settings=settings,
+                             data_version=data_version, commit=commit),
+            "code": commit,
+            "data_version": data_version,
+            "strategy": strategy,
+            "config": settings,
             "environment": R.environment(),
-            "provenance": self.provenance(),
+            "provenance": provenance,
         }
 
     # ---- presentation ----
@@ -480,6 +506,101 @@ class Result:
         bars = self._market.bars
         bench = bars.adjusted("close")
         return summary(self.raw.equity, self.trades, benchmark=bench)
+
+    def baselines(self, *, draws: int = 0) -> list:
+        """Separate skill from structure: would the underlying, or random timing, have
+        done as well?
+
+        Two comparisons, both from the architecture document:
+
+        - **a delta-equivalent position in the underlying** — if shares with the same
+          entry exposure beat the option, the option added nothing, and every hour spent
+          on selection and exit levels was spent on a worse instrument
+        - **random entries with the same structure** — the same contract rules, the same
+          sizing and the same exits, on dates drawn at random. If the signal cannot beat
+          that, what looks like timing is the drift plus the structure
+
+        ``draws`` is how many random draws to run; 0 skips the random baseline, because
+        each draw is a full backtest and the cost should be asked for, not imposed. One
+        draw is never enough and is refused — the comparison is a percentile in a
+        distribution, and a single run of it reads as a win or a loss that it cannot
+        support.
+
+        Run this **before** refining anything. Tuning a take-profit level on a strategy
+        that cannot beat random entries is work on a number that does not matter.
+        """
+        from backtest.research.baselines import delta_equivalent, random_entry
+
+        out = [delta_equivalent(self.trades, self._market.bars,
+                                multiplier=self.raw.config.contract.multiplier)]
+        if not draws:
+            return out
+
+        trades = self.trades
+        if trades.empty:
+            return out
+        sessions = list(self._market.sessions())
+        entries = len(trades)
+        strategy = self.raw.strategy
+        config, market, chain, signals = (self.raw.config, self._market, self._chain,
+                                          self._signals)
+        engine_name = getattr(self.raw, "ledger", None) is not None
+
+        def one_draw(dates) -> float:
+            """One run with the entry replaced by "enter on these dates".
+
+            Everything else is the same object the strategy used, so the only difference
+            is the timing — which is the whole point of the comparison.
+            """
+            from dataclasses import replace
+
+            wanted = set(dates)
+            rule = EntryRule("random", lambda view: view.day in wanted, ())
+            variant = replace(strategy, entry=rule)
+            if engine_name:
+                from backtest.engine.loop import EventDrivenEngine
+
+                result = EventDrivenEngine(market, chain, signals, config).run(variant)
+            else:
+                result = TradeTableEngine(market, chain, signals, config).run(variant)
+            return float(sum(r.net_pnl for r in result.records))
+
+        out.append(random_entry(
+            one_draw, n_entries=entries, sessions=sessions, draws=draws,
+            strategy_pnl=float(trades["net_pnl"].sum()),
+        ))
+        return out
+
+    def ablate(self, slots=None, *, accept_coupled: bool = False) -> list:
+        """What each slot is worth: run again with one switched off, and compare.
+
+        ``slots`` defaults to every ablatable slot. A slot the architecture defines but
+        that cannot be ablated yet raises with the reason rather than reporting a
+        contribution of zero, which would be a wrong answer rather than no answer.
+
+        The stop-loss ablation is refused under ``risk_pct`` sizing unless
+        ``accept_coupled=True``, because removing the stop also changes the position size
+        — ``size = risk budget / stop distance``. Two variables moved, so the difference
+        cannot be attributed to the stop. Ablate with fixed sizing for a clean reading.
+        """
+        from backtest.research.ablation import NEUTRAL, ablate as _ablate
+
+        wanted = list(slots) if slots is not None else sorted(NEUTRAL)
+        market, chain, signals, config = (self._market, self._chain, self._signals,
+                                          self.raw.config)
+        event_driven = getattr(self.raw, "ledger", None) is not None
+
+        def run_one(variant) -> tuple[float, int]:
+            if event_driven:
+                from backtest.engine.loop import EventDrivenEngine
+
+                result = EventDrivenEngine(market, chain, signals, config).run(variant)
+            else:
+                result = TradeTableEngine(market, chain, signals, config).run(variant)
+            return float(sum(r.net_pnl for r in result.records)), len(result.records)
+
+        return [_ablate(self.raw.strategy, slot, run_one, accept_coupled=accept_coupled)
+                for slot in wanted]
 
     def cost_sensitivity(self, multiples=(1.0, 2.0, 3.0)):
         """Does it survive costs doubling? Live costs above backtest costs is the

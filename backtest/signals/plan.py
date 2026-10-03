@@ -112,10 +112,15 @@ class Plan:
 class Context:
     """Everything visible at the moment of deciding.
 
-    **All of it stops at the decision day's close** — tomorrow is not visible. The
-    chain is the execution day's (the contract is only truly settled when the order
-    fills on T+1), while the signals and portfolio state are the decision day's;
-    see ``selection.rules.enrich_chain``.
+    **All of it stops at the decision day's close** — tomorrow is not visible. The chain
+    is the execution day's (the contract is only truly settled when the order fills on
+    T+1), while the signals and portfolio state are the decision day's; see
+    ``signals.contracts.enrich_chain``.
+
+    That split used to be held by construction alone: the engine built the right objects
+    and nothing stopped a plan from reaching past them. ``ctx.data`` is a
+    :class:`~backtest.core.dataview.DataView` cut at the decision day, so a read of
+    tomorrow now raises instead of succeeding quietly.
     """
 
     day: date
@@ -133,6 +138,12 @@ class Context:
     #: The current drawdown (negative, e.g. -0.08). Brakes and reductions read this.
     drawdown: float
     _view: Any = None
+    #: The data view, cut at the decision day. ``ctx.data`` is how a plan reads anything
+    #: the other fields do not already hold — and a read past the decision day **raises**
+    #: rather than returning a number from the future. The fields above are the common
+    #: reads kept to hand; this is everything else, with the cut enforced rather than
+    #: assumed.
+    data: Any = None
 
     def signal(self, name: str, default: float | None = None) -> float:
         """Read a signal for the day.

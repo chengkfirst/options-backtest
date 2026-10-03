@@ -323,7 +323,74 @@ Of these seven, **none is enforced by a tool yet** — see requirements.md 1.28 
 
 ---
 
-## 10. Maintenance
+## 10. Future topics · the systems still to build
+
+> From the architecture document. These are **systems**, not questions — each one is work
+> before it is research. They are here rather than in `requirements.md` because each is
+> blocked on something concrete, and the trigger is what decides when it stops being
+> future.
+>
+> The rule from section 8 applies: anything in group 1 (a realism assumption) is built
+> conservatively and only tested for sensitivity. None of these is ever tuned for return.
+
+### 10.1  Blocked on data, not on effort
+
+| Topic | What it unlocks | Blocked on |
+|---|---|---|
+| **Intraday snapshots and a decision latency** | The document's timing rule: the signal at snapshot t, the fill at t plus a latency. Today's daily close with T+1 execution holds the principle at one-day resolution and cannot express "signal 15:45, fill 15:50" | intraday option quotes. Until then every reaction time is a day, and `check_frequency` is daily by necessity rather than by choice |
+| **An IV surface** | Skew and term structure as features, so Setup and contract selection can read them | a real chain. Moot on a synthetic one whose IV is constant across every strike |
+| **Point-in-time alignment** | An `available_at` on every record, as-of queries, versioned revisions. The DataView enforces the cut it can see; it cannot enforce one the data does not carry | knowing how the vendor revises, which needs the vendor |
+| **A market-rule layer** | Rejecting orders that break trading hours, halts, tick sizes, position limits or borrow. **Principle 2 is not held in Layer 4 without it** | halt and tick-size history |
+| **Capacity** | How much money the strategy holds: a participation cap and return decay as capital grows | option volume, which the synthetic chain does not have |
+| **Earnings and event exposure** | Splitting results by whether a trade was held through an event. A long option through earnings behaves very differently | a point-in-time earnings calendar |
+
+### 10.2  Blocked on Layer 0, not on data
+
+| Topic | What it unlocks | Blocked on |
+|---|---|---|
+| **The event bus** | Layers communicating only by events, and a fill traceable back through fill → order → signal → component | nothing but the work. **This is the single largest unlock**: the three rows below all wait on it |
+| **The component protocol and a variant registry** | A slot as a registered component with a parameter schema and a version, so a run differs from its baseline in one slot alone and the change history of the strategy is auditable | the event bus, for `on_event` to receive from |
+| **Variant swap** | The second of the document's research tools. Ablation is built; swapping one slot for a different registered variant is not | the registry |
+| **Attribution by component** | Which slot opened, sized, reduced or closed each part of a trade. The action envelope already carries `component_id`; nothing fills it | the protocol |
+| **A shared trade context** | Slots influencing each other through a per-trade record instead of not at all, which is what makes the seven genuinely separate | the protocol, plus the open decision in 10.4 |
+
+### 10.3  Blocked on nothing — the next things to build
+
+| Topic | What it unlocks | Note |
+|---|---|---|
+| **Shadow tracking** | Keeping a closed trade's contract quoted for a window afterwards, which is what counterfactual exits need. Without prices after the exit, stop and target research is guesswork | the most valuable of the three, because it unblocks the exit research the whole of section 3 is waiting for |
+| **Counterfactual exits** | Replaying each closed trade under an alternative exit, to measure money saved or given up. In-sample by construction, so anything it suggests must be confirmed out of sample | shadow tracking |
+| **Validation: walk-forward, purged k-fold, block bootstrap** | Section 9's protocol enforced rather than remembered. A locked hold-out, confidence intervals instead of point estimates, a minimum trade count | nothing |
+| **An ExperimentTracker** | Trials counted across an idea, which the Deflated Sharpe needs. `run_id` now identifies a run uniquely and `app/store.py` stores runs immutably — the two halves exist and are not joined | nothing |
+| **Interaction tests** | Varying two slots jointly and comparing against the sum of the single-slot effects. A large gap means the two have to be researched together | ablation exists, so this is the natural next step |
+| **A parameter surface** | Whether a result sits on a plateau or a spike. `research/sweep.py` records the trials; nothing plots the surface or measures the neighbourhood | nothing |
+
+### 10.4  Open decisions · not work, but choices
+
+> The document ends on six of these, and none can be settled by the platform. Each one
+> changes what gets built, so leaving them open is a cost that compounds.
+
+| Decision | Why it cannot wait indefinitely |
+|---|---|
+| **Historical quote granularity** | Daily close against intraday snapshots decides how realistic everything downstream can be. With daily data only, fills have to be modelled more pessimistically and the bias stated |
+| **The signal snapshot time and the fill latency** | Must match how orders will actually be placed, so it is a trading decision before it is a modelling one |
+| **`check_frequency` for the Open-state slots** | How fast a stop can react, in backtest and live alike. It must be identical in both |
+| **The hold-out period and the minimum trade count** | Defines when a research result is allowed to count. Choosing it **after** seeing results is the commonest way to fool yourself, which is why section 9 puts it first |
+| **Hedge instruments** | Shares, index futures (ES, MES), options, or a mix. It decides what Layers 4 and 5 must support, so building the Hedge slot before deciding would build the wrong one |
+| **The underlying universe** | Index ETFs only, or single stocks too. Single stocks add earnings handling, far more contracts, wider spreads and borrow constraints — a different data bill and a different Layer 1 |
+
+### 10.5  Deliberately never
+
+| | Why |
+|---|---|
+| A REST API, a job queue, auth | Platform work with no research value for one user. The SDK and the local web app cover everything a single researcher does |
+| A live adapter and reconciliation | It needs live trading to exist first, and the strategy is not settled |
+| Statistical regimes (HMM, Bayesian) | Three or four complete cycles in ten years. Their states are hard to tell from noise and have no names, so there is no way to explain why a day counts as high volatility |
+| Multi-leg and a margin model | Architectural: one contract per trade row. Worth doing together, and only when selling is actually on the table |
+
+---
+
+## 11. Maintenance
 
 This list is **maintained by hand** and cannot be computed the way `tools/status.py` is.
 
