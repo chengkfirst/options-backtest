@@ -16,13 +16,16 @@ for exactly this reason: with the stop at -50%, a trade's real risk is half the 
 and treating it as a total loss halves the position. Set the stop and the size
 independently and the computed position no longer matches the risk you think you took.
 
-The engine's ``_loss_fraction`` is where that division happens.
+:func:`loss_fraction` is that divisor, and :func:`contracts_for` is where the
+division happens. The engine fetches the premium and the volatility and calls them; it no
+longer holds the rule.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from backtest.core.errors import StartupError
 from backtest.core.types import require
 
 
@@ -69,3 +72,64 @@ class Sizing:
         require(self.notional > 0, "notional must be positive")
         require(self.target_vol > 0, "target_vol must be positive")
         require(self.max_contracts >= 1, "max_contracts must be at least 1")
+
+
+def loss_fraction(stop_loss: float | None) -> float:
+    """What fraction of the premium a trade loses in the worst case.
+
+    A stop of 0.5 means out at -50%, so the real risk is half the premium. Only with no
+    stop is it the whole premium (a buyer's maximum loss).
+
+    **This is where "size = risk budget / stop distance" lands in the code.** Set the
+    stop and the size independently and the computed position no longer matches the risk
+    you think you took.
+    """
+    if stop_loss is None or not 0 < stop_loss <= 1:
+        return 1.0
+    return float(stop_loss)
+
+
+def contracts_for(
+    sizing: Sizing,
+    *,
+    equity: float,
+    premium: float,
+    stop_loss: float | None,
+    volatility: float | None = None,
+) -> int:
+    """How many contracts the method asks for. Pure arithmetic.
+
+    It takes numbers rather than the engine's objects on purpose: the sizer can then be
+    tested on its own, instead of only through a whole backtest. Fetching the premium and
+    the volatility is the engine's job, because that is data access; dividing the budget
+    is this layer's.
+
+    ``premium`` is the cost of one contract, multiplier included. ``volatility`` is
+    required only by ``scale_by_vol``; passing ``None`` there returns 0 rather than
+    inventing a figure.
+
+    Zero contracts means no trade. **It is never rounded up to 1**, which would quietly
+    turn "2% at risk" into "8% at risk".
+    """
+    if sizing.method == "fixed":
+        return min(sizing.contracts, sizing.max_contracts)
+    if premium <= 0:
+        return 0
+
+    budget_at_risk = equity * sizing.risk_pct / loss_fraction(stop_loss)
+
+    if sizing.method == "risk_pct":
+        budget = budget_at_risk
+    elif sizing.method == "fixed_notional":
+        budget = sizing.notional
+    elif sizing.method == "scale_by_vol":
+        if volatility is None:
+            return 0
+        # Buy less when the underlying is more volatile. **This is not a portfolio
+        # volatility target** — that would need a forecast of portfolio volatility, which
+        # for options has to come from the greeks. The name says what it actually does.
+        budget = budget_at_risk * (sizing.target_vol / max(volatility, 1e-6))
+    else:
+        raise StartupError(f"unimplemented sizing method {sizing.method}")
+
+    return min(int(budget // premium), sizing.max_contracts)

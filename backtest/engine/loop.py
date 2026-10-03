@@ -49,6 +49,7 @@ from backtest.core.errors import InvariantError, StartupError
 from backtest.core.run_log import EventKind, EventLog
 from backtest.accounting.tradebook import trades_frame
 from backtest.accounting.ledger import Ledger, Position, Snapshot
+from backtest.portfolio.positioning import contracts_for, loss_fraction
 from backtest.portfolio.scenarios import aggregate_greeks
 from backtest.signals.contracts import select_contract
 from backtest.signals.registry import SignalSet
@@ -706,85 +707,58 @@ class EventDrivenEngine:
             dte_floor=plan.dte_floor if plan.dte_floor is not None else base.dte_floor,
         )
 
-    def _plan_size(self, plan: Plan, contract, execute_on, strategy) -> int:
-        """Compute the quantity from whichever sizing the plan gave. With none of the
-        three, fall back to the strategy's method.
+    def _premium(self, contract, execute_on) -> float:
+        """One contract's cost at the execution day's ask, multiplier included.
 
-        Zero contracts means no trade — **never rounded up to 1**, which would
-        quietly turn "1.5% at risk" into "6% at risk".
+        Data access, which is why it is here and not in the sizer.
         """
+        frame = self.chain.series(contract, [execute_on])
+        if frame.empty:
+            return 0.0
+        return float(frame.iloc[0]["ask"]) * self.config.contract.multiplier
+
+    def _plan_size(self, plan: Plan, contract, execute_on, strategy) -> int:
+        """The quantity from whichever sizing the plan gave. With none of the three, fall
+        back to the strategy's method."""
         if plan.contracts is not None:
             return plan.contracts
         if plan.risk_pct is None and plan.notional is None:
             return self._size(strategy, None, contract, execute_on, execute_on)
 
-        frame = self.chain.series(contract, [execute_on])
-        if frame.empty:
-            return 0
-        premium = float(frame.iloc[0]["ask"]) * self.config.contract.multiplier
+        premium = self._premium(contract, execute_on)
         if premium <= 0:
             return 0
         budget = (plan.risk_pct * self._last_equity) if plan.risk_pct is not None else plan.notional
         return int(budget // premium)
 
     def _size(self, strategy, ledger, contract, day, execute_on) -> int:
-        """Compute the quantity from the configured sizing method.
+        """Fetch what the sizer needs, then let the portfolio layer do the arithmetic.
 
-        For a buyer the maximum loss is the premium, so risk per trade divides
-        directly. Any method computing to 0 means no trade — **never rounded up to
-        1**, which would quietly turn "2% at risk" into "8% at risk".
+        The split matters: the engine knows how to reach the chain and the volatility
+        series, and the sizer knows the rule. Keeping the rule here made it reachable
+        only through a full backtest.
         """
         sizing = strategy.sizing
         if sizing.method == "fixed":
-            return min(sizing.contracts, sizing.max_contracts)
+            return contracts_for(sizing, equity=0.0, premium=1.0, stop_loss=None)
 
-        frame = self.chain.series(contract, [execute_on])
-        if frame.empty:
-            return 0
-        premium = float(frame.iloc[0]["ask"]) * self.config.contract.multiplier
-        if premium <= 0:
-            return 0
-        equity = self._last_equity
-
-        if sizing.method == "risk_pct":
-            # **Size = risk budget / stop distance.** With the stop at -50%, a
-            # trade's real risk is half the premium, and treating it as a total loss
-            # halves the position. Only without a stop is it a total loss.
-            budget = equity * sizing.risk_pct / self._loss_fraction(strategy)
-        elif sizing.method == "fixed_notional":
-            budget = sizing.notional
-        elif sizing.method == "scale_by_vol":
+        volatility = None
+        if sizing.method == "scale_by_vol":
             vol = self.market.volatility(day)
             if vol.is_missing:
                 self.events.record(EventKind.CANDIDATE_DROPPED, day,
                                    f"scale_by_vol needs a volatility, unavailable "
                                    f"that day: {vol.reason}")
                 return 0
-            # Buy less when the underlying is more volatile. **This is not a
-            # portfolio volatility target** — that would need a forecast of portfolio
-            # volatility, which for options has to come from the greeks. The name
-            # says what it actually does.
-            budget = (equity * sizing.risk_pct / self._loss_fraction(strategy)
-                      * (sizing.target_vol / max(vol.unwrap(), 1e-6)))
-        else:
-            raise StartupError(f"unimplemented sizing method {sizing.method}")
+            volatility = vol.unwrap()
 
-        return min(int(budget // premium), sizing.max_contracts)
-
-    def _loss_fraction(self, strategy) -> float:
-        """What fraction of the premium a trade loses in the worst case.
-
-        A stop of 0.5 means out at -50%, so the real risk is half the premium. Only
-        with no stop is it the whole premium (a buyer's maximum loss).
-
-        This is where "size = risk budget / stop distance" lands in the code — set
-        the two independently and the computed position no longer matches the risk
-        you think you took.
-        """
-        stop = strategy.exit.stop_loss
-        if stop is None or not 0 < stop <= 1:
-            return 1.0
-        return float(stop)
+        return contracts_for(
+            sizing,
+            equity=self._last_equity,
+            premium=self._premium(contract, execute_on),
+            stop_loss=strategy.exit.stop_loss,
+            volatility=volatility,
+        )
 
     @staticmethod
     def _already_queued(queue, contract) -> bool:

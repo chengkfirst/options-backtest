@@ -92,3 +92,66 @@ class TestLifecycle:
 
     def test_describe_is_serialisable_for_the_interface(self):
         describe().to_json()
+
+
+class TestPositioning:
+    """The sizer, now that it is arithmetic and can be tested without a backtest.
+
+    That is the point of extracting it: these cases were previously only reachable by
+    running a whole backtest and inferring the quantity from the trade log.
+    """
+
+    def _sizing(self, **kw):
+        from backtest.portfolio.positioning import Sizing
+        return Sizing(**kw)
+
+    def test_size_is_risk_budget_over_stop_distance(self):
+        """The coupling the whole project turns on. With the stop at -50%, a trade's real
+        risk is half the premium, so the position is twice what a total-loss assumption
+        would give."""
+        from backtest.portfolio.positioning import contracts_for
+
+        s = self._sizing(method="risk_pct", risk_pct=0.02)
+        tight = contracts_for(s, equity=100_000, premium=500, stop_loss=0.5)
+        total = contracts_for(s, equity=100_000, premium=500, stop_loss=None)
+        assert tight == 8 and total == 4
+
+    def test_never_rounds_up_to_one(self):
+        """Rounding a computed 0 up to 1 would quietly turn 2% at risk into far more."""
+        from backtest.portfolio.positioning import contracts_for
+
+        s = self._sizing(method="risk_pct", risk_pct=0.02)
+        assert contracts_for(s, equity=10_000, premium=50_000, stop_loss=1.0) == 0
+
+    def test_max_contracts_caps_every_method(self):
+        from backtest.portfolio.positioning import contracts_for
+
+        for method, extra in (("risk_pct", {}), ("fixed_notional", {"notional": 1e9}),
+                              ("scale_by_vol", {"target_vol": 0.2})):
+            s = self._sizing(method=method, risk_pct=0.9, max_contracts=5, **extra)
+            got = contracts_for(s, equity=1e9, premium=1.0, stop_loss=1.0, volatility=0.1)
+            assert got == 5, f"{method} ignored max_contracts"
+
+    def test_scale_by_vol_refuses_without_a_volatility(self):
+        """Returning 0 rather than inventing a figure: a missing volatility must not
+        become an arbitrary position."""
+        from backtest.portfolio.positioning import contracts_for
+
+        s = self._sizing(method="scale_by_vol", risk_pct=0.02, target_vol=0.20)
+        assert contracts_for(s, equity=100_000, premium=500, stop_loss=0.5) == 0
+
+    def test_scale_by_vol_buys_less_when_more_volatile(self):
+        from backtest.portfolio.positioning import contracts_for
+
+        s = self._sizing(method="scale_by_vol", risk_pct=0.02, target_vol=0.20)
+        calm = contracts_for(s, equity=100_000, premium=500, stop_loss=0.5, volatility=0.10)
+        wild = contracts_for(s, equity=100_000, premium=500, stop_loss=0.5, volatility=0.40)
+        assert calm > wild
+
+    def test_loss_fraction_treats_an_invalid_stop_as_a_total_loss(self):
+        """A stop outside (0, 1] is not a stop. Reading it as one would oversize."""
+        from backtest.portfolio.positioning import loss_fraction
+
+        assert loss_fraction(0.5) == 0.5
+        for bad in (None, 0.0, -0.2, 1.5):
+            assert loss_fraction(bad) == 1.0
