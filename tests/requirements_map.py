@@ -249,8 +249,13 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "physical delivery of shares",
                 "an in-the-money call settling to cash when the account should have "
                 "received shares",
-                not_built="settlement is to intrinsic in cash. Early exercise is flagged "
-                          "but never acted on, and there is no $0.01 threshold"),
+                not_built="settlement is to intrinsic in cash, **and says so where it "
+                          "happens**. Measured rather than assumed: the default "
+                          "days-to-expiry floor reaches an in-the-money expiry zero times "
+                          "over three years, and the only case that does comes from a "
+                          "close that failed -- already its own event. The error there is "
+                          "one overnight gap, not a bias on every trade. Early exercise is "
+                          "flagged and never acted on; there is no $0.01 threshold"),
     Requirement("4.2.reject", "4.2",
                 "Reject orders where the spread or open interest fails the limit, and "
                 "log every rejection",

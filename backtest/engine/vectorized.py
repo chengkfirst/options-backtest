@@ -513,6 +513,19 @@ class TradeTableEngine:
             f"{intrinsic:.2f}",
             str(contract),
         )
+        if itm:
+            # See the matching note in the event-driven engine: the approximation is named
+            # rather than replaced, because an in-the-money expiry does not happen at all
+            # under the default days-to-expiry floor.
+            shares = strategy.quantity * self.config.contract.multiplier
+            self.events.record(
+                EventKind.EARLY_EXERCISE_RISK, contract.expiry,
+                f"settled to intrinsic in cash, which is an approximation: these are "
+                f"physically settled, so a real account would have received {shares} "
+                f"shares at {contract.strike:.2f}, needed "
+                f"{contract.strike * shares:,.0f} in cash to take delivery, and carried "
+                f"them overnight",
+                str(contract))
         exit_quote = dict(entry_quote)
         exit_quote.update({"asof": contract.expiry, "underlying_price": s, "bid": intrinsic, "ask": intrinsic})
         return self._record(

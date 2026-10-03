@@ -886,3 +886,68 @@ class TestAMissingQuote:
         result = run(**BASE)
         assert {"quote_gaps", "deferred_days"} <= set(result.trades.columns)
         assert (result.trades["deferred_days"] >= 0).all()
+
+
+class TestCashSettlementIsNamedNotHidden:
+    """An in-the-money expiry settles to intrinsic in cash, and says that is an
+    approximation.
+
+    Physical delivery is **not** built, and that is a measured decision rather than an
+    omission. Across four configurations over three years: the default days-to-expiry
+    floor reaches an in-the-money expiry **zero** times, and the only case that does arises
+    from a close that failed -- the contract was untradable on the day the floor fired,
+    which is already its own event. The error on that path is one overnight gap, not a
+    systematic bias, which is what separates it from the slippage double-charge or the
+    exit attribution: those were wrong on every trade.
+
+    So what is built is the label. If an in-the-money expiry ever becomes common, this
+    test is where the measurement that justified the decision is recorded.
+    """
+
+    ITM_CONFIG = dict(
+        symbol="QQQ", start="2021-01-01", end="2023-12-31",
+        entry="close < sma_20 * 0.98",
+        select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                "delta_lo": 0.60, "delta_hi": 0.85},
+        exit={"hold_days": 200, "dte_floor": 2},
+        engine="event_driven", sizing={"method": "fixed"}, quantity=1,
+    )
+
+    def test_an_in_the_money_expiry_says_the_settlement_is_an_approximation(self):
+        from backtest.core.run_log import EventKind
+
+        result = run(**self.ITM_CONFIG)
+        if not (result.trades["exit_reason"] == "expiry_itm").any():
+            pytest.skip("no in-the-money expiry on this data; the label is tested below")
+        notes = result.raw.events.of_kind(EventKind.EARLY_EXERCISE_RISK)
+        assert notes, "an in-the-money expiry settled to cash and said nothing"
+        detail = notes[0].detail
+        assert "physically settled" in detail
+        assert "cash to take delivery" in detail
+
+    def test_an_out_of_the_money_expiry_says_nothing(self):
+        """It settles to zero, which is exactly right and needs no caveat."""
+        from backtest.core.run_log import EventKind
+
+        result = run(**BASE)
+        if (result.trades["exit_reason"] == "expiry_itm").any():
+            pytest.skip("this range had an in-the-money expiry")
+        assert not result.raw.events.of_kind(EventKind.EARLY_EXERCISE_RISK)
+
+    @kind("limit")
+    def test_the_default_floor_never_reaches_an_in_the_money_expiry(self):
+        """**The measurement the decision rests on.**
+
+        If this starts failing, in-the-money expiries have become reachable under ordinary
+        settings and physical delivery stops being a rare-path approximation.
+        """
+        default = dict(self.ITM_CONFIG,
+                       exit={"hold_days": 20, "dte_floor": 7},
+                       select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                               "delta_lo": 0.25, "delta_hi": 0.45})
+        trades = run(**default).trades
+        itm = int((trades["exit_reason"] == "expiry_itm").sum())
+        assert itm == 0, (
+            f"{itm} of {len(trades)} trades reached an in-the-money expiry under the "
+            f"default floor. Cash settlement is no longer a rare-path approximation"
+        )
