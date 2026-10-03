@@ -33,9 +33,13 @@ SKIP_DIRS = {".git", ".venv", "__pycache__", ".ipynb_checkpoints", "node_modules
 
 #: Non-ASCII characters that are *not* natural language and stay allowed:
 #: typography, maths, box drawing, arrows, and the status glyphs the CLI prints.
-#: Greek letters used as mathematical symbols (delta, sigma) are not language either.
+#: Greek letters used as mathematical symbols (delta, sigma) are not language either, and
+#: neither is an accent on a proper name — "López de Prado" is a citation in English text,
+#: not a second language. The accented Latin letters are listed rather than allowed by
+#: range, so adding one stays a deliberate act.
 ALLOWED = set("·—–…×÷±≈≤≥≠∞√∑→←↑↓⇒│─└├┌┐┘•◦○●✓✗⚠✅⚠️“”‘’°%‰"
-              "ΔΓΘΛΞΠΣΦΨΩαβγδεζηθικλμνξπρσςτυφχψω")
+              "ΔΓΘΛΞΠΣΦΨΩαβγδεζηθικλμνξπρσςτυφχψω"
+              "áàâäãéèêëíìîïóòôöõúùûüñçßÁÀÂÄÃÉÈÊËÍÌÎÏÓÒÔÖÕÚÙÛÜÑÇ")
 
 
 def _offending(text: str) -> list[tuple[int, str]]:

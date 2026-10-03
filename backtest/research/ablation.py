@@ -210,3 +210,81 @@ def report(results) -> str:
     lines.append("A slot whose contribution is small is a parameter you are tuning for "
                  "nothing.")
     return "\n".join(lines)
+
+
+@dataclass(frozen=True, slots=True)
+class Interaction:
+    """Two slots varied together, against the sum of varying each alone."""
+
+    slot_a: str
+    slot_b: str
+    #: Each slot's contribution measured on its own.
+    alone_a: float
+    alone_b: float
+    #: What switching off both costs, measured in one run.
+    together: float
+
+    @property
+    def additive(self) -> float:
+        """What the joint effect would be if the two did not interact."""
+        return self.alone_a + self.alone_b
+
+    @property
+    def gap(self) -> float:
+        """How far the joint effect is from the sum of the parts."""
+        return self.together - self.additive
+
+    def verdict(self) -> str:
+        """The reading, with the threshold that makes a gap worth acting on.
+
+        The comparison is relative: a gap of 1,000 means something different against parts
+        summing to 2,000 than against parts summing to 200,000.
+        """
+        from backtest.core.thresholds import get
+
+        cut = get("additive_share")
+        scale = max(abs(self.additive), 1.0)
+        share = abs(self.gap) / scale
+        if share < cut:
+            read = (f"roughly additive at the {cut:.0%} cut, so the two can be researched "
+                    f"and tuned separately")
+        elif self.gap > 0:
+            read = ("**they reinforce each other**: together they are worth more than "
+                    "the sum, so tuning one at a time understates both")
+        else:
+            read = ("**they overlap**: together they are worth less than the sum, so "
+                    "tuning one at a time double-counts the same effect")
+        return (f"{self.slot_a} x {self.slot_b}: alone {self.alone_a:+,.0f} and "
+                f"{self.alone_b:+,.0f} (sum {self.additive:+,.0f}), together "
+                f"{self.together:+,.0f} — a gap of {self.gap:+,.0f} ({share:.0%}). {read}")
+
+
+def interaction(
+    strategy,
+    slot_a: str,
+    slot_b: str,
+    runner: Callable[[Any], tuple[float, int]],
+    *,
+    accept_coupled: bool = False,
+) -> Interaction:
+    """Whether two slots have to be researched together.
+
+    Four runs: the full strategy, each slot off alone, and both off. If switching off both
+    costs about what switching off each separately costs, the two are independent and can
+    be tuned one at a time. If it does not, tuning them separately is measuring the wrong
+    thing — and the document's research protocol says to finish with exactly this check.
+
+    The obvious pair to run is take profit against stop loss: they divide the same price
+    path between them, so an interaction is expected rather than surprising.
+    """
+    full, _ = runner(strategy)
+    off_a, _ = runner(neutralise(strategy, slot_a, accept_coupled=accept_coupled)[0])
+    off_b, _ = runner(neutralise(strategy, slot_b, accept_coupled=accept_coupled)[0])
+
+    both_strategy, _ = neutralise(strategy, slot_a, accept_coupled=accept_coupled)
+    both_strategy, _ = neutralise(both_strategy, slot_b, accept_coupled=accept_coupled)
+    off_both, _ = runner(both_strategy)
+
+    return Interaction(slot_a=slot_a, slot_b=slot_b,
+                       alone_a=full - off_a, alone_b=full - off_b,
+                       together=full - off_both)

@@ -76,6 +76,31 @@ def _lifecycle() -> list[str]:
     return lines
 
 
+def _thresholds() -> list[str]:
+    """Every number the system assumes, in the architecture document's four groups.
+
+    Printed because the alternative is that they live in call sites, where a judgement
+    ("a plateau") is indistinguishable from a measurement. The group decides what may be
+    done with each: a realism assumption is never optimised, a method choice is settled
+    before looking at results.
+    """
+    sys.path.insert(0, str(ROOT))
+    from backtest.core.thresholds import GROUPS, THRESHOLDS, get
+
+    lines = []
+    for group, rule in GROUPS.items():
+        members = [t for t in THRESHOLDS.values() if t.kind == group]
+        lines.append(f"\n  {group}  —  {rule}")
+        if not members:
+            lines.append("      (nothing: a strategy choice is never defaulted here)")
+            continue
+        for t in members:
+            current = get(t.name)
+            mark = " *changed*" if current != t.value else ""
+            lines.append(f"      {t.name:28s} {current!r:>8}{mark}   {t.decides[:58]}")
+    return lines
+
+
 def _requirements() -> list[str]:
     """Count the acceptance criteria in requirements.md.
 
@@ -124,6 +149,8 @@ def main() -> int:
     print("\n".join(_components()))
     print("\n[ lifecycle ]  settings the architecture leaves open")
     print("\n".join(_lifecycle()))
+    print("\n[ assumed numbers ]  what has been decided for you, and what may be done with it")
+    print("\n".join(_thresholds()))
     print("\n[ acceptance ]")
     print("\n".join(_requirements()))
     print("\n[ guards ]  the constraints a tool can check")

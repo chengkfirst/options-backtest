@@ -332,6 +332,7 @@ direction rather than a verdict.
 | 1.19 | **A DataView that cuts at `available_at`**, raising on an out-of-range access | done | `core/dataview.py`. Every read goes through a view cut at `as_of`, and a read past it **raises** rather than returning a number from the future. `ctx.data` in a plan is one of these. The document's `cross_section`, `panel` and `surface` raise NotImplementedError with the reason — one underlying per run, no feature graph, no surface on a constant-IV chain |
 | 1.20 | **Signal and fill never share a quote**: the signal at snapshot t, the fill at t plus a decision latency | partial | Held at daily resolution (T decides, T+1 fills). The plan's intraday form needs intraday option quotes |
 | 1.21 | **Illegal orders are rejected**: trading hours, halts, tick sizes, position limits, borrow | missing | Nothing checks any of these, so principle 2 ("correctness by mechanism") is not held in Layer 4. A future topic: research-questions 10.1 |
+| 1.30 | **Every assumed number is visible and grouped**, with the document's rule for what may be done with each | done | `core/thresholds.py`. 17 thresholds in the register's four groups; nothing reads a literal, every verdict names the cut it used, and `tools/status.py` prints the table with anything overridden marked. Group 3 (strategy choices) holds nothing, and a test asserts it stays that way |
 | 1.29 | **The document's full invariant set**, checked every day: cash non-negative, position equals cumulative fills, equity equals what is held, daily P&L equals the equity change less flows, nothing expired still held | done | `core/invariants.py`, called from the engine's marking step beside the ledger's own identity. Two layers on purpose: the ledger's is about money, this is about state, and a bug can satisfy one and break the other |
 | 1.22 | **A `run_id` hash over config, code commit, data snapshot and run settings** | done | `core/run_id.py`. The hash of the strategy config, the commit, the data version and the run settings, in `result.manifest()`. Key order and volatile fields (a run name, a note) are ignored so a repeat does not look like a new trial; a dirty tree shows as `+dirty`, because a result from uncommitted code cannot be reproduced from the commit alone |
 | 1.23 | **The same strategy code runs in backtest, paper and live**, with only the feed and the broker swapped | missing | There is no SimBroker interface, so nothing proves it |
@@ -382,10 +383,17 @@ direction rather than a verdict.
 
 ---
 
-## The explicit placeholders (not built, and not soon)
+## The explicit placeholders (not built, with the reason)
 
-These were not forgotten; they are **deliberately not built**, for the reason given. The
-interface should say so too.
+These were not forgotten. Each is not built for the reason given, and **"not now" is the
+claim — not "never"**: the condition that would change it is in research-questions section
+10. The interface says so too, from the same definitions rather than a second list.
+
+A note on who decides: the reasons below are about **prerequisites**, not preferences. A
+missing margin model really does make a naked short call's number wrong, and a constant-IV
+chain really does make a fitted surface meaningless. Where the reason is a judgement rather
+than a prerequisite it says so — "rule-based is sufficient" is one, and it is a judgement
+about this data, not about the method.
 
 | The item | Why not yet |
 |---|---|
@@ -393,7 +401,7 @@ interface should say so too.
 | A margin model | the hard prerequisite for selling, and it only makes sense built together with multi-leg |
 | Naked short calls | with no margin model any number given would be wrong — so it is refused rather than approximated |
 | Fitting or interpolating an IV surface | pointless on a synthetic chain whose IV is constant. It waits for real data |
-| Statistical regimes (HMM / Bayesian) | rule-based is sufficient and harder to overfit; with three or four complete cycles in ten years, a statistical method is dangerous here |
+| Statistical regimes (HMM / Bayesian) | **a judgement, not a prerequisite**: with three or four complete cycles in ten years a fitted state is hard to tell from noise and cannot be explained, so rules are preferred *on this data*. See research-questions 10.5 for what would change it |
 | Early exercise before expiry | assignment at expiry is modelled. Early exercise matters little to a buyer and a great deal to a seller — so it goes with selling |
 | Delisting / survivorship bias | QQQ and SPY are unaffected. It waits for a different underlying |
 | Point-in-time data versioning | it waits for your data, so the design can follow how your vendor actually revises |

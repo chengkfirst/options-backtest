@@ -39,6 +39,7 @@ import pandas as pd
 from backtest.core.actions import Action
 from backtest.core.config import BacktestConfig
 from backtest.core.dataview import DataView
+from backtest.core.thresholds import get as _threshold
 from backtest.execution.costs import check_tradable, execute
 from backtest.data.options.chain import ChainSource
 from backtest.data.market import MarketData
@@ -151,6 +152,7 @@ class EventDrivenEngine:
         enforce_capital: bool = True,
         limits=None,
         brake=None,
+        shadow_days: int | None = None,
     ) -> None:
         self.market = market
         self.chain = chain
@@ -166,6 +168,18 @@ class EventDrivenEngine:
         #: position — reducing is headwind's job, which is not built.
         self.limits = limits
         self.brake = brake
+        #: How many trading days to keep quoting a contract **after** its trade closed.
+        #:
+        #: This is the one thing counterfactual exit research cannot do without, and the
+        #: one thing that cannot be reconstructed afterwards: once a run has finished,
+        #: there is no record of what the contract did after the exit, so "would a wider
+        #: stop have worked" is unanswerable. Collecting it costs one chain query per
+        #: closed trade per day and changes no result.
+        #:
+        #: 0 turns it off. The default is on because the asymmetry is total: the cost of
+        #: collecting it is small and the cost of not having it is a study you cannot run.
+        self.shadow_days = (shadow_days if shadow_days is not None
+                            else int(_threshold("shadow_days")))
 
     # ── guards ────────────────────────────────────────────
     def _guard(self, strategy: Strategy) -> None:
@@ -216,6 +230,9 @@ class EventDrivenEngine:
         self._peak_equity = float(self.config.notional_capital)
         self._drawdown = 0.0
         paths: list[dict] = []
+        shadow: list[dict] = []
+        #: trade_id -> what is needed to keep quoting a contract after its trade closed.
+        shadowing: dict[int, dict] = {}
         self._brake_state = "normal"
         self._last_greeks = None
         self._closed_pnl = records          # the same list, referenced not copied
@@ -227,6 +244,7 @@ class EventDrivenEngine:
                 closed = self._execute(intent, ledger, open_trades, day)
                 if closed is not None:
                     records.append(closed)
+                    self._start_shadow(closed, shadowing)
 
             # 4  settle expiries
             for pos in list(ledger.positions):
@@ -234,6 +252,11 @@ class EventDrivenEngine:
                     rec = self._settle(pos, ledger, open_trades, day)
                     if rec is not None:
                         records.append(rec)
+                        # An expiry leaves nothing to shadow: the contract is gone, and
+                        # there is no later price for it to have. Recording an empty
+                        # shadow would make "no data" indistinguishable from "it never
+                        # moved".
+                        self._start_shadow(rec, shadowing, expired=True)
 
             # 5  mark to market
             quotes = self._quotes(day, ledger.positions)
@@ -272,6 +295,7 @@ class EventDrivenEngine:
                         f"(drawdown {self._drawdown:.1%})")
                     self._brake_state = new_state
             self._track_excursions(ledger, open_trades, quotes, day, paths)
+            self._track_shadow(shadowing, day, shadow)
 
             # 6-7  signals -> the strategy
             view = self.signals.on(day)
@@ -347,7 +371,7 @@ class EventDrivenEngine:
                     queue.append(intent)
 
         return EventDrivenResult(
-            paths=tuple(paths),
+            paths=tuple(paths), shadow=tuple(shadow),
             records=tuple(records), snapshots=tuple(snapshots), greeks=tuple(greeks_daily),
             config=self.config, strategy=strategy, events=self.events, ledger=ledger,
         )
@@ -409,6 +433,71 @@ class EventDrivenEngine:
                 "delta": float(row["delta"]) if row is not None and "delta" in row else float("nan"),
                 "tag": trade.tag,
             })
+
+    def _start_shadow(self, record, shadowing: dict, *, expired: bool = False) -> None:
+        """Begin following a contract after its trade closed.
+
+        Nothing is followed when the window is 0, or when the contract expired — an
+        expired contract has no later price, and an empty shadow would make "no data"
+        look like "it never moved".
+        """
+        if self.shadow_days <= 0 or expired:
+            return
+        shadowing[record.trade_id] = {
+            "contract": record.contract,
+            "entry_price": record.entry_price,
+            "exit_date": record.exit_date,
+            "exit_price": record.exit_price,
+            "direction": 1 if record.quantity > 0 else 1,
+            "left": self.shadow_days,
+        }
+
+    def _track_shadow(self, shadowing: dict, day: date, shadow: list[dict]) -> None:
+        """What each closed trade's contract did after the exit.
+
+        The mirror of :meth:`_track_excursions`, and needed for the same reason: a price
+        path cannot be reconstructed after the run. The difference is which question it
+        answers — the excursions say where the price went **while** the trade was open,
+        and this says where it went **after** the exit, which is the only way to ask
+        whether the exit was early.
+
+        ``ratio`` is against the **entry** price throughout, so it is directly comparable
+        with the excursions. ``vs_exit`` is against the exit, which is what "did I leave
+        money behind" reads off.
+        """
+        if not shadowing:
+            return
+        for trade_id, st in list(shadowing.items()):
+            if st["left"] <= 0 or day <= st["exit_date"]:
+                if st["left"] <= 0:
+                    del shadowing[trade_id]
+                continue
+            if day > st["contract"].expiry:
+                # Past expiry there is no contract to quote. Stop rather than record a
+                # mark of 0, which would read as a worthless position instead of an
+                # absent one.
+                del shadowing[trade_id]
+                continue
+            frame = self.chain.series(st["contract"], [day])
+            if frame.empty:
+                st["left"] -= 1
+                continue
+            row = frame.iloc[0]
+            mark = (float(row["bid"]) + float(row["ask"])) / 2.0
+            shadow.append({
+                "trade_id": trade_id,
+                "date": day,
+                "days_after_exit": self.market.calendar.sessions_between(
+                    st["exit_date"], day),
+                "mark": mark,
+                "bid": float(row["bid"]),
+                "ask": float(row["ask"]),
+                "ratio": mark / st["entry_price"] - 1.0,
+                "vs_exit": mark / st["exit_price"] - 1.0 if st["exit_price"] else float("nan"),
+                "underlying": self.market.spot(day).or_else(float("nan")),
+                "iv": float(row["iv"]) if "iv" in row else float("nan"),
+            })
+            st["left"] -= 1
 
     def _exit_reasons(self, pos: Position, trade: OpenTrade, quotes, day: date, strategy: Strategy):
         # This trade's own rule wins. Under a plan each trade's take-profit and stop

@@ -33,8 +33,16 @@ import pandas as pd
 
 from backtest.core.config import CALENDAR_DAYS_PER_YEAR
 
-#: Above this residual share of gross P&L, the attribution is not trusted.
-RESIDUAL_WARN = 0.35
+def _residual_warn() -> float:
+    """Above this residual share of gross P&L the attribution is not trusted.
+
+    A realism assumption (the document's group 1): it marks where the Taylor expansion
+    stopped describing the P&L it claims to, so raising it would hide a failure rather
+    than fix one.
+    """
+    from backtest.core.thresholds import get
+
+    return float(get("attribution_residual_warning"))
 
 COMPONENTS = ("delta", "gamma", "vega", "theta", "residual")
 
@@ -71,7 +79,7 @@ class Attribution:
         if self.high_residual:
             lines.append(
                 f"  ! {self.high_residual} trades have a residual above "
-                f"{RESIDUAL_WARN:.0%} of gross P&L; their attribution is not "
+                f"{_residual_warn():.0%} of gross P&L; their attribution is not "
                 f"trustworthy"
             )
         return "\n".join(lines)
@@ -119,7 +127,7 @@ def attribute(trades: pd.DataFrame) -> Attribution:
 
     denom = out["actual"].abs().replace(0.0, np.nan)
     out["residual_share"] = (out["residual"].abs() / denom).fillna(np.inf)
-    high = int((out["residual_share"] > RESIDUAL_WARN).sum())
+    high = int((out["residual_share"] > _residual_warn()).sum())
 
     for key in ("trade_id", "exit_reason", "entry_date"):
         if key in usable.columns:

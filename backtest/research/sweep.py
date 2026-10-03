@@ -123,3 +123,124 @@ def sweep(
             }
         )
     return SweepResult(pd.DataFrame(rows), trials=len(rows), grid=dict(grid))
+
+
+@dataclass(frozen=True, slots=True)
+class Plateau:
+    """How much of the neighbourhood around the best result also works.
+
+    This is the number to read instead of the peak. A result standing alone is the one
+    that fitted this history; a result surrounded by results nearly as good is a shape the
+    next period might also have — and a live parameter never lands exactly on the peak, so
+    only the shape is usable.
+    """
+
+    best: Mapping[str, Any]
+    best_value: float
+    #: Neighbours within one step on every swept axis.
+    neighbours: int
+    #: Of those, how many stayed within ``tolerance`` of the best.
+    holding: int
+    tolerance: float
+    #: The worst neighbour, which is what a parameter landing one step off would give.
+    worst_neighbour: float
+
+    @property
+    def share(self) -> float:
+        return self.holding / self.neighbours if self.neighbours else float("nan")
+
+    def verdict(self) -> str:
+        from backtest.core.thresholds import get
+
+        plateau_at, slope_at = get("plateau_share"), get("slope_share")
+        if not self.neighbours:
+            return ("the best point has no neighbours in this grid, so nothing can be "
+                    "said about whether it is a plateau or a spike. Sweep a finer grid")
+        if self.share >= plateau_at:
+            read = (f"a plateau at the {plateau_at:.0%} cut: the region works, not just "
+                    f"the point")
+        elif self.share >= slope_at:
+            read = f"a slope at the {slope_at:.0%} cut — usable, but the edge of it is not"
+        else:
+            read = ("**a spike**: the neighbours do not hold, so this is the point that "
+                    "fitted this history")
+        return (f"best {self.best_value:,.0f} at {dict(self.best)}; "
+                f"{self.holding} of {self.neighbours} neighbours within "
+                f"{self.tolerance:.0%} ({self.share:.0%}), worst neighbour "
+                f"{self.worst_neighbour:,.0f} — {read}")
+
+
+def surface(table: pd.DataFrame, x: str, y: str, metric: str = "net_pnl") -> pd.DataFrame:
+    """Two swept parameters as a grid, for seeing the shape rather than the ranking.
+
+    A sorted table hides the thing that matters. Adjacent cells that all work are a
+    region; one cell far above its neighbours is noise that happened to win.
+    """
+    for col in (x, y, metric):
+        if col not in table.columns:
+            raise StartupError(f"the sweep table has no {col!r}; it has "
+                               f"{sorted(table.columns)}")
+    return table.pivot_table(index=x, columns=y, values=metric, aggfunc="mean")
+
+
+def plateau(
+    table: pd.DataFrame,
+    *,
+    metric: str = "net_pnl",
+    tolerance: float | None = None,
+    axes: Sequence[str] | None = None,
+) -> Plateau:
+    """Measure the neighbourhood of the best result.
+
+    ``axes`` defaults to every swept parameter in the table. A neighbour is a point one
+    grid step away on each axis; "within ``tolerance``" is relative to the best value's
+    magnitude, so it means the same thing whether the metric is in hundreds or millions.
+
+    What this cannot do is tell a plateau from a spike on a grid of one point per axis.
+    It says so rather than returning a number, because a confident answer from a grid too
+    coarse to support one is worse than no answer.
+    """
+    from backtest.core.thresholds import get
+
+    if tolerance is None:
+        tolerance = get("plateau_tolerance")
+    if metric not in table.columns:
+        raise StartupError(f"the sweep table has no {metric!r}")
+    swept = list(axes) if axes else [c for c in table.columns if c in SWEEPABLE]
+    if not swept:
+        raise StartupError(
+            f"no swept parameter found in the table. Columns: {sorted(table.columns)}"
+        )
+    usable = table.dropna(subset=[metric])
+    if usable.empty:
+        raise StartupError(f"every row has an empty {metric!r}")
+
+    best_row = usable.loc[usable[metric].idxmax()]
+    best = {c: best_row[c] for c in swept}
+    best_value = float(best_row[metric])
+
+    # One grid step per axis, taken from the distinct values actually swept rather than
+    # assumed — a sweep is often uneven (0.3, 0.5, 1.0) and assuming a constant step
+    # would call distant points neighbours.
+    steps = {}
+    for c in swept:
+        vals = sorted(set(usable[c].dropna()))
+        pos = vals.index(best[c]) if best[c] in vals else None
+        steps[c] = {vals[i] for i in (pos - 1, pos, pos + 1)
+                    if pos is not None and 0 <= i < len(vals)}
+
+    mask = pd.Series(True, index=usable.index)
+    for c in swept:
+        mask &= usable[c].isin(steps[c])
+    near = usable.loc[mask]
+    near = near.loc[~(near[swept] == pd.Series(best)).all(axis=1)]
+
+    if near.empty:
+        return Plateau(best=best, best_value=best_value, neighbours=0, holding=0,
+                       tolerance=tolerance, worst_neighbour=float("nan"))
+
+    scale = max(abs(best_value), 1.0)
+    holding = int(((best_value - near[metric]).abs() / scale <= tolerance).sum())
+    return Plateau(best=best, best_value=best_value, neighbours=len(near),
+                   holding=holding, tolerance=tolerance,
+                   worst_neighbour=float(near[metric].min()))

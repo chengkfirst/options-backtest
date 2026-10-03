@@ -124,6 +124,8 @@ convention** — pretending they are guarded is more dangerous than admitting th
 | A conditional probability always comes with its unconditional baseline | reporting only the former is self-deception | tested |
 | **One fact is defined in exactly one place** | two definitions always drift | a person |
 | **A realism assumption is never optimised** | picking the λ, the latency or the cleaning rule that maximises backtest returns optimises an illusion. These are set conservatively and only tested for sensitivity | a person |
+| **No threshold is written as a literal** | a cut inside a module turns a judgement ("a plateau") into something that reads as a measurement, and nobody can then answer "what was decided for me". Every one lives in `core/thresholds.py`, in the architecture document's four groups, and every verdict names the cut behind it | a test asserts the groups and that an override reaches the tool |
+| **The platform never defaults a strategy choice** | the document permits optimising a contract delta or an exit level under its protocol; it does not permit the platform picking one. A default decides the search and then reports its winner as a finding | `strategy_parameters_are_never_defaulted()`, asserted by a test |
 | **A slot's logic never calls another slot** | the architecture requires every influence to pass through the trade context and the action vocabulary; direct calls are what make per-slot ablation impossible | a person, until the component protocol exists |
 
 ---

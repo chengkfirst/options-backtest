@@ -379,16 +379,23 @@ Of these seven, **none is enforced by a tool yet** — see requirements.md 1.28 
 | **Hedge instruments** | Shares, index futures (ES, MES), options, or a mix. It decides what Layers 4 and 5 must support, so building the Hedge slot before deciding would build the wrong one |
 | **The underlying universe** | Index ETFs only, or single stocks too. Single stocks add earnings handling, far more contracts, wider spreads and borrow constraints — a different data bill and a different Layer 1 |
 
-### 10.5  Deliberately never
+### 10.5  Not now, and what would change that
 
-| | Why |
-|---|---|
-| A REST API, a job queue, auth | Platform work with no research value for one user. The SDK and the local web app cover everything a single researcher does |
-| A live adapter and reconciliation | It needs live trading to exist first, and the strategy is not settled |
-| Statistical regimes (HMM, Bayesian) | Three or four complete cycles in ten years. Their states are hard to tell from noise and have no names, so there is no way to explain why a day counts as high volatility |
-| Multi-leg and a margin model | Architectural: one contract per trade row. Worth doing together, and only when selling is actually on the table |
+> **These are not decisions this document gets to make.** An earlier version of this
+> section was headed "deliberately never", which was wrong twice over: nobody had decided
+> any of it was permanent, and one entry contradicted the platform's stated purpose
+> outright — the goal in `requirements.md` is to end in real trading, so a live path is
+> the destination rather than something ruled out.
+>
+> What follows is therefore the same shape as the rest of section 10: not built, with the
+> condition that would make it the next thing to build. Deciding any of them is yours.
 
----
+| | Why not now | What would change it |
+|---|---|---|
+| **A live adapter, paper trading, reconciliation** | The strategy is not settled, so there is nothing to trade yet, and principle 3 ("the same code in backtest and live") cannot be demonstrated without a SimBroker interface to implement | **The strategy settling.** This is the destination, not an exclusion. The work it needs first is the SimBroker interface in Layer 4, which also makes the backtest's execution honest |
+| **Multi-leg (spreads, iron condors) and a margin model** | Architectural: `TradeRecord` holds one contract per row, so a spread cannot be one trade. The margin model is the hard prerequisite for any selling and only makes sense built with it | **Wanting to sell premium, or to cap cost with a spread.** Both land on the same architectural change, so they are one piece of work rather than two |
+| **Statistical regimes (HMM, Bayesian)** | Three or four complete cycles in ten years: the states are hard to tell from noise and have no names, so there is no way to explain why a day counted as high volatility. That is a reason to prefer rules **now**, not a verdict on the method | **A rule-based regime proving insufficient** — specifically, finding that performance separates on something no threshold on VIX, term structure or trend captures. Then the extra fitting risk is worth carrying |
+| **A REST API, a job queue, auth** | One researcher. The SDK and the local web app cover what one person does, and a queue with no second user is machinery maintaining itself | **A second person using it**, or sweeps long enough that they have to run unattended |
 
 ## 11. Maintenance
 

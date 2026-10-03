@@ -62,10 +62,16 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
-#: How many random-entry draws by default. Fifty gives a usable percentile without the
-#: run taking longer than the patience of the person waiting for it; the sample size is
-#: reported so the reader can judge the resolution rather than assume it.
-DRAWS = 50
+def _draws_default() -> int:
+    """The default number of draws, from the threshold registry.
+
+    An engineering trade-off in the document's register (group 2): compute against the
+    resolution of the percentile. Read from one place so it is visible rather than a
+    literal in a signature.
+    """
+    from backtest.core.thresholds import get
+
+    return int(get("random_entry_draws"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +189,7 @@ def random_entry(
     *,
     n_entries: int,
     sessions: Sequence[date],
-    draws: int = DRAWS,
+    draws: int | None = None,
     seed: int = 20260917,
     strategy_pnl: float,
 ) -> Comparison:
@@ -200,8 +206,16 @@ def random_entry(
     The result is a percentile, not a win or a loss. One random draw says nothing; the
     distribution is the point.
     """
-    if draws < 10:
-        raise ValueError(f"{draws} draws cannot support a percentile; use at least 10")
+    from backtest.core.thresholds import get
+
+    if draws is None:
+        draws = _draws_default()
+    floor = int(get("random_entry_min_draws"))
+    if draws < floor:
+        raise ValueError(
+            f"{draws} draws cannot support a percentile; at least {floor} are needed. One "
+            f"draw reads as a win or a loss that a single sample cannot support"
+        )
 
     results: list[float] = []
     for i in range(draws):

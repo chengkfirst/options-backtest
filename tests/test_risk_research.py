@@ -14,10 +14,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.accounting.attribution import RESIDUAL_WARN, attribute, attribute_by
+from backtest.accounting.attribution import attribute, attribute_by
+from backtest.core.thresholds import get
 from backtest.portfolio.constraints import DrawdownBrake, ExposureLimits, hedge_value, without_hedges
 from backtest.portfolio.scenarios import (
-    LARGE_SHOCK,
     PortfolioGreeks,
     scenario_replay,
     stress_grid,
@@ -106,7 +106,7 @@ class TestStress:
         assert "outside" in grid.loc["-20%", "note"]
 
     def test_threshold_is_explicit(self, greeks):
-        just_inside = stress_grid(greeks, spot_shocks=(LARGE_SHOCK,), vol_shocks=(0.0,))
+        just_inside = stress_grid(greeks, spot_shocks=(get("large_shock"),), vol_shocks=(0.0,))
         assert just_inside[f"IV+0%"].notna().all()
 
     def test_direction_makes_sense(self, greeks):

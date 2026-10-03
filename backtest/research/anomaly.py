@@ -20,6 +20,13 @@ A model is good at putting what was found into plain language, not at the findin
 
 Every rule has a threshold. An "insight" forced out of nothing is noise, and noise
 is what makes real warnings get skipped.
+
+## Where the thresholds live
+
+Not here. Every cut is in :mod:`backtest.core.thresholds`, in the architecture document's
+"method" group — chosen before looking at results, not after. That matters for this module
+in particular: a rule whose threshold could be nudged after seeing a result it fired on
+would be a rule that never fires inconveniently.
 """
 
 from __future__ import annotations
@@ -29,6 +36,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from backtest.core.thresholds import get as _cut
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +84,7 @@ def _single_trade_dominates(t, **_) -> "Finding | None":
         return None
     top = t["net_pnl"].max()
     share = top / total
-    if share < 0.35:
+    if share < _cut("single_trade_share"):
         return None
     row = t.loc[t["net_pnl"].idxmax()]
     return Finding(
@@ -105,7 +114,7 @@ def _one_year_carries(t, **_) -> "Finding | None":
         return None
     best_year = by_year.idxmax()
     share = by_year.max() / total
-    if share < 0.70:
+    if share < _cut("one_year_share"):
         return None
     others = by_year.drop(best_year)
     headline = (f"{best_year} contributed the entire P&L; the other years lost money"
@@ -126,7 +135,7 @@ def _edge_decays(t, **_) -> "Finding | None":
     half = len(t) // 2
     a = float((t["net_pnl"].iloc[:half] > 0).mean())
     b = float((t["net_pnl"].iloc[half:] > 0).mean())
-    if abs(a - b) < 0.20:
+    if abs(a - b) < _cut("win_rate_decay"):
         return None
     worse = b < a
     return Finding(
@@ -171,7 +180,7 @@ def _costs_eat_edge(t, *, costs=None, **_) -> "Finding | None":
     if not costs:
         return None
     pct = costs.get("fees_pct_of_gross")
-    if pct is None or not np.isfinite(pct) or pct < 0.30:
+    if pct is None or not np.isfinite(pct) or pct < _cut("cost_share_warning"):
         return None
     return Finding(
         "costs", "high",

@@ -24,9 +24,15 @@ import pandas as pd
 
 from backtest.core.config import CALENDAR_DAYS_PER_YEAR
 
-#: Beyond this underlying shock, the second-order expansion's error is no longer
-#: negligible.
-LARGE_SHOCK = 0.10
+def _large_shock() -> float:
+    """Beyond this underlying shock the second-order expansion's error is not negligible.
+
+    A realism assumption in the document's register (group 1): sensitivity-tested, never
+    optimised. Widening it does not make the expansion valid, it hides that it is not.
+    """
+    from backtest.core.thresholds import get
+
+    return float(get("large_shock"))
 
 #: The default stress grid. The underlying in percent, volatility in absolute
 #: points.
@@ -110,7 +116,8 @@ def stress_grid(
     theta_effect = greeks.theta * (days_forward / CALENDAR_DAYS_PER_YEAR)
     for ds_pct in spot_shocks:
         ds = greeks.spot * ds_pct
-        beyond = abs(ds_pct) > LARGE_SHOCK
+        limit = _large_shock()
+        beyond = abs(ds_pct) > limit
         row = {"spot shock": f"{ds_pct:+.0%}"}
         for dv in vol_shocks:
             if beyond:
@@ -130,7 +137,7 @@ def stress_grid(
                 + greeks.vega * dv + theta_effect
             )
         row["note"] = (
-            f"outside the second-order expansion's range (±{LARGE_SHOCK:.0%}); no "
+            f"outside the second-order expansion's range (±{limit:.0%}); no "
             f"number given, use historical scenario replay"
             if beyond else ""
         )

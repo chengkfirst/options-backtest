@@ -115,6 +115,22 @@ class EventDrivenResult:
     #: point there is no way to see what happened in between. It cannot be
     #: reconstructed afterwards, so it is collected from the start.
     paths: tuple = ()
+    #: **What each closed trade's contract did afterwards.** The mirror of ``paths``, and
+    #: the one thing counterfactual exit research cannot do without: after a run there is
+    #: no record of the price after the exit, so "would a wider stop have worked" is
+    #: unanswerable without this.
+    shadow: tuple = ()
+
+    @property
+    def shadow_frame(self):
+        """Post-exit quotes. One row = one closed trade on one day after its exit."""
+        import pandas as pd
+
+        if not self.shadow:
+            return pd.DataFrame(columns=[
+                "trade_id", "date", "days_after_exit", "mark", "bid", "ask", "ratio",
+                "vs_exit", "underlying", "iv"])
+        return pd.DataFrame(list(self.shadow))
 
     @property
     def paths_frame(self):
