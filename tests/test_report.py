@@ -12,6 +12,11 @@ import pytest
 from backtest.research import metrics as R
 from backtest.core.types import TRADE_COLUMNS
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "6")
+
 
 def make_trades(pnl: list[float], reasons: list[str] | None = None) -> pd.DataFrame:
     n = len(pnl)

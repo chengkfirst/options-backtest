@@ -11,6 +11,11 @@ from backtest.core.errors import StartupError
 from backtest.core.maybe import Maybe, MissingValueError
 from backtest.core.types import ContractId, ExitReason, Right, resolve_exit_reason
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "0")
+
 
 class TestMaybe:
     def test_some_and_unwrap(self):

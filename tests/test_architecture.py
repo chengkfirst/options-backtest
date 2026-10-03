@@ -10,6 +10,11 @@ import pytest
 
 import tools.check_deps as deps
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("architecture", "cross")
+
 
 def test_dependency_direction_holds():
     assert deps.check() == []

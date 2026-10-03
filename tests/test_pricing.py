@@ -13,6 +13,11 @@ from backtest.data.options.pricing import (
 )
 from backtest.core.types import Right
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "1")
+
 BASE = dict(s=100.0, k=100.0, t=1.0, r=0.05, q=0.0)
 #: Published reference values (S=100, K=100, T=1, r=5%, sigma=20%, q=0)
 REF_CALL = 10.450583572185565

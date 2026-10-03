@@ -14,6 +14,11 @@ import pytest
 from backtest.signals.review import Add, Close, PositionView, Reduce, Roll
 from backtest.core.errors import StartupError
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "2")
+
 
 class TestActions:
     def test_close_kind_validated(self):

@@ -48,6 +48,8 @@ GUARDS: tuple[tuple[str, list[str], bool], ...] = (
     ("plan",         [sys.executable, "tools/check_plan.py"], False),
     ("coverage map", [sys.executable, "-m", "pytest", "tests/test_coverage_map.py", "-q"],
      False),
+    ("labels",       [sys.executable, "-m", "pytest", "tests/test_labels.py", "-q"],
+     False),
     ("components",   [sys.executable, "-m", "pytest", "tests/test_components.py", "-q"], False),
     ("wiring",       [sys.executable, "tools/check_wiring.py"], False),
     ("baseline",     [sys.executable, "-m", "tools.baseline", "check"], False),

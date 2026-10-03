@@ -25,6 +25,11 @@ from backtest.signals.contracts import SelectionRule
 from tests.conftest import exits, selection
 from backtest.core.types import CHAIN_COLUMNS, ContractId, ExitReason, Right
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "5")
+
 
 class ScriptedChain:
     """A chain priced from a script: ``prices`` is {date: theoretical price}, with a

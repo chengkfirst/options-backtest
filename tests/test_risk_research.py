@@ -24,6 +24,11 @@ from backtest.portfolio.scenarios import (
     var_cvar,
 )
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("research", "6")
+
 
 def make_trades(n=30, seed=0) -> pd.DataFrame:
     rng = np.random.default_rng(seed)

@@ -33,6 +33,11 @@ from backtest.core.config import CostConfig
 from backtest.core.types import Right, Side
 from backtest.execution.costs import execute, fill_price, order_fees
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("known_answer", "4")
+
 #: The cost model these calculations use. Stated here rather than taken from the defaults,
 #: so the arithmetic below stays true when a default moves.
 COSTS = CostConfig(

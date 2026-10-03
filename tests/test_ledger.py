@@ -17,6 +17,11 @@ from backtest.core.maybe import Maybe
 from backtest.accounting.ledger import Ledger
 from backtest.core.types import ContractId, ContractSpec, Right, SettlementStyle, Side
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "5")
+
 SPEC = ContractSpec(symbol="QQQ")
 CASH_SPEC = ContractSpec(symbol="SPX", settlement=SettlementStyle.CASH)
 CALL = ContractId("QQQ", date(2024, 3, 15), Right.CALL, 400.0)

@@ -13,6 +13,11 @@ from backtest.core.errors import StartupError
 from backtest.signals import indicators
 from backtest.signals.registry import SignalSet
 
+from tests.kinds import kind, labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "2")
+
 #: How many dates the truncate-and-recompute check samples. Look-ahead is the most fatal
 #: bias and the hardest to see by eye, and this is the only reliable defence against it.
 PROBE_COUNT = 12
@@ -145,6 +150,7 @@ class TestTheAdjustmentIsNotPointInTime:
 
         return build_bars("QQQ", make_raw_bars())
 
+    @kind("limit")
     def test_truncating_the_frame_does_not_change_the_adjustment(self):
         """Which is exactly why the look-ahead check is blind to it."""
         from backtest.data.underlying import UnderlyingBars

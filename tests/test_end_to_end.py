@@ -22,6 +22,11 @@ from backtest.signals.contracts import SelectionRule
 from tests.conftest import exits, selection
 from backtest.core.types import Right
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("consistency", "5")
+
 
 @pytest.fixture
 def baseline(market, chain, signals, config):

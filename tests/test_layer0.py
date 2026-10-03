@@ -30,6 +30,11 @@ from backtest.core.invariants import (
 from backtest.core.run_id import run_id
 from backtest.core.types import Right
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("guard", "0")
+
 DAY = date(2024, 1, 2)
 
 

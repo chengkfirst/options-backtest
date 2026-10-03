@@ -16,6 +16,11 @@ from backtest.signals.contracts import SelectionRule, select_contract
 from tests.conftest import selection
 from backtest.core.types import CHAIN_COLUMNS, Right, Side
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "2")
+
 
 @pytest.fixture
 def day(market):

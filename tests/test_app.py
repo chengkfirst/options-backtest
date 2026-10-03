@@ -28,6 +28,11 @@ if str(APP) not in sys.path:
 import runner as runner_mod  # noqa: E402
 from store import Store  # noqa: E402
 
+from tests.kinds import kind, labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "7")
+
 #: Every strategy choice stated, because the platform refuses to supply one. This is what
 #: the interface's form sends -- its fields have starting values a person can see and
 #: change, which is the only place a default belongs.
@@ -252,6 +257,7 @@ class TestValidationRefusals:
         with pytest.raises(ValueError, match="at least 10 draws"):
             runner_mod.validate(rec["id"], "baselines", {"draws": 5})
 
+    @kind("limit")
     def test_a_run_that_aged_out_says_so(self, store):
         """Validating a *rebuilt* run silently instead would validate something slightly
         different from the run on screen."""

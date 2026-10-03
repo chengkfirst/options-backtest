@@ -27,6 +27,11 @@ from tests.conftest import selection
 from backtest.core.actions import Action
 from backtest.core.types import ExitReason, Right
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("consistency", "5")
+
 
 def build_strategy(signals, **overrides):
     condition, requires = parse_condition("sma_20 > sma_50", signals.names)

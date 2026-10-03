@@ -16,6 +16,11 @@ from backtest.core.errors import DataQualityError, StartupError
 from backtest.core.types import CHAIN_COLUMNS, ContractId, Right
 from tests.conftest import make_raw_bars
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("guard", "1")
+
 
 class TestCalendar:
     @pytest.fixture(scope="class")

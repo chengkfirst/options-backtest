@@ -20,6 +20,11 @@ from backtest.research.events import (
     study,
 )
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "0")
+
 
 def series(values, start="2000-01-03") -> pd.Series:
     idx = pd.bdate_range(start, periods=len(values))

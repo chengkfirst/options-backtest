@@ -20,6 +20,11 @@ import pytest
 from backtest.data.options.adapters import SCHEMA, check_frame, describe_schema, normalise
 from backtest.core.errors import DataQualityError
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("guard", "1")
+
 
 def make_vendor(n_days=5, n_strikes=6, iv=0.25) -> pd.DataFrame:
     rows = []

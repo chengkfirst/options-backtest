@@ -30,6 +30,11 @@ from backtest.research.validation import (
     walk_forward,
 )
 
+from tests.kinds import kind, labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("research", "6")
+
 D0 = date(2024, 1, 1)
 DAYS = [D0 + timedelta(days=i) for i in range(500)]
 
@@ -117,6 +122,7 @@ class TestCounterfactualExits:
         # -50% of a 500 entry is -250.
         assert stopped.alternative == pytest.approx(-250.0)
 
+    @kind("limit")
     def test_a_same_day_tie_cannot_be_expressed_in_this_format(self):
         """The limit, asserted rather than described.
 

@@ -16,6 +16,11 @@ from backtest.core.config import CostConfig
 from backtest.core.types import Side
 from backtest.execution.costs import execute
 
+from tests.kinds import kind, labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("guard", "cross")
+
 BASE = dict(
     symbol="QQQ", start="2023-01-01", end="2023-06-30",
     entry="close < sma_20 * 0.98",
@@ -413,6 +418,7 @@ class TestAZeroBidContract:
         verdict = check_tradable(0.0, 0.0, self.COSTS)
         assert not verdict.ok and "non-positive" in (verdict.reason or "")
 
+    @kind("limit")
     def test_the_vol_solved_from_half_an_ask_is_not_refused_by_the_solver(self):
         """**The solver cannot save you here**, which is why the filter has to.
 

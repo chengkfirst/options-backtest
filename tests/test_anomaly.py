@@ -13,6 +13,11 @@ import pytest
 
 from backtest.research.anomaly import Finding, scan
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("research", "6")
+
 
 def trades(n=100, seed=0, **over) -> pd.DataFrame:
     """A thoroughly unremarkable trade log: no rule should fire on it."""

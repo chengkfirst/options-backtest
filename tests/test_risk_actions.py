@@ -21,6 +21,11 @@ from backtest.portfolio.risk_actions import (
     BUILT, NOTHING, RiskAction, RiskDecision, require_built,
 )
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "3")
+
 BASE = dict(
     symbol="QQQ", start="2022-06-01", end="2023-12-31",
     entry="close < sma_20 * 0.98",

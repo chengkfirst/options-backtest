@@ -17,6 +17,11 @@ from backtest.core.errors import StartupError
 from backtest.core.slots import COMPONENTS
 from backtest.signals.lifecycle import RUNS_IN, SCOPE, SETTINGS, State, describe, gaps
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "0")
+
 
 class TestActionVocabulary:
     @pytest.mark.req("2.1.vocabulary")

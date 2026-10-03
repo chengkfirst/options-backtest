@@ -16,6 +16,11 @@ import pytest
 
 from backtest.research.tradeoff import _spread_out, tradeoff_grid
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("research", "6")
+
 SPOT = 400.0
 
 

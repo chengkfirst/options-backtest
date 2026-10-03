@@ -18,6 +18,11 @@ from backtest.core.slots import (
     gaps,
 )
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("architecture", "7")
+
 
 class TestDefinition:
     def test_every_component_says_what_it_decides(self):

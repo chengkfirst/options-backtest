@@ -31,6 +31,11 @@ import pytest
 
 from tests.requirements_map import BY_ID, IDS, REQUIREMENTS
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("architecture", "cross")
+
 
 def _claimed() -> dict[str, list[str]]:
     """Requirement id -> the tests that claim it.

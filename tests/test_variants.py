@@ -17,6 +17,11 @@ import pytest
 from backtest.core.component import Bound, Param, Variant, build, get, register, variants
 from backtest.core.errors import StartupError
 
+from tests.kinds import labels
+
+#: What a failure here means, and where it is. See ``tests/kinds.py``.
+pytestmark = labels("unit", "0")
+
 BASE = dict(
     symbol="QQQ", start="2023-01-01", end="2023-06-30",
     entry="close < sma_20 * 0.98",
