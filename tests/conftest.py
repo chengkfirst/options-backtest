@@ -87,3 +87,38 @@ def chain(market) -> SyntheticChainSource:
 @pytest.fixture(scope="session")
 def signals(market) -> SignalSet:
     return SignalSet.from_bars(market.bars)
+
+
+# ── the strategy choices a test makes ──────────────────────────────────────
+#
+# The platform refuses to default a strategy choice: which contract, where to stop, how
+# large. A test still has to pick values, and repeating the same four arguments at thirty
+# call sites buries whatever each test is actually varying.
+#
+# So the values live here, once, named and visible. **This is the distinction the rule
+# turns on**: a default a reader can see and change is a starting point, while one that
+# fills itself in when a field is omitted, in production, and never appears in the
+# configuration afterwards is a decision taken on the researcher's behalf. These are the
+# first kind. `tools/check_defaults.py` watches the production dataclasses, not this file.
+
+def selection(**over):
+    """A :class:`SelectionRule` for tests: a 30-day call around 0.30 delta.
+
+    Pass only what the test varies.
+    """
+    from backtest.core.types import Right
+    from backtest.signals.contracts import SelectionRule
+
+    base = {"right": Right.CALL, "target_dte": 30, "dte_window": (21, 45),
+            "target_delta": 0.30}
+    if "moneyness" in over and "target_delta" not in over:
+        base["target_delta"] = None
+    return SelectionRule(**(base | over))
+
+
+def exits(**over):
+    """An :class:`ExitRule` for tests: 20 days, +100% / -50%, out at 5 days to expiry."""
+    from backtest.signals.strategy import ExitRule
+
+    base = {"hold_days": 20, "take_profit": 1.0, "stop_loss": 0.5, "dte_floor": 5}
+    return ExitRule(**(base | over))

@@ -22,6 +22,8 @@ from backtest.engine.strategy import Strategy
 from backtest.engine.vectorized import TradeTableEngine
 from backtest.core.errors import StartupError
 from backtest.signals.contracts import SelectionRule
+
+from tests.conftest import selection
 from backtest.core.actions import Action
 from backtest.core.types import ExitReason, Right
 
@@ -31,7 +33,7 @@ def build_strategy(signals, **overrides):
     defaults = dict(
         name="baseline",
         entry=EntryRule("sma_20 > sma_50", condition, requires),
-        select=SelectionRule(right=Right.CALL, target_dte=30, dte_window=(21, 45), target_delta=0.30),
+        select=selection(right=Right.CALL, target_dte=30, dte_window=(21, 45), target_delta=0.30),
         exit=ExitRule(hold_days=10, take_profit=1.0, stop_loss=0.5, dte_floor=5),
         quantity=1,
     )

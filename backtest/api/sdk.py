@@ -75,7 +75,24 @@ def _selection_from(spec):
     if isinstance(spec, SelectionRule):
         return spec
     spec = dict(spec)
-    right = spec.pop("right", "call")
+    # Required, not defaulted. See SelectionRule: delta and tenor are slot 2b, and the
+    # platform choosing them makes the most consequential parameters in the strategy
+    # invisible in the configuration a person reads back.
+    missing = [k for k in ("right",) if k not in spec]
+    if "dte" not in spec and not ("dte_lo" in spec and "dte_hi" in spec):
+        missing.append("dte (or dte_lo and dte_hi)")
+    if "delta" not in spec and "moneyness" not in spec and not (
+            "delta_lo" in spec and "delta_hi" in spec):
+        missing.append("delta (or delta_lo and delta_hi, or moneyness)")
+    if missing:
+        raise StartupError(
+            "select needs " + ", ".join(missing) + ". These are strategy choices and the "
+            "platform does not pick them: a default here would set the delta and the tenor "
+            "for you and then not appear in the configuration you read back. For example "
+            'select={"right": "call", "dte_lo": 21, "dte_hi": 45, "delta_lo": 0.25, '
+            '"delta_hi": 0.45}'
+        )
+    right = spec.pop("right")
     # The interface sends bands (dte_lo/hi, delta_lo/hi); point form (dte + delta)
     # is also accepted.
     lo, hi = spec.pop("dte_lo", None), spec.pop("dte_hi", None)
@@ -83,15 +100,28 @@ def _selection_from(spec):
         window = (int(lo), int(hi))
         dte = spec.pop("dte", (int(lo) + int(hi)) // 2)
     else:
-        dte = spec.pop("dte", 30)
-        window = tuple(spec.pop("dte_window", (max(1, dte - 9), dte + 15)))
+        dte = spec.pop("dte")
+        if "dte_window" not in spec:
+            raise StartupError(
+                f"select got dte={dte} and no window. The window is a **hard** "
+                f"constraint -- nothing outside it is considered -- so inventing one "
+                f"around your point would widen the rule you wrote. Give "
+                f'dte_window=(lo, hi), or the band form dte_lo / dte_hi.'
+            )
+        window = tuple(spec.pop("dte_window"))
     dlo, dhi = spec.pop("delta_lo", None), spec.pop("delta_hi", None)
     ilo, ihi = spec.pop("iv_lo", None), spec.pop("iv_hi", None)
     return SelectionRule(
         right=Right.CALL if str(right).lower().startswith("c") else Right.PUT,
         target_dte=dte,
         dte_window=window,
-        target_delta=spec.pop("delta", None if "moneyness" in spec else 0.30),
+        # The point objective used to order within the band. When a band was given and
+        # no point, this is the band's midpoint -- arithmetic on the user's own choice,
+        # not a second choice made for them. Same treatment as `dte` above.
+        target_delta=spec.pop(
+            "delta",
+            (float(dlo) + float(dhi)) / 2 if dlo is not None and dhi is not None
+            and "moneyness" not in spec else None),
         moneyness=spec.pop("moneyness", None),
         min_volume=spec.pop("min_volume", None),
         min_open_interest=spec.pop("min_open_interest", None),
@@ -105,11 +135,14 @@ def _exit_from(spec: Mapping[str, Any] | ExitRule) -> ExitRule:
     if isinstance(spec, ExitRule):
         return spec
     spec = dict(spec)
+    # No defaults here either. The same values were written in three places -- this
+    # function, the dataclass and the interface's form -- so fixing one of them would have
+    # left the other two filling in a level nobody chose.
     return ExitRule(
-        hold_days=spec.pop("hold_days", 10),
-        take_profit=spec.pop("take_profit", 1.0),
-        stop_loss=spec.pop("stop_loss", 0.5),
-        dte_floor=spec.pop("dte_floor", 5),
+        hold_days=spec.pop("hold_days", None),
+        take_profit=spec.pop("take_profit", None),
+        stop_loss=spec.pop("stop_loss", None),
+        dte_floor=spec.pop("dte_floor", None),
     )
 
 
@@ -120,7 +153,11 @@ def run(
     symbol: str = "QQQ",
     start: str | date = "2015-01-01",
     end: str | date = "2024-12-31",
-    entry: str | Callable = "sma_20 > sma_50",
+    # Required. The entry condition is slot 2 and the single largest strategy choice in
+    # the run; a platform-supplied one would mean a result attributed to a rule nobody
+    # wrote. `symbol`, `start` and `end` keep their defaults: the document's register puts
+    # the universe and the period among the engineering trade-offs, not the strategy.
+    entry: str | Callable | None = None,
     plan: Callable | None = None,
     review: Callable | None = None,
     select: Mapping[str, Any] | SelectionRule | None = None,
@@ -206,9 +243,20 @@ def run(
     signal_set = SignalSet.from_bars(market.bars, extra=signals, vol_proxy=market.vol_proxy)
     chain_source = build_chain_source(chain, market, config)
 
+    if entry is None and plan is None:
+        raise StartupError(
+            "run() needs an entry condition, for example entry=\"close < sma_20 * 0.98\". "
+            "It is the largest strategy choice in the run and the platform does not supply "
+            "one -- a default would attribute the result to a rule nobody wrote. A plan "
+            "strategy decides entry itself and needs no separate condition."
+        )
     if isinstance(entry, str):
         condition, requires = parse_condition(entry, signal_set.names)
         entry_rule = EntryRule(entry, condition, requires)
+    elif entry is None:
+        # A plan decides its own entries, so there is no condition to parse. The rule is a
+        # labelled placeholder rather than a condition, and it never fires.
+        entry_rule = EntryRule("decided by the plan", lambda view: False, ())
     else:
         entry_rule = EntryRule(getattr(entry, "__name__", "custom"), entry, ())
 

@@ -14,6 +14,8 @@ from datetime import date, timedelta, timedelta
 
 import pytest
 
+from tests.conftest import exits, selection
+
 from backtest.core.dataview import DataView, LookAheadError
 from backtest.core.errors import InvariantError, StartupError
 from backtest.core.invariants import (
@@ -351,7 +353,7 @@ class TestAblation:
         from backtest.signals.strategy import EntryRule, ExitRule
 
         base = dict(entry=EntryRule("x", lambda v: True, ()),
-                    select=SelectionRule(right=Right.CALL), exit=ExitRule(),
+                    select=selection(right=Right.CALL), exit=exits(),
                     sizing=Sizing(method="fixed", contracts=3))
         return Strategy(**(base | over))
 

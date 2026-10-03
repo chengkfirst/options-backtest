@@ -33,12 +33,23 @@ from backtest.core.types import ContractId, Right, require
 
 @dataclass(frozen=True, slots=True)
 class SelectionRule:
-    """A selection rule. Exactly one of ``target_delta`` and ``moneyness``."""
+    """A selection rule. Exactly one of ``target_delta`` and ``moneyness``.
 
-    right: Right = Right.CALL
-    target_dte: int = 30
-    dte_window: tuple[int, int] = (21, 45)
-    target_delta: float | None = 0.30
+    **Nothing here is defaulted.** This is slot 2b, and delta and tenor are the two most
+    consequential parameters an option buyer sets -- leverage, convexity and theta decay
+    all move with them. A platform-side ``target_delta = 0.30`` would decide the single
+    most researched choice in the strategy and then never appear in the configuration a
+    person reads back.
+
+    Unlike an exit level there is no safe "absent" state: a chain holds hundreds of
+    contracts and selection has to narrow it. So these are **required** rather than
+    optional, and omitting them raises at construction.
+    """
+
+    right: Right
+    target_dte: int
+    dte_window: tuple[int, int]
+    target_delta: float | None = None
     #: Moneyness relative to spot; positive is out of the money (for a call, a
     #: higher strike).
     moneyness: float | None = None

@@ -31,6 +31,7 @@ The main loop's order within a day is fixed, and every step's position has a rea
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 
@@ -122,6 +123,15 @@ class Intent:
     note: str = ""
 
 
+def _as_float(value) -> float:
+    """A float, or NaN -- never a zero standing in for an absent number."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    return out
+
+
 @dataclass
 class OpenTrade:
     """A logical trade not yet closed. It becomes a TradeRecord on exit."""
@@ -138,6 +148,17 @@ class OpenTrade:
     #: Maximum favourable / adverse excursion while held, for MFE/MAE research
     mfe: float = 0.0
     mae: float = 0.0
+    #: The same in underlying terms. See :class:`~backtest.core.types.TradeRecord`.
+    #: ``entry_spot`` is NaN when the entry quote carried no underlying price, and then
+    #: both stay NaN rather than being measured against a zero.
+    entry_spot: float = float("nan")
+    mfe_underlying: float = float("nan")
+    mae_underlying: float = float("nan")
+    #: +1 when the position profits from the underlying rising, -1 when from it falling.
+    #: Taken from the contract's right and the entry side, never from the premium's own
+    #: movement -- reading the direction off the premium would make a trade that lost to
+    #: IV look like a trade whose underlying went against it.
+    direction: int = 1
     #: **This trade's own** exit rule. Under a plan each can differ — the deep
     #: drawdown case widens the stop and holds longer. Empty falls back to the
     #: strategy's global rule.
@@ -452,6 +473,17 @@ class EventDrivenEngine:
             ratio = (mark / trade.entry_price - 1.0) * (1 if pos.quantity > 0 else -1)
             trade.mfe = max(trade.mfe, ratio)
             trade.mae = min(trade.mae, ratio)
+
+            spot = self.market.spot(day).or_else(float("nan"))
+            # The underlying-terms excursion. Guarded on both sides: a missing entry spot
+            # or a missing mark leaves both at NaN rather than measuring against a zero,
+            # which would read as a 100% move.
+            if math.isfinite(trade.entry_spot) and math.isfinite(spot):
+                move = (spot / trade.entry_spot - 1.0) * trade.direction
+                trade.mfe_underlying = (move if not math.isfinite(trade.mfe_underlying)
+                                        else max(trade.mfe_underlying, move))
+                trade.mae_underlying = (move if not math.isfinite(trade.mae_underlying)
+                                        else min(trade.mae_underlying, move))
 
             row = quote[2] if len(quote) > 2 else None
             paths.append({
@@ -901,6 +933,11 @@ class EventDrivenEngine:
                 fees=fees.total, entry_quote=row.to_dict(),
                 entry_signals={n: self.signals.on(day)[n] for n in self.signals.names},
                 exit_rule=intent.exit_rule, tag=intent.tag, note=intent.note,
+                entry_spot=_as_float(row.get("underlying_price")),
+                # Favourable means the direction this position profits from: up for a
+                # long call and a short put, down for a long put and a short call.
+                direction=(1 if intent.contract.right is Right.CALL else -1)
+                          * (1 if intent.side is Side.BUY else -1),
             )
             return None
 
@@ -987,5 +1024,6 @@ class EventDrivenEngine:
             if trade.entry_quote.get("source") == QuoteSource.SYNTHETIC.value else QuoteSource.VENDOR,
             entry_context=ctx_in, exit_context=ctx_out,
             mfe=trade.mfe, mae=trade.mae,
+            mfe_underlying=trade.mfe_underlying, mae_underlying=trade.mae_underlying,
             tag=trade.tag, note=trade.note,
         )

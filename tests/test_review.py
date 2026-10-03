@@ -40,6 +40,8 @@ class TestEngineIntegration:
     BASE = dict(
         symbol="QQQ", start="2022-01-01", end="2023-06-30",
         entry="close < sma_20 * 0.98",
+        select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                "delta_lo": 0.25, "delta_hi": 0.45},
         exit={"hold_days": 30, "take_profit": 1.0, "stop_loss": 0.5, "dte_floor": 7},
         engine="event_driven", sizing={"method": "risk_pct", "risk_pct": 0.03},
     )

@@ -73,11 +73,28 @@ def main() -> int:
             problems.append(f"the interface needs META.{key}, which /api/meta does "
                             f"not supply")
 
-    from backtest.portfolio.positioning import Sizing
+    from backtest.portfolio.positioning import REQUIRES, Sizing
 
+    # Each method is built **with** the parameter it needs, because the platform no longer
+    # supplies one: "2% of equity per trade" is a strategy choice, and a default would size
+    # every position in the book without appearing in the configuration a person reads
+    # back. So what this checks is that every method name the interface offers is a method
+    # the backend accepts.
+    #
+    # What it does **not** check: that the interface sends the matching parameter for the
+    # method it selected. It does today -- `formPayload` in bench.js sends only the
+    # parameters the chosen method uses -- but nothing holds it there. Checking it needs
+    # the pairing declared in CONTRACT, the way the field lists are, so that this guard can
+    # read it rather than parse the JS.
+    sample = {"contracts": 1, "risk_pct": 0.02, "notional": 5_000.0, "target_vol": 0.20}
     for method in spec.get("sizing_methods", []):
+        needs = REQUIRES.get(method)
+        if needs is None:
+            problems.append(f"the interface offers the sizing method {method!r} and the "
+                            f"backend has no such method")
+            continue
         try:
-            Sizing(method=method)
+            Sizing(method=method, **{needs: sample[needs]})
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the interface sends the sizing method {method!r} and the "
                             f"backend refuses it: {exc}")

@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.conftest import selection
+
 from backtest.core.errors import StartupError
 from backtest.research.counterfactual import grid_report, replay_exit, sweep_levels
 from backtest.research.tracker import count_trials, deflate, describe
@@ -58,7 +60,7 @@ class TestShadowTracking:
 
         cond, req = parse_condition("sma_20 > sma_50", signals.names)
         strat = Strategy(entry=EntryRule("x", cond, req),
-                         select=SelectionRule(right=Right.CALL, target_delta=0.30),
+                         select=selection(right=Right.CALL, target_delta=0.30),
                          exit=ExitRule(hold_days=5, take_profit=1.0, stop_loss=0.5,
                                        dte_floor=5))
         result = EventDrivenEngine(market, chain, signals, config,
@@ -79,7 +81,7 @@ class TestShadowTracking:
 
         cond, req = parse_condition("sma_20 > sma_50", signals.names)
         strat = Strategy(entry=EntryRule("x", cond, req),
-                         select=SelectionRule(right=Right.CALL, target_delta=0.30),
+                         select=selection(right=Right.CALL, target_delta=0.30),
                          exit=ExitRule(hold_days=5, dte_floor=5))
         result = EventDrivenEngine(market, chain, signals, config,
                                   shadow_days=0).run(strat)

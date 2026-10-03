@@ -12,6 +12,8 @@ from backtest.core.config import CostConfig
 from backtest.execution.costs import check_tradable, execute, fill_price, order_fees
 from backtest.core.errors import StartupError
 from backtest.signals.contracts import SelectionRule, select_contract
+
+from tests.conftest import selection
 from backtest.core.types import CHAIN_COLUMNS, Right, Side
 
 
@@ -26,33 +28,45 @@ def snapshot(chain, day):
 
 
 class TestSelectionRule:
+    #: The fields the class requires, so each test states only what it is checking.
+    #: Spelled out rather than taken from the shared helper: these tests are about the
+    #: class's own validation, and routing them through a helper would test the helper.
+    REQUIRED = {"right": Right.CALL, "target_dte": 30, "dte_window": (21, 45)}
+
     def test_requires_exactly_one_strike_criterion(self):
         with pytest.raises(StartupError):
-            SelectionRule(target_delta=0.3, moneyness=0.05)
+            SelectionRule(**self.REQUIRED, target_delta=0.3, moneyness=0.05)
         with pytest.raises(StartupError):
-            SelectionRule(target_delta=None, moneyness=None)
+            SelectionRule(**self.REQUIRED, target_delta=None, moneyness=None)
 
     def test_target_dte_must_sit_in_window(self):
         with pytest.raises(StartupError):
-            SelectionRule(target_dte=60, dte_window=(21, 45))
+            SelectionRule(**(self.REQUIRED | {"target_dte": 60, "dte_window": (21, 45)}),
+                          target_delta=0.30)
+
+    def test_the_platform_supplies_none_of_them(self):
+        """Delta and tenor are the most researched parameters an option buyer sets, so
+        omitting them is an error rather than an invitation for the platform to choose."""
+        with pytest.raises(TypeError, match="right"):
+            SelectionRule(target_delta=0.30)
 
 
 class TestExpirySelection:
     def test_picks_nearest_to_target(self, snapshot, config, market, day):
-        rule = SelectionRule(target_dte=30, dte_window=(21, 45), target_delta=0.30)
+        rule = selection(target_dte=30, dte_window=(21, 45), target_delta=0.30)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         assert res.ok
         assert 21 <= (res.contract.unwrap().expiry - day).days <= 45
 
     def test_no_expiry_in_window_means_no_trade(self, snapshot, config, market, day):
-        rule = SelectionRule(target_dte=200, dte_window=(190, 210), target_delta=0.30)
+        rule = selection(target_dte=200, dte_window=(190, 210), target_delta=0.30)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         assert not res.ok and "expiry" in res.contract.reason
 
     def test_executability_floor_excludes_near_expiry(self, snapshot, config, market, day):
         """A contract expiring on or before the execution day is unusable, or an
         exit intent would come to nothing."""
-        rule = SelectionRule(target_dte=3, dte_window=(1, 6), target_delta=0.30)
+        rule = selection(target_dte=3, dte_window=(1, 6), target_delta=0.30)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         if res.ok:
             remaining = market.calendar.sessions_between(day, res.contract.unwrap().expiry)
@@ -61,7 +75,7 @@ class TestExpirySelection:
             assert "executable" in res.describe() or "expiry" in res.contract.reason
 
     def test_trace_is_explainable(self, snapshot, config, market, day):
-        rule = SelectionRule(target_delta=0.30)
+        rule = selection(target_delta=0.30)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         names = [step for step, _ in res.trace]
         assert "on the chain" in names and "by option type" in names
@@ -69,12 +83,12 @@ class TestExpirySelection:
 
 class TestStrikeSelection:
     def test_picks_delta_closest_to_target(self, snapshot, config, market, day):
-        rule = SelectionRule(target_delta=0.30)
+        rule = selection(target_delta=0.30)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         assert abs(abs(res.quote["delta"]) - 0.30) < 0.05
 
     def test_moneyness_selection(self, snapshot, config, market, day):
-        rule = SelectionRule(target_delta=None, moneyness=0.05)
+        rule = selection(target_delta=None, moneyness=0.05)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         spot = float(snapshot["underlying_price"].iloc[0])
         assert abs(res.contract.unwrap().strike - spot * 1.05) <= config.contract.strike_step
@@ -93,14 +107,14 @@ class TestStrikeSelection:
             )
             rows.append(row)
         frame = pd.DataFrame(rows)
-        rule = SelectionRule(target_dte=30, dte_window=(1, 600), target_delta=0.30)
+        rule = selection(target_dte=30, dte_window=(1, 600), target_delta=0.30)
         res = select_contract(frame, rule, config, market.calendar, day)
         assert res.contract.unwrap().strike == 410.0
 
     def test_missing_delta_excluded(self, snapshot, config, market, day):
         frame = snapshot.copy()
         frame["delta"] = np.nan
-        res = select_contract(frame, SelectionRule(target_delta=0.30), config, market.calendar, day)
+        res = select_contract(frame, selection(target_delta=0.30), config, market.calendar, day)
         assert not res.ok
 
 
@@ -108,18 +122,18 @@ class TestLiquidityFilters:
     def test_unavailable_fields_are_skipped_not_failed(self, snapshot, config, market, day):
         """The synthetic chain supplies no volume; an absent field must not count
         as a failure."""
-        rule = SelectionRule(target_delta=0.30, min_volume=100, min_open_interest=500)
+        rule = selection(target_delta=0.30, min_volume=100, min_open_interest=500)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         assert res.ok and len(res.skipped_filters) == 2
 
     def test_spread_cap_excludes_wide_quotes(self, snapshot, config, market, day):
-        rule = SelectionRule(target_delta=0.30, max_relative_spread=1e-6)
+        rule = selection(target_delta=0.30, max_relative_spread=1e-6)
         res = select_contract(snapshot, rule, config, market.calendar, day)
         assert not res.ok and "liquidity" in res.contract.reason
 
     def test_empty_chain(self, config, market, day):
         empty = pd.DataFrame(columns=list(CHAIN_COLUMNS))
-        res = select_contract(empty, SelectionRule(target_delta=0.3), config, market.calendar, day)
+        res = select_contract(empty, selection(target_delta=0.3), config, market.calendar, day)
         assert not res.ok
 
 

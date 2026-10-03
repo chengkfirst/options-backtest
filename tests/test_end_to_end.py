@@ -18,6 +18,8 @@ from backtest.engine.strategy import Strategy
 from backtest.engine.vectorized import TradeTableEngine
 from backtest.core.errors import StartupError
 from backtest.signals.contracts import SelectionRule
+
+from tests.conftest import exits, selection
 from backtest.core.types import Right
 
 
@@ -29,7 +31,7 @@ def baseline(market, chain, signals, config):
     strategy = Strategy(
         name="baseline",
         entry=EntryRule("sma_20 > sma_50", condition, requires),
-        select=SelectionRule(right=Right.CALL, target_dte=30, dte_window=(21, 45), target_delta=0.30),
+        select=selection(right=Right.CALL, target_dte=30, dte_window=(21, 45), target_delta=0.30),
         exit=ExitRule(hold_days=10, take_profit=1.0, stop_loss=0.5, dte_floor=5),
         quantity=1,
     )
@@ -139,6 +141,8 @@ class TestResultSurface:
         """
         base = dict(symbol="QQQ", start="2023-01-01", end="2023-06-30",
                     entry="close < sma_20 * 0.98",
+                    select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                            "delta_lo": 0.25, "delta_hi": 0.45},
                     exit={"hold_days": 15, "take_profit": 0.8, "stop_loss": 0.4,
                           "dte_floor": 7},
                     sizing={"method": "fixed"}, quantity=1)
@@ -179,8 +183,8 @@ class TestNoTrades:
     def test_impossible_entry_yields_empty_result(self, market, chain, signals, config):
         strategy = Strategy(
             entry=EntryRule("never", lambda view: False),
-            select=SelectionRule(target_delta=0.30),
-            exit=ExitRule(),
+            select=selection(target_delta=0.30),
+            exit=exits(),
         )
         result = Result(TradeTableEngine(market, chain, signals, config).run(strategy))
         assert result.trades.empty

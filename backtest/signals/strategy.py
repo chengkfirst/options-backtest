@@ -35,12 +35,23 @@ class ExitRule:
 
     - ``hold_days`` / ``dte_floor`` are in trading days
     - ``take_profit`` / ``stop_loss`` are fractions of the entry price (0.5 = 50%)
+
+    **Nothing here is defaulted to a level.** These are slots 3 and 4 of the seven, and
+    the architecture document permits optimising them under its protocol -- it does not
+    permit the platform picking them. The cost of a default here is not theoretical: a run
+    that omitted ``stop_loss`` used to be silently capped at -50%, and the MAE distribution
+    a researcher then reads *in order to choose a stop* came back censored at exactly that
+    level. The platform set the parameter and then hid the evidence for setting it.
+
+    ``None`` means **no such exit**, which is a real configuration rather than a stand-in.
+    At least one of the two time exits is still required, because a position left to drag
+    into expiry is a mechanism failure rather than a choice.
     """
 
-    hold_days: int | None = 10
-    take_profit: float | None = 1.0
-    stop_loss: float | None = 0.5
-    dte_floor: int | None = 5
+    hold_days: int | None = None
+    take_profit: float | None = None
+    stop_loss: float | None = None
+    dte_floor: int | None = None
 
     def __post_init__(self) -> None:
         if self.hold_days is not None:

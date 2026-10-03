@@ -21,6 +21,8 @@ from backtest.engine.strategy import Strategy
 from backtest.engine.vectorized import TradeTableEngine
 from backtest.core.errors import StartupError
 from backtest.signals.contracts import SelectionRule
+
+from tests.conftest import exits, selection
 from backtest.core.types import CHAIN_COLUMNS, ContractId, ExitReason, Right
 
 
@@ -83,7 +85,7 @@ def scripted(market, config):
         chain = ScriptedChain(contract, prices)
         strategy = Strategy(
             entry=EntryRule("scripted", enter_on({signal_day})),
-            select=SelectionRule(
+            select=selection(
                 target_dte=(expiry - entry_day).days,
                 dte_window=(1, 400),
                 target_delta=0.30,
@@ -104,7 +106,7 @@ class TestExecutionLag:
         signal_day = sessions[60]
         strategy = Strategy(
             entry=EntryRule("one_day", enter_on({signal_day})),
-            select=SelectionRule(target_delta=0.30),
+            select=selection(target_delta=0.30),
             exit=ExitRule(hold_days=5, take_profit=None, stop_loss=None, dte_floor=5),
         )
         result = TradeTableEngine(market, chain, signals, config).run(strategy)
@@ -115,7 +117,7 @@ class TestExecutionLag:
         last = market.sessions()[-1]
         strategy = Strategy(
             entry=EntryRule("last", enter_on({last})),
-            select=SelectionRule(target_delta=0.30),
+            select=selection(target_delta=0.30),
             exit=ExitRule(hold_days=5, take_profit=None, stop_loss=None, dte_floor=5),
         )
         result = TradeTableEngine(market, chain, signals, config).run(strategy)
@@ -192,8 +194,8 @@ class TestGuards:
     def test_rejects_unknown_signal_at_startup(self, market, chain, signals, config):
         strategy = Strategy(
             entry=EntryRule("bad", always_enter, requires=("not_a_signal",)),
-            select=SelectionRule(target_delta=0.30),
-            exit=ExitRule(),
+            select=selection(target_delta=0.30),
+            exit=exits(),
         )
         with pytest.raises(StartupError, match="unregistered signals"):
             TradeTableEngine(market, chain, signals, config).run(strategy)
@@ -208,7 +210,7 @@ class TestGuards:
         dragged into expiry."""
         strategy = Strategy(
             entry=EntryRule("all", always_enter),
-            select=SelectionRule(target_delta=0.30),
+            select=selection(target_delta=0.30),
             exit=ExitRule(hold_days=10, take_profit=1.0, stop_loss=0.5, dte_floor=1),
         )
         with pytest.raises(StartupError, match="days-to-expiry floor"):
@@ -218,8 +220,8 @@ class TestGuards:
         with pytest.raises(StartupError):
             Strategy(
                 entry=EntryRule("x", always_enter),
-                select=SelectionRule(target_delta=0.3),
-                exit=ExitRule(),
+                select=selection(target_delta=0.3),
+                exit=exits(),
                 quantity=0,
             )
 
@@ -228,7 +230,7 @@ class TestPnlIntegrity:
     def test_net_equals_gross_minus_fees(self, market, chain, signals, config):
         strategy = Strategy(
             entry=EntryRule("all", always_enter),
-            select=SelectionRule(target_delta=0.30),
+            select=selection(target_delta=0.30),
             exit=ExitRule(hold_days=8, take_profit=1.0, stop_loss=0.5, dte_floor=5),
         )
         result = TradeTableEngine(market, chain, signals, config).run(strategy)
@@ -245,7 +247,7 @@ class TestPnlIntegrity:
     def test_concurrency_and_capital_check(self, market, chain, signals, config):
         strategy = Strategy(
             entry=EntryRule("all", always_enter),
-            select=SelectionRule(target_delta=0.30),
+            select=selection(target_delta=0.30),
             exit=ExitRule(hold_days=8, take_profit=1.0, stop_loss=0.5, dte_floor=5),
         )
         result = TradeTableEngine(market, chain, signals, config).run(strategy)
@@ -261,7 +263,7 @@ class TestSweep:
     def pieces(self, market, chain, signals, config):
         strategy = Strategy(
             entry=EntryRule("all", always_enter),
-            select=SelectionRule(target_delta=0.30),
+            select=selection(target_delta=0.30),
             exit=ExitRule(hold_days=8, take_profit=1.0, stop_loss=0.5, dte_floor=5),
         )
         return market, chain, signals, config, strategy

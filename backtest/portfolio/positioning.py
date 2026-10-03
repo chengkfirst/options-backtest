@@ -29,6 +29,20 @@ from backtest.core.errors import StartupError
 from backtest.core.types import require
 
 
+#: Which parameter each sizing method needs, in one place.
+#:
+#: Read by the validation below and by ``tools/check_wiring.py``, which has to build a
+#: valid instance of every method the interface offers. Two copies of this mapping would
+#: drift, and the drift would show up as a method the interface can select and the backend
+#: refuses -- a feature that fails only when someone picks that one option.
+REQUIRES: dict[str, str] = {
+    "fixed": "contracts",
+    "risk_pct": "risk_pct",
+    "fixed_notional": "notional",
+    "scale_by_vol": "target_vol",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class Sizing:
     """How position size is determined.
@@ -56,21 +70,40 @@ class Sizing:
     invites its use.
     """
 
+    #: ``contracts`` is the one parameter with a defensible default: a fixed count of one
+    #: is the plainest possible choice and is visible in every trade of the log. The other
+    #: three are **not** defaulted -- "2% of equity per trade" is slot 6, a strategy choice
+    #: the architecture document permits optimising under its protocol, and a platform-side
+    #: 0.02 would size every position in the book without ever appearing in the
+    #: configuration a person reads back. Each is required when its method is chosen.
     method: str = "fixed"
     contracts: int = 1                 # fixed
-    risk_pct: float = 0.02             # risk_pct: at most 2% of equity per trade
-    notional: float = 5_000.0          # fixed_notional
-    target_vol: float = 0.20           # scale_by_vol: the reference annual volatility
+    risk_pct: float | None = None      # risk_pct: the fraction of equity at risk per trade
+    notional: float | None = None      # fixed_notional
+    target_vol: float | None = None    # scale_by_vol: the reference annual volatility
     max_contracts: int = 50            # no method may exceed this
 
     def __post_init__(self) -> None:
-        allowed = {"fixed", "risk_pct", "fixed_notional", "scale_by_vol"}
-        require(self.method in allowed,
-                f"unknown sizing method {self.method!r}; one of {sorted(allowed)}")
+        require(self.method in REQUIRES,
+                f"unknown sizing method {self.method!r}; one of {sorted(REQUIRES)}")
         require(self.contracts >= 1, "contracts must be at least 1")
-        require(0 < self.risk_pct <= 1, "risk_pct must lie between 0 and 1")
-        require(self.notional > 0, "notional must be positive")
-        require(self.target_vol > 0, "target_vol must be positive")
+        # Each method's own parameter is required when that method is chosen, and ignored
+        # otherwise. Required rather than defaulted: it decides the size of every position
+        # in the book, and a value the platform supplied does not appear in the
+        # configuration a person reads back when asking what this run actually did.
+        needs = REQUIRES.get(self.method)
+        if needs is not None and getattr(self, needs) is None:
+            raise StartupError(
+                f"sizing method {self.method!r} needs {needs}. It is a strategy choice "
+                f"and the platform does not pick it -- it would size every position in "
+                f"the book and never show up in the configuration you read back"
+            )
+        if self.risk_pct is not None:
+            require(0 < self.risk_pct <= 1, "risk_pct must lie between 0 and 1")
+        if self.notional is not None:
+            require(self.notional > 0, "notional must be positive")
+        if self.target_vol is not None:
+            require(self.target_vol > 0, "target_vol must be positive")
         require(self.max_contracts >= 1, "max_contracts must be at least 1")
 
 

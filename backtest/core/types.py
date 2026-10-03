@@ -222,6 +222,22 @@ class TradeRecord:
     #: table carry NaN, so downstream code raises rather than reading them as 0.
     mfe: float = float("nan")
     mae: float = float("nan")
+    #: The same two in **underlying terms**: the furthest the underlying travelled for
+    #: and against the position, as a fraction of the entry spot.
+    #:
+    #: Both are kept because they answer different questions. A premium excursion mixes
+    #: the underlying's move with IV and theta, so a trade whose underlying went the right
+    #: way can still show a negative premium MFE — which is the real behaviour of a long
+    #: option and exactly what a premium stop reacts to. The underlying version isolates
+    #: the move itself, and being an underlying-side quantity it is the one that **survives
+    #: a synthetic chain**: the premium version there describes Black-Scholes.
+    #:
+    #: Sign convention: favourable means the direction the position profits from — up for
+    #: a long call and a short put, down for a long put and a short call. Getting this
+    #: backwards would silently swap MFE and MAE, so it is computed from the contract's
+    #: right and the entry side rather than from the premium's own movement.
+    mfe_underlying: float = float("nan")
+    mae_underlying: float = float("nan")
     #: The grouping tag and note attached at order time (from the Plan). The
     #: classification reflects the judgement actually made that day; it is not
     #: assigned afterwards from the outcome, which would let the analysis
@@ -274,6 +290,8 @@ TRADE_COLUMNS: tuple[str, ...] = (
     "deferred_days",
     "mfe",
     "mae",
+    "mfe_underlying",
+    "mae_underlying",
     "tag",
     "note",
 )

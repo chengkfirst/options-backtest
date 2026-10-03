@@ -93,7 +93,45 @@ class ExcursionStudy:
             "losers_mfe_median": float(losers["mfe"].median()) if len(losers) else np.nan,
         }
 
-    #: MFE and MAE are premium excursions, so they are option-side throughout.
+    def underlying_summary(self) -> "dict[str, Any] | None":
+        """The same distributions in **underlying terms**, or ``None`` when absent.
+
+        This is the half that survives a synthetic chain. A premium excursion mixes the
+        underlying's move with IV and theta, so on a chain whose IV is a constant it is a
+        statement about Black-Scholes; the underlying's own path is real data either way.
+        """
+        if "mfe_underlying" not in self.frame.columns:
+            return None
+        f = self.frame.dropna(subset=["mfe_underlying", "mae_underlying"])
+        if f.empty:
+            return None
+        winners = f[f["net_pnl"] > 0]
+        return {
+            "n": int(len(f)),
+            "mfe_median": float(f["mfe_underlying"].median()),
+            "mfe_q90": float(f["mfe_underlying"].quantile(0.90)),
+            "mae_median": float(f["mae_underlying"].median()),
+            "mae_q25": float(f["mae_underlying"].quantile(0.25)),
+            "winners_mae_median": (float(winners["mae_underlying"].median())
+                                   if len(winners) else np.nan),
+        }
+
+    def leverage(self) -> float:
+        """How many percent of premium one percent of the underlying was worth, adversely.
+
+        **This is the number a premium stop is really set in.** A stop at -40% of premium
+        on a position levered 25x fires on a 1.6% move in the underlying -- which is noise,
+        not a thesis being wrong. Computed on the adverse side because that is the side a
+        stop sits on, and as a ratio of medians rather than a median of ratios, so one
+        trade whose underlying barely moved cannot send it to infinity.
+        """
+        u = self.underlying_summary()
+        if u is None or not np.isfinite(u["mae_median"]) or u["mae_median"] == 0:
+            return float("nan")
+        return float(self.summary()["mae_median"] / u["mae_median"])
+
+    #: Premium excursions are option-side. The underlying-terms pair is not, and is
+    #: labelled separately where it is printed.
     scope = Scope.OPTION
 
     def text(self, *, synthetic: bool) -> str:
@@ -102,6 +140,9 @@ class ExcursionStudy:
         ``synthetic`` is required. These distributions are the usual way a take-profit or a
         stop gets set, which makes an unlabelled one the most costly thing in this module:
         a level read off a constant-IV chain is a level fitted to Black-Scholes.
+
+        The underlying-terms block below carries the opposite label on purpose: it is the
+        one part of this study that a synthetic chain does not invalidate.
         """
         s = self.summary()
         warn = ["", "!! The distribution is censored; the conclusions below cannot "
@@ -120,8 +161,39 @@ class ExcursionStudy:
             f"   <- a stop tighter than this cuts off half the winners",
             f"  eventual losers ran up to a median of {s['losers_mfe_median']:+.0%}"
             f"   <- a take-profit looser than this gives that back",
+            *self._underlying_block(synthetic),
             *warn,
         ])
+
+    def _underlying_block(self, synthetic: bool) -> list[str]:
+        """The underlying-terms distributions, and what the premium ones are levered on."""
+        u = self.underlying_summary()
+        if u is None:
+            return ["", "  (no underlying-terms excursion in this log: it comes from the "
+                        "event-driven", "   engine, and older runs predate the column)"]
+        lines = ["", "  In underlying terms  <- real data, and so **not** limited by a "
+                     "synthetic chain",
+                 f"  furthest for the position   median {u['mfe_median']:+.1%}"
+                 f"  90th {u['mfe_q90']:+.1%}",
+                 f"  furthest against it         median {u['mae_median']:+.1%}"
+                 f"  25th {u['mae_q25']:+.1%}"]
+        lev = self.leverage()
+        if np.isfinite(lev) and lev > 0:
+            lines += [
+                "",
+                f"  The two differ by about {lev:.0f}x on the adverse side: one percent "
+                f"against in the",
+                f"  underlying showed up as roughly {lev:.0f}% off the premium. **This is "
+                f"the number a",
+                f"  premium stop is actually set in** -- a stop at -40% of premium fires on "
+                f"a {40 / lev:.1f}%",
+                "  move in the underlying, which is a question about noise rather than "
+                "about the thesis.",
+            ]
+        if synthetic:
+            lines += ["", "  (the ratio itself rests on option prices, so on a synthetic "
+                          "chain read it as", "   an order of magnitude, not a figure)"]
+        return lines
 
 
 def study(trades: pd.DataFrame, exit_rule=None) -> ExcursionStudy:

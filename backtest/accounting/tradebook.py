@@ -47,6 +47,7 @@ def trades_frame(records: "tuple[TradeRecord, ...]") -> pd.DataFrame:
             "holding_days": r.holding_days, "source": r.source.value,
             "quote_gaps": r.quote_gaps, "deferred_days": r.deferred_days,
             "mfe": r.mfe, "mae": r.mae,
+            "mfe_underlying": r.mfe_underlying, "mae_underlying": r.mae_underlying,
             "tag": r.tag, "note": r.note,
         }
         for prefix, ctx in (("entry", r.entry_context), ("exit", r.exit_context)):

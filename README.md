@@ -48,6 +48,8 @@ from backtest import run
 
 r = run(symbol="QQQ", start="2020-01-01", end="2024-12-31",
         entry="close < sma_20 * 0.98",
+        select={"right": "call", "dte_lo": 21, "dte_hi": 45,      # which contract
+                "delta_lo": 0.25, "delta_hi": 0.45},
         exit={"hold_days": 20, "take_profit": 0.8, "stop_loss": 0.4, "dte_floor": 7},
         engine="event_driven",
         sizing={"method": "risk_pct", "risk_pct": 0.02})
@@ -97,7 +99,9 @@ def plan(ctx):
     )
 
 r = run(symbol="QQQ", start="2022-01-01", end="2023-12-31",
-        plan=plan, exit={"hold_days": 20, "dte_floor": 7}, engine="event_driven")
+        plan=plan, select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                           "delta_lo": 0.25, "delta_hi": 0.45},
+        exit={"hold_days": 20, "dte_floor": 7}, engine="event_driven")
 
 r.trades.groupby("tag").agg(trades=("net_pnl", "size"), mean_contracts=("quantity", "mean"))
 ```
@@ -152,6 +156,8 @@ def review(ctx, pos):
 
 r = run(symbol="QQQ", start="2023-01-01", end="2023-06-30",
         entry="close < sma_20 * 0.98",
+        select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                "delta_lo": 0.25, "delta_hi": 0.45},
         exit={"hold_days": 20, "dte_floor": 7},
         engine="event_driven", review=review)
 print(len(r.trades), "trades")
@@ -225,6 +231,9 @@ row-identical trade logs** — the basis for checking each against the other, he
 from backtest import run
 
 r = run(symbol="QQQ", start="2023-01-01", end="2023-06-30",
+        entry="close < sma_20 * 0.98",
+        select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                "delta_lo": 0.25, "delta_hi": 0.45},
         exit={"hold_days": 10, "dte_floor": 5}, engine="event_driven")
 
 r.stats()            # count, win rate, payoff ratio, mean holding
@@ -249,6 +258,8 @@ from backtest.research.baselines import report
 
 r = run(symbol="QQQ", start="2022-01-01", end="2023-12-31",
         entry="close < sma_20 * 0.98",
+        select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                "delta_lo": 0.25, "delta_hi": 0.45},
         exit={"hold_days": 20, "take_profit": 0.8, "stop_loss": 0.4, "dte_floor": 7},
         engine="event_driven", sizing={"method": "risk_pct", "risk_pct": 0.02})
 
