@@ -147,6 +147,37 @@ def _selection_from(spec):
     )
 
 
+def _brake_from(spec):
+    """Build the book-wide risk rule, or ``None``.
+
+    Every stage is required. Where to start cutting, where to stop opening, how hard to cut
+    and when to release govern the whole book, and a platform-chosen set would do so
+    without appearing in the configuration a person reads back.
+    """
+    from backtest.portfolio.constraints import DrawdownBrake
+
+    if not spec:
+        return None
+    if isinstance(spec, DrawdownBrake):
+        return spec
+    opts = dict(spec)
+    needed = ("reduce_at", "halt_at", "resume_at", "keep")
+    missing = [k for k in needed if k not in opts]
+    if missing:
+        raise StartupError(
+            f"risk needs {', '.join(missing)}. Each one governs the whole book and the "
+            f"platform does not pick it. For example risk={{\"reduce_at\": 0.10, "
+            f"\"halt_at\": 0.20, \"resume_at\": 0.05, \"keep\": 0.5}}"
+        )
+    unknown = sorted(set(opts) - set(needed) - {"liquidate_at"})
+    if unknown:
+        raise StartupError(
+            f"risk got {', '.join(unknown)}, which it does not take. It takes "
+            f"{', '.join(needed)} and optionally liquidate_at"
+        )
+    return DrawdownBrake(**opts)
+
+
 def _components_from(spec) -> dict[str, Any]:
     """Turn ``{"stop_loss": {"variant": "underlying", "params": {...}}}`` into components.
 
@@ -212,6 +243,7 @@ def run(
     shadow_days: int | None = None,
     execution_lag_days: int | None = None,
     components: "Mapping[str, Mapping[str, Any]] | None" = None,
+    risk: "Mapping[str, Any] | None" = None,
 ) -> "Result":
     """Run one backtest.
 
@@ -316,9 +348,16 @@ def run(
 
         outcome = EventDrivenEngine(
             market, chain_source, signal_set, config, max_concurrent=max_concurrent,
-            shadow_days=shadow_days,
+            shadow_days=shadow_days, brake=_brake_from(risk),
         ).run(strategy)
     else:
+        if risk:
+            raise StartupError(
+                "a book-wide risk rule needs the event-driven engine: scaling the book "
+                "down or closing it acts on positions that are open, and the trade table "
+                "computes each trade independently with no book to act on. Rerun with "
+                'engine="event_driven".'
+            )
         if shadow_days:
             raise StartupError(
                 "shadow tracking needs the event-driven engine: the trade table does not "

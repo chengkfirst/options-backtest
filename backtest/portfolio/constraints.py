@@ -28,6 +28,9 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
+from backtest.core.types import require
+from backtest.portfolio.risk_actions import NOTHING, RiskAction, RiskDecision
+
 
 @dataclass(frozen=True, slots=True)
 class ExposureLimits:
@@ -63,23 +66,80 @@ class ExposureLimits:
 
 @dataclass(frozen=True, slots=True)
 class DrawdownBrake:
-    """A drawdown brake. Steps down in stages and releases on recovery."""
+    """A drawdown brake: a book-wide risk rule, expressed in the four risk actions.
 
-    reduce_at: float = 0.10        # at this drawdown, halve the size
-    halt_at: float = 0.20          # at this drawdown, stop opening
-    resume_at: float = 0.05        # once the drawdown narrows to this, release
+    **Nothing here is defaulted.** Where to start cutting, where to stop opening, how hard
+    to cut and when to release are risk decisions, and a platform-chosen set would govern
+    the whole book without appearing in the configuration a person reads back. See
+    ``tools/check_defaults.py``.
+
+    ``keep`` is the one that was wrong rather than merely absent: the brake used to halve
+    the size at ``reduce_at`` with 0.5 written into a lookup table, and it halved **new
+    entries only** -- existing positions were untouched while the class read as a brake on
+    the book. The document's ``scale_down`` is "reduce all positions by a ratio", so that
+    is what it now does.
+    """
+
+    #: Drawdown (as a positive fraction) at which to scale the book down.
+    reduce_at: float
+    #: Drawdown at which to stop opening anything new.
+    halt_at: float
+    #: Once the drawdown narrows back to this, release.
+    resume_at: float
+    #: What fraction of each position to keep when scaling down. 0.5 halves the book.
+    keep: float
+    #: Drawdown at which to close the book entirely. ``None`` means never -- which is a
+    #: real choice, not an absent one.
+    liquidate_at: float | None = None
+
+    def __post_init__(self) -> None:
+        require(0 < self.resume_at <= self.reduce_at <= self.halt_at,
+                f"the brake's stages must widen: resume_at {self.resume_at} <= reduce_at "
+                f"{self.reduce_at} <= halt_at {self.halt_at}")
+        require(0 <= self.keep < 1,
+                f"keep must be between 0 and 1, and below 1 or nothing is cut; "
+                f"got {self.keep}")
+        if self.liquidate_at is not None:
+            require(self.liquidate_at >= self.halt_at,
+                    f"liquidate_at {self.liquidate_at} must be at least halt_at "
+                    f"{self.halt_at}: closing the book while still opening is incoherent")
 
     def state(self, drawdown: float) -> str:
-        """``normal`` / ``reduced`` / ``halted``. ``drawdown`` is negative."""
+        """``normal`` / ``reduced`` / ``halted`` / ``liquidated``. ``drawdown`` is
+        negative."""
         d = abs(drawdown)
+        if self.liquidate_at is not None and d >= self.liquidate_at:
+            return "liquidated"
         if d >= self.halt_at:
             return "halted"
         if d >= self.reduce_at:
             return "reduced"
         return "normal"
 
+    def decide(self, drawdown: float) -> RiskDecision:
+        """The day's verdict, in the document's vocabulary."""
+        state = self.state(drawdown)
+        d = abs(drawdown)
+        if state == "liquidated":
+            return RiskDecision(RiskAction.LIQUIDATE,
+                                reason=f"drawdown {d:.1%} reached the liquidation level "
+                                       f"of {self.liquidate_at:.1%}")
+        if state == "halted":
+            return RiskDecision(RiskAction.NO_NEW_POSITIONS,
+                                reason=f"drawdown {d:.1%} is past the {self.halt_at:.1%} "
+                                       f"halt level")
+        if state == "reduced":
+            return RiskDecision(RiskAction.SCALE_DOWN, keep=self.keep,
+                                reason=f"drawdown {d:.1%} is past the "
+                                       f"{self.reduce_at:.1%} reduce level")
+        return NOTHING
+
     def scale(self, drawdown: float) -> float:
-        return {"normal": 1.0, "reduced": 0.5, "halted": 0.0}[self.state(drawdown)]
+        """How much of a **new** position to open. Separate from ``decide`` because the
+        two answer different questions: this one sizes an entry, that one acts on the
+        book."""
+        return {"normal": 1.0, "reduced": self.keep,
+                "halted": 0.0, "liquidated": 0.0}[self.state(drawdown)]
 
 
 def exposure_report(greeks_frame: pd.DataFrame, limits: ExposureLimits) -> pd.DataFrame:

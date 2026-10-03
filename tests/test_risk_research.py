@@ -171,12 +171,16 @@ class TestHedge:
         allowed, _ = ExposureLimits(max_delta_pct=0.50, max_vega_pct=0.50).check(greeks, 100_000.0)
         assert allowed
 
+    #: The stages this test uses. Stated rather than taken from a default, because the
+    #: brake no longer has one: where to cut and how hard governs the whole book.
+    BRAKE = dict(reduce_at=0.10, halt_at=0.20, resume_at=0.05, keep=0.5)
+
     @pytest.mark.parametrize("dd,state", [(-0.02, "normal"), (-0.12, "reduced"), (-0.25, "halted")])
     def test_brake_states(self, dd, state):
-        assert DrawdownBrake().state(dd) == state
+        assert DrawdownBrake(**self.BRAKE).state(dd) == state
 
     def test_brake_scale_zero_when_halted(self):
-        assert DrawdownBrake().scale(-0.30) == 0.0
+        assert DrawdownBrake(**self.BRAKE).scale(-0.30) == 0.0
 
     def test_hedge_columns_required(self):
         with pytest.raises(KeyError, match="is_hedge"):

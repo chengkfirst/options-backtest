@@ -58,6 +58,7 @@ from backtest.accounting.tradebook import (
     trades_frame,
 )
 from backtest.accounting.ledger import Ledger, Position, Snapshot
+from backtest.portfolio.risk_actions import NOTHING, RiskAction
 from backtest.portfolio.positioning import contracts_for, loss_fraction
 from backtest.portfolio.scenarios import aggregate_greeks
 from backtest.signals.contracts import select_contract
@@ -273,6 +274,7 @@ class EventDrivenEngine:
         #: trade_id -> what is needed to keep quoting a contract after its trade closed.
         shadowing: dict[int, dict] = {}
         self._brake_state = "normal"
+        self._risk = NOTHING
         self._last_greeks = None
         self._closed_pnl = records          # the same list, referenced not copied
 
@@ -325,6 +327,12 @@ class EventDrivenEngine:
                                  self.market.spot(day).or_else(float("nan")), snap.equity_mid)
             greeks_daily.append(g)
             self._last_greeks = g
+            # 4  the book-wide risk rule. Its verdict is one of the document's four
+            # actions, and **it acts on the book** -- scaling down reduces the positions
+            # that are open, not only the size of the next entry. The brake used to do the
+            # latter while reading as the former.
+            self._risk = self.brake.decide(self._drawdown) if self.brake is not None \
+                else NOTHING
             if self.brake is not None:
                 new_state = self.brake.state(self._drawdown)
                 if new_state != self._brake_state:
@@ -339,6 +347,11 @@ class EventDrivenEngine:
             # 6-7  signals -> the strategy
             view = self.signals.on(day)
             intents: list[Intent] = []
+
+            # The risk rule acts before the per-trade rules do. It has to: a position the
+            # book-wide rule is closing should not also be queued by its own stop on the
+            # same day, and whichever ran first would otherwise decide the attribution.
+            intents.extend(self._risk_intents(ledger, open_trades, queue, day))
 
             for pos in ledger.positions:
                 trade = open_trades.get(pos.trade_id)
@@ -567,6 +580,52 @@ class EventDrivenEngine:
             })
             st["left"] -= 1
 
+    def _risk_intents(self, ledger, open_trades, queue, day: date) -> list[Intent]:
+        """Turn the day's risk verdict into orders on the existing book.
+
+        ``no_new_positions`` needs nothing here -- it is read at entry. ``scale_down`` and
+        ``liquidate`` act on what is already held, which is what makes them different from
+        a brake on sizing, and what the document means by "reduce all positions by a
+        ratio" and "close the whole book".
+
+        Every intent is credited to ``headwind``, so the decision log can tell a position
+        the book-wide rule cut from one its own stop closed. They are different events and
+        a trade log cannot distinguish them without this.
+        """
+        if self._risk.action not in (RiskAction.SCALE_DOWN, RiskAction.LIQUIDATE):
+            return []
+        target = self.market.calendar.shift(day, self.config.execution_lag_days)
+        if target is None or target > self.config.end:
+            return []
+        out: list[Intent] = []
+        for pos in list(ledger.positions):
+            if open_trades.get(pos.trade_id) is None or \
+                    self._already_queued(queue, pos.contract):
+                continue
+            if self._risk.action is RiskAction.LIQUIDATE:
+                quantity, kind = pos.abs_quantity, Action.CLOSE
+            else:
+                # Round down what is cut, so scaling never accidentally increases a
+                # position and a one-contract position is left alone rather than being
+                # closed by a rule that said "reduce".
+                quantity = pos.abs_quantity - int(pos.abs_quantity * self._risk.keep)
+                kind = Action.REDUCE
+                if quantity <= 0 or quantity >= pos.abs_quantity:
+                    continue
+            out.append(Intent(
+                contract=pos.contract,
+                side=Side.SELL if pos.quantity > 0 else Side.BUY,
+                quantity=quantity, created=day, execute_on=target,
+                trade_id=pos.trade_id, kind=kind, reason=self._risk.describe(),
+                exit_reasons=(ExitReason.RISK_FORCED,) if kind is Action.CLOSE else (),
+                component_id="headwind",
+            ))
+        if out:
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               f"book-wide risk rule: {self._risk.describe()} "
+                               f"({len(out)} positions)")
+        return out
+
     def _exit_reasons(self, pos: Position, trade: OpenTrade, quotes, day: date, strategy: Strategy):
         # This trade's own rule wins. Under a plan each trade's take-profit and stop
         # can differ — which is where the seven components' coupling actually lands:
@@ -616,9 +675,9 @@ class EventDrivenEngine:
             self.events.record(EventKind.CANDIDATE_DROPPED, day,
                                f"at the concurrency limit of {self.max_concurrent}")
             return None
-        if self.brake is not None and self._brake_state == "halted":
+        if self._risk.blocks_entries:
             self.events.record(EventKind.CANDIDATE_DROPPED, day,
-                               "the drawdown brake has halted new entries")
+                               f"no new positions: {self._risk.describe()}")
             return None
         if self.limits is not None and self._last_greeks is not None:
             allowed, why = self.limits.check(self._last_greeks, self._last_equity)
