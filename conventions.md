@@ -1,9 +1,8 @@
 # Working conventions
 
-> This file is independent of `Plan/backtest-system-architecture.pdf` (the architecture),
-> [ROADMAP.md](ROADMAP.md) (what is built against it) and
-> [requirements.md](requirements.md) (the criteria). It covers one thing only: **how to
-> make sure what gets built is right, and does not break quietly.**
+> This file is independent of `Plan/backtest-system-architecture.pdf` (the architecture)
+> and [requirements.md](requirements.md) (what is built against it). It covers one thing
+> only: **how to make sure what gets built is right, and does not break quietly.**
 
 ---
 

@@ -9,8 +9,8 @@ months). Two uses:
 
 > Where it stands and what is missing → **[requirements.md](requirements.md)**
 > (every criterion with its status)
-> The architecture, and what is built against it → **[ROADMAP.md](ROADMAP.md)**
-> The architecture itself → **`Plan/backtest-system-architecture.pdf`**
+> The architecture → **`Plan/backtest-system-architecture.pdf`**
+> What is built against it, layer by layer → **[requirements.md](requirements.md)**
 > Which questions the platform is meant to answer → **[research-questions.md](research-questions.md)**
 
 ---
@@ -287,45 +287,77 @@ The checking rules and the bar for a new guard are in [conventions.md](conventio
 
 ## Layout
 
-The tree follows the architecture document's eight layers, and `tools/check_deps.py`
-fails the build on a dependency that points upward. `ROADMAP.md` has the layer-by-layer
-status and says which of the plan's directories do not exist yet, and why.
+The tree follows the architecture document's eight layers, and `tools/check_deps.py` fails
+the build on a dependency that points upward. Square brackets mark a directory the
+document specifies that **does not exist here yet**; `requirements.md` says why for each
+one.
 
 ```
 backtest/
-  core/         Layer 0 · the contract every layer shares
-                maybe.py     values that may be absent — no bare None / NaN / 0
-                types.py     ContractId, TradeRecord, exit reasons and their precedence
-                actions.py   the nine-action vocabulary, and which six are executable
-                slots.py     the seven slots: what each decides in a trade (the UI's source)
-                clock.py config.py errors.py run_log.py
-  data/         Layer 1 · raw data to data that was genuinely available at t
-                underlying.py  two price sets: adjusted for signals, traded for strikes
-                pipeline.py    nine steps, each with its reason, alternatives and a check
-                ingest.py store.py market.py multi_asset.py
-    options/    chain.py adapters.py (wire in your own data) chain_registry.py
-                pricing.py (a market model, not part of the synthetic chain) synthetic/
-  signals/      Layer 2 · what to buy or sell
-                lifecycle.py   four states, and the five settings still open
-                contracts.py   selection: a feasible region plus a ranking objective
-                plan.py        one function decides contract, size and exits together
-                review.py      the daily review: dynamic exits, scaling in and out
-                strategy.py registry.py indicators.py
-    setup/      slot 1 · regime.py
-    entry/      slot 2 · expression.py
-  portfolio/    Layer 3 · signals to target positions, within limits
-                positioning.py slot 6 · size = risk budget / stop distance
-                scenarios.py   greeks aggregation, the stress grid, VaR, historical replay
-                constraints.py exposure limits and the drawdown brake
-  execution/    Layer 4 · costs.py — buy at the ask, sell at the bid, never the mid
-  engine/       Layer 5 · loop.py (day by day) vectorized.py (screening) strategy.py
-  accounting/   Layer 5 · ledger.py tradebook.py attribution.py
-  research/     Layer 6 · metrics.py excursion.py events.py tradeoff.py investor.py
-                anomaly.py sweep.py positioning.py
-  api/          Layer 7 · sdk.py
-app/            Layer 7 · the local web interface (server.py plus static/)
+  core/         maybe.py errors.py types.py config.py clock.py
+                actions.py  run_log.py  slots.py
+                                        [absent: events.py component.py registry.py
+                                                 dataview.py invariants.py]
+  data/         ingest.py validate (in underlying.py / options/chain.py) store.py
+                market.py multi_asset.py pipeline.py underlying.py
+                                        [absent: pit.py universe.py features/]
+    options/    chain.py chain_registry.py adapters.py pricing.py synthetic/
+                                        [absent: contracts.py quotes.py rates.py
+                                                 surface.py]
+  signals/      lifecycle.py contracts.py registry.py indicators.py strategy.py
+                review.py plan.py
+    setup/      regime.py                           (slot 1)
+    entry/      expression.py                       (slot 2)
+                                        [absent: take_profit/ stop_loss/ headwind/
+                                                 hedge/ rolls/ universe/ filters/
+                                                 combiner.py]
+  portfolio/    positioning.py (slot 6)  scenarios.py  constraints.py
+                                        [absent: rebalance.py optimizers/
+                                                 risk_models/ risk_rules/ hedges/]
+  execution/    costs.py
+                                        [absent: orders.py market_rules/ fill_models/
+                                                 slippage/ exercise.py sim_broker.py]
+  engine/       loop.py vectorized.py strategy.py
+                                        [absent: scheduler.py runner.py batch.py]
+  accounting/   ledger.py tradebook.py attribution.py
+                                        [absent: positions.py cash.py valuation.py
+                                                 corp_actions.py expiry.py pnl.py
+                                                 snapshots.py — all inside ledger.py]
+  research/     metrics.py sweep.py positioning.py excursion.py events.py
+                investor.py tradeoff.py anomaly.py
+                                        [absent: tracker.py validation/ baselines.py
+                                                 ablation.py counterfactual.py reports/]
+  api/          sdk.py                   [absent: cli.py rest/ jobs/]
+app/            server.py store.py static/        (the plan's Layer 7 web UI)
 tools/          the guards and the regression baseline
-Plan/           the architecture document this tree follows
+                                        [absent: live/ — no live path]
+```
+
+The shape of the modules that do exist:
+
+```
+core/       maybe.py     values that may be absent — no bare None / NaN / 0
+            types.py     ContractId, TradeRecord, exit reasons and their precedence
+            actions.py   the nine-action vocabulary, and which six are executable
+            slots.py     the seven slots: what each decides in a trade (the UI's source)
+data/       underlying.py  two price sets: adjusted for signals, traded for strikes
+            pipeline.py    nine steps, each with its reason, alternatives and a check
+  options/  adapters.py    wire in your own data: schema, health check, column mapping
+            pricing.py     a market model, not part of the synthetic chain
+signals/    lifecycle.py   four states, and the five settings still open
+            contracts.py   selection: a feasible region plus a ranking objective
+            plan.py        one function decides contract, size and exits together
+            review.py      the daily review: dynamic exits, scaling in and out
+portfolio/  positioning.py slot 6 · size = risk budget / stop distance
+            scenarios.py   greeks aggregation, the stress grid, VaR, historical replay
+execution/  costs.py       buy at the ask, sell at the bid, never the mid
+engine/     loop.py        day by day        vectorized.py  screening
+accounting/ ledger.py      the accounting identity checked every day
+            attribution.py the greeks split, with the residual as a diagnostic
+research/   excursion.py   MFE / MAE, with censoring detection
+            events.py      event studies, with the unconditional baseline
+            tradeoff.py    the moneyness × tenor surface from the day's real chain
+            anomaly.py     eight rules that stay silent when nothing fires
 ```
 
 `research/` is your local research record (run history, trade logs, notes) and is **not

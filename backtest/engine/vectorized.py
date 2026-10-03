@@ -35,7 +35,7 @@ from backtest.execution.costs import (
 )
 from backtest.data.options.chain import ChainSource
 from backtest.data.market import MarketData
-from backtest.accounting.tradebook import TradeTableResult
+from backtest.accounting.tradebook import TradeTableResult, trade_context
 from backtest.engine.strategy import Strategy
 from backtest.core.errors import InvariantError, StartupError
 from backtest.core.run_log import EventKind, EventLog
@@ -490,46 +490,15 @@ class TradeTableEngine:
             deferred=deferred,
         )
 
-    def _context(self, quote: dict, day: date, contract: ContractId) -> dict[str, Maybe[float]]:
-        """The context at entry and exit, for grouping the analysis any way afterwards
-        without rerunning the backtest.
-
-        Two sources: the **chain** gives the contract's own state (IV, delta,
-        moneyness), and the **signal layer** gives the underlying's state at the time
-        (moving averages, RSI, volatility). The second cannot be dropped — "what was
-        RSI at entry" is one of the commonest cuts in grouped analysis, and it cannot
-        be reconstructed afterwards.
-        """
-
-        def numeric(key: str) -> Maybe[float]:
-            value = quote.get(key)
-            if value is None or (isinstance(value, float) and np.isnan(value)):
-                return Maybe.missing(f"{key} is unavailable")
-            return Maybe.some(float(value))
-
-        spot = numeric("underlying_price")
-        moneyness = (
-            Maybe.some(float(spot.unwrap() / contract.strike - 1.0))
-            if spot.is_present
-            else Maybe.missing("the underlying price is unavailable")
-        )
-        context: dict[str, Maybe[float]] = {
-            "underlying_price": spot,
-            "iv": numeric("iv"),
-            "delta": numeric("delta"),
-            "gamma": numeric("gamma"),
-            "vega": numeric("vega"),
-            "theta": numeric("theta"),
-            "moneyness": moneyness,
-            "dte_calendar": Maybe.some(float((contract.expiry - day).days)),
-            "dte_trading": Maybe.some(
-                float(self.market.calendar.sessions_between(day, contract.expiry))
-            ),
-        }
+    def _trade_context(self, quote: dict, day: date, contract: ContractId):
+        """Both engines build the context with the same function, so they cannot drift
+        apart on the columns the research layer slices on."""
         view = self.signals.on(day)
-        for name in self.signals.names:
-            context[f"sig_{name}"] = view[name]
-        return context
+        return trade_context(
+            quote, day, contract,
+            calendar=self.market.calendar,
+            signals={name: view[name] for name in self.signals.names},
+        )
 
     def _record(
         self, *, trade_id, contract, entry_day, exit_day, entry_price, exit_price,
@@ -564,8 +533,8 @@ class TradeTableEngine:
             source=QuoteSource.SYNTHETIC
             if entry_quote.get("source") == QuoteSource.SYNTHETIC.value
             else QuoteSource.VENDOR,
-            entry_context=self._context(entry_quote, entry_day, contract),
-            exit_context=self._context(exit_quote, exit_day, contract),
+            entry_context=self._trade_context(entry_quote, entry_day, contract),
+            exit_context=self._trade_context(exit_quote, exit_day, contract),
             quote_gaps=gaps,
             deferred_days=deferred,
         )

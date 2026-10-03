@@ -47,7 +47,11 @@ from backtest.signals.strategy import ExitRule
 from backtest.engine.strategy import Strategy
 from backtest.core.errors import InvariantError, StartupError
 from backtest.core.run_log import EventKind, EventLog
-from backtest.accounting.tradebook import trades_frame
+from backtest.accounting.tradebook import (
+    EventDrivenResult,
+    trade_context,
+    trades_frame,
+)
 from backtest.accounting.ledger import Ledger, Position, Snapshot
 from backtest.portfolio.positioning import contracts_for, loss_fraction
 from backtest.portfolio.scenarios import aggregate_greeks
@@ -128,83 +132,6 @@ class OpenTrade:
     #: trade log for classified research afterwards.
     tag: str = ""
     note: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class EventDrivenResult:
-    records: tuple[TradeRecord, ...]
-    snapshots: tuple[Snapshot, ...]
-    config: BacktestConfig
-    strategy: Strategy
-    events: EventLog
-    ledger: Ledger
-    #: Daily portfolio greeks. It has a default, so it must follow the fields
-    #: that do not.
-    greeks: tuple = ()
-    #: **The daily position trajectory**: every held position's state each day. A
-    #: hard prerequisite for headwind research (5) — with only an entry and an exit
-    #: point there is no way to see what happened in between. It cannot be
-    #: reconstructed afterwards, so it is collected from the start.
-    paths: tuple = ()
-
-    @property
-    def paths_frame(self):
-        """The daily trajectory table. One row = one trade on one day."""
-        import pandas as pd
-
-        if not self.paths:
-            return pd.DataFrame(columns=[
-                "trade_id", "date", "days_held", "dte", "mark", "ratio",
-                "mfe_so_far", "mae_so_far", "underlying", "iv", "delta", "tag"])
-        return pd.DataFrame(list(self.paths))
-
-    @property
-    def trades(self) -> pd.DataFrame:
-        """The same table the trade-table engine produces — the research layer need
-        not know which engine ran."""
-        return trades_frame(self.records)
-
-    @property
-    def greeks_frame(self) -> pd.DataFrame:
-        """Daily portfolio greeks. Flat days are present too, at 0 — a missing row
-        and "no exposure that day" are different things."""
-        if not self.greeks:
-            return pd.DataFrame()
-        return pd.DataFrame([g.as_dict() for g in self.greeks]).set_index("date")
-
-    @property
-    def concurrency(self) -> pd.Series:
-        """Concurrent positions per day. This engine actually knows, where the trade
-        table has to infer it afterwards."""
-        return pd.Series(
-            {s.day: s.n_positions for s in self.snapshots}, name="concurrent_positions"
-        )
-
-    def capital_check(self) -> dict:
-        """Whether capital sufficed. This engine already enforced the constraint, so
-        this is confirmation after the fact."""
-        peak = max((s.n_positions for s in self.snapshots), default=0)
-        peak_deployed = max((s.deployed for s in self.snapshots), default=0.0)
-        return {
-            "peak_positions": peak, "peak_capital": peak_deployed,
-            "notional_capital": self.config.notional_capital,
-            "feasible": peak_deployed <= self.config.notional_capital,
-        }
-
-    @property
-    def equity(self) -> pd.DataFrame:
-        """Both equity curves plus capital utilisation."""
-        return pd.DataFrame(
-            [
-                {
-                    "date": s.day, "cash": s.cash,
-                    "equity_mid": s.equity_mid, "equity_liq": s.equity_liq,
-                    "option_value": s.option_value_mid, "stock_value": s.stock_value,
-                    "positions": s.n_positions, "deployed": s.deployed,
-                }
-                for s in self.snapshots
-            ]
-        ).set_index("date")
 
 
 class EventDrivenEngine:
@@ -882,9 +809,12 @@ class EventDrivenEngine:
         gross = ((exit_price - trade.entry_price) * mult * trade.quantity * direction
                  + trade.realised_gross)
         fees = trade.fees + exit_fees
-        ctx_in = self._context(trade.entry_quote, trade.entry_date, trade.contract, trade.entry_signals)
-        ctx_out = self._context(exit_quote, exit_day, trade.contract,
-                                {n: self.signals.on(exit_day)[n] for n in self.signals.names})
+        cal = self.market.calendar
+        ctx_in = trade_context(trade.entry_quote, trade.entry_date, trade.contract,
+                               calendar=cal, signals=trade.entry_signals)
+        ctx_out = trade_context(exit_quote, exit_day, trade.contract, calendar=cal,
+                                signals={n: self.signals.on(exit_day)[n]
+                                         for n in self.signals.names})
         return TradeRecord(
             trade_id=trade.trade_id, engine=ENGINE_NAME, symbol=trade.contract.symbol,
             entry_date=trade.entry_date, exit_date=exit_day, contract=trade.contract,
@@ -899,27 +829,3 @@ class EventDrivenEngine:
             mfe=trade.mfe, mae=trade.mae,
             tag=trade.tag, note=trade.note,
         )
-
-    def _context(self, quote: dict, day: date, contract: ContractId, signals: dict):
-        import numpy as np
-
-        from backtest.core.maybe import Maybe
-
-        def numeric(key):
-            v = quote.get(key)
-            if v is None or (isinstance(v, float) and np.isnan(v)):
-                return Maybe.missing(f"{key} is unavailable")
-            return Maybe.some(float(v))
-
-        spot = numeric("underlying_price")
-        ctx = {
-            "underlying_price": spot, "iv": numeric("iv"), "delta": numeric("delta"),
-            "gamma": numeric("gamma"), "vega": numeric("vega"), "theta": numeric("theta"),
-            "moneyness": Maybe.some(float(spot.unwrap() / contract.strike - 1.0))
-            if spot.is_present else Maybe.missing("the underlying price is unavailable"),
-            "dte_calendar": Maybe.some(float((contract.expiry - day).days)),
-            "dte_trading": Maybe.some(float(self.market.calendar.sessions_between(day, contract.expiry))),
-        }
-        for name, value in signals.items():
-            ctx[f"sig_{name}"] = value
-        return ctx

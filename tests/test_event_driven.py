@@ -178,3 +178,58 @@ class TestDeterminism:
         b = EventDrivenEngine(market, chain, signals, config, max_concurrent=3).run(strategy)
         pd.testing.assert_frame_equal(comparable(a.records), comparable(b.records))
         pd.testing.assert_frame_equal(a.equity, b.equity)
+
+
+class TestSharedTradeContext:
+    """The context columns the research layer slices on must match between engines.
+
+    The dual-engine comparison above checks eight fields and not the context, so for a
+    long time the two engines built it separately with nothing keeping them aligned —
+    the check meant to catch drift could not see this particular drift. They now call
+    one function; this asserts the result.
+    """
+
+    def _both(self, market, chain, signals, config):
+        strategy = build_strategy(signals)
+        vec = TradeTableEngine(market, chain, signals, config).run(strategy).trades
+        ev = EventDrivenEngine(
+            market, chain, signals, config, max_concurrent=None, enforce_capital=False
+        ).run(strategy).trades
+        assert len(vec) and len(ev)
+        return vec, ev
+
+    @staticmethod
+    def _context_columns(frame):
+        return {c for c in frame.columns if c.startswith(("entry_", "exit_"))}
+
+    def test_both_engines_produce_the_same_context_columns(
+        self, market, chain, signals, config
+    ):
+        vec, ev = self._both(market, chain, signals, config)
+        a, b = self._context_columns(vec), self._context_columns(ev)
+        assert a == b, f"only one engine has {a ^ b}"
+
+    def test_the_context_values_agree_on_a_matched_trade(
+        self, market, chain, signals, config
+    ):
+        """Identical columns holding different values would be worse than a missing
+        column: a grouped analysis would silently depend on which engine ran."""
+        vec, ev = self._both(market, chain, signals, config)
+        key = ["entry_date", "exit_date", "contract"]
+        # Numeric context only: exit_reason is a label, and the dates and prices are
+        # already compared by the dual-engine test above.
+        cols = sorted(
+            c for c in self._context_columns(vec)
+            if c not in key and vec[c].dtype.kind == "f" and ev[c].dtype.kind == "f"
+        )
+        assert cols, "no numeric context columns to compare"
+        a = vec.set_index(key)[cols].sort_index()
+        b = ev.set_index(key)[cols].sort_index()
+        shared = a.index.intersection(b.index)
+        assert len(shared), "the two engines share no trade to compare"
+        pd.testing.assert_frame_equal(
+            a.loc[shared].astype(float),
+            b.loc[shared].astype(float),
+            check_exact=False,
+            atol=1e-8,
+        )
