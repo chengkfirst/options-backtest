@@ -140,6 +140,9 @@ class EventDrivenResult:
     actions: tuple = ()
     #: The limits the run ran under. See :attr:`TradeTableResult.limits`.
     limits: Mapping[str, Any] = field(default_factory=dict)
+    #: The book-wide risk rule, if one ran. In the fingerprint: it changes which trades
+    #: happen and how large they are.
+    risk_rule: Any = None
 
     @property
     def actions_frame(self):

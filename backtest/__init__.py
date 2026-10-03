@@ -38,6 +38,7 @@ __all__ = [
 # would make "is this variant registered" depend on import order.
 from backtest.signals import stop_loss as _stop_loss  # noqa: E402,F401
 from backtest.signals import take_profit as _take_profit  # noqa: E402,F401
+from backtest.portfolio import risk_rules as _risk_rules  # noqa: E402,F401
 
 
 def run_from(path):

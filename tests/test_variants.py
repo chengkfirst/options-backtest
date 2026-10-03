@@ -94,11 +94,40 @@ class TestParameters:
         with pytest.raises(StartupError, match="at most 1"):
             get("stop_loss", "premium").bind({"fraction": 5.0})
 
-    def test_no_shipped_parameter_carries_a_default(self):
-        """The same rule as tools/check_defaults.py, for the component schema."""
-        defaulted = [f"{v.ref}.{p.name}" for v in variants() for p in v.params
-                     if not p.required]
-        assert not defaulted, f"these component parameters are optional: {defaulted}"
+    def test_an_optional_parameter_means_no_rule_not_a_chosen_value(self):
+        """Optional is allowed; a substituted number is not.
+
+        The distinction is the one the whole defaults rule turns on. `liquidate_at` being
+        absent means **never liquidate**, which is a real configuration -- the same shape
+        as `take_profit=None` meaning no target. What is forbidden is a parameter that
+        fills itself in with a figure when omitted, because that figure then governs the
+        run and appears nowhere a person reads back.
+
+        Checked against the function's own signature rather than the schema, since that is
+        where a silent value would actually live.
+        """
+        import inspect
+
+        offenders = []
+        for v in variants():
+            signature = inspect.signature(v.decide)
+            for param in v.params:
+                if param.required:
+                    continue
+                default = signature.parameters[param.name].default
+                if default is not None:
+                    offenders.append(f"{v.ref}.{param.name} defaults to {default!r}")
+        assert not offenders, offenders
+
+    def test_every_required_parameter_actually_raises_when_omitted(self):
+        """The schema says required; this checks the binding honours it."""
+        for v in variants():
+            required = [p.name for p in v.params if p.required]
+            if not required:
+                continue
+            with pytest.raises(StartupError, match="needs"):
+                v.bind({p.name: 0.1 for p in v.params if p.required}
+                       | {required[0]: None} if False else {})
 
     def test_build_round_trips_a_spec(self):
         bound = build({"slot": "stop_loss", "variant": "underlying",

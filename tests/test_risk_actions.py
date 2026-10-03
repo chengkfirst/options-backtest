@@ -35,9 +35,11 @@ BASE = dict(
 #: the "reduced" band never draws down far enough to liquidate, and one tight enough to
 #: liquidate does so before anything is reduced. Using one set of numbers for both would
 #: mean one of the two tests was passing for a reason unrelated to what it claims.
-SCALE = {"reduce_at": 0.05, "halt_at": 0.30, "resume_at": 0.03, "keep": 0.5}
-LIQUIDATE = {"reduce_at": 0.05, "halt_at": 0.08, "resume_at": 0.03, "keep": 0.5,
-             "liquidate_at": 0.10}
+SCALE = {"variant": "drawdown",
+         "params": {"reduce_at": 0.05, "halt_at": 0.30, "keep": 0.5}}
+LIQUIDATE = {"variant": "drawdown",
+             "params": {"reduce_at": 0.05, "halt_at": 0.08, "keep": 0.5,
+                        "liquidate_at": 0.10}}
 TIGHT = SCALE
 
 
@@ -178,6 +180,91 @@ class TestItActsOnTheBook:
         )
 
 
+class TestTheFormIsTheResearchersChoice:
+    """Slot 5 has forms, like slots 3 and 4.
+
+    The drawdown brake used to be the only shape a risk rule could have. Every one of its
+    numbers was required -- but its **structure**, step down then halt then release, was
+    the platform's, and appeared nowhere as a decision anyone had made. The document lists
+    this slot's responses as "to be defined" and names two examples; both are registered
+    and neither is preferred.
+    """
+
+    def test_both_of_the_documents_examples_exist(self):
+        from backtest.core.component import variants
+
+        assert {"drawdown", "daily_loss"} <= {v.name for v in variants("headwind")}
+
+    def test_a_configuration_without_a_form_is_refused(self):
+        """Rather than given the one I happened to write first."""
+        with pytest.raises(StartupError, match="needs a variant"):
+            run(**BASE, risk={"reduce_at": 0.1, "halt_at": 0.2, "keep": 0.5})
+
+    def test_the_two_forms_behave_differently(self):
+        """They respond to different things -- the distance from the high-water mark
+        against one session's loss -- so a run under each is a different run."""
+        params = {"reduce_at": 0.05, "halt_at": 0.30, "keep": 0.5}
+        slow = run(**BASE, risk={"variant": "drawdown", "params": params})
+        fast = run(**BASE, risk={"variant": "daily_loss", "params": params})
+        assert len(slow.trades) != len(fast.trades)
+
+    def test_the_form_reaches_the_fingerprint(self):
+        """Two runs under different rules shared one id, and so did a run under no rule
+        at all. Third time a thing that moves the result reached the engine without
+        reaching the fingerprint."""
+        params = {"reduce_at": 0.05, "halt_at": 0.30, "keep": 0.5}
+        ids = {
+            "none": run(**BASE).manifest()["run_id"],
+            "drawdown": run(**BASE, risk={"variant": "drawdown",
+                                          "params": params}).manifest()["run_id"],
+            "daily_loss": run(**BASE, risk={"variant": "daily_loss",
+                                            "params": params}).manifest()["run_id"],
+            "other params": run(**BASE, risk={
+                "variant": "drawdown",
+                "params": params | {"reduce_at": 0.08}}).manifest()["run_id"],
+        }
+        assert len(set(ids.values())) == len(ids), ids
+
+    def test_an_unknown_form_lists_what_exists(self):
+        with pytest.raises(StartupError, match="daily_loss|drawdown"):
+            run(**BASE, risk={"variant": "nonsense", "params": {}})
+
+
+class TestASellIsSizedAtTheFill:
+    """A quantity decided on day T and filled on T+1 can exceed what is held by then.
+
+    Found by adding a rule that fires on consecutive days: the drawdown form changes state
+    too slowly to ever queue two sells against one position, so nothing had exercised it.
+    The ledger refused outright -- "reversing through zero is not supported" -- which is
+    the invariant doing its job, and the fix belongs upstream of it.
+    """
+
+    PARAMS = {"reduce_at": 0.05, "halt_at": 0.30, "keep": 0.5}
+
+    def test_a_rule_that_fires_daily_does_not_oversell(self):
+        result = run(**BASE, risk={"variant": "daily_loss", "params": self.PARAMS})
+        assert len(result.trades) > 0
+
+    def test_a_resized_sell_is_recorded(self):
+        """Silently selling less than the order said is a fill that does not match its
+        order, which is the quietest kind of accounting error."""
+        result = run(**BASE, risk={"variant": "daily_loss", "params": self.PARAMS})
+        kinds = result.raw.events.counts()
+        assert kinds, "the run recorded no events at all"
+
+    def test_the_reduction_keeps_its_own_ratio(self):
+        """Recomputed from the ratio the rule gave, not clamped to whatever is left --
+        clamping would turn "keep half" into "keep what remains", a different
+        instruction."""
+        result = run(**BASE, risk={"variant": "daily_loss", "params": self.PARAMS})
+        actions = result.raw.actions_frame
+        reduced = actions[(actions["action"] == "reduce") &
+                          (actions["component_id"] == "headwind")]
+        assert len(reduced), "no reduction happened, so this proves nothing"
+        # Keeping half of n leaves n - floor(n/2), so a reduction never takes everything.
+        assert (reduced["quantity"] >= 1).all()
+
+
 class TestRefusals:
     def test_the_trade_table_refuses_a_risk_rule(self):
         """Scaling the book down acts on positions that are open, and the trade table
@@ -186,9 +273,13 @@ class TestRefusals:
             run(**(BASE | {"engine": "trade_table"}), risk=TIGHT)
 
     def test_a_partial_rule_is_refused(self):
-        with pytest.raises(StartupError, match="risk needs"):
-            run(**BASE, risk={"reduce_at": 0.1})
+        """A form needs every parameter it declares; the platform supplies none."""
+        with pytest.raises(StartupError, match="needs halt_at|needs keep|needs reduce_at"):
+            run(**BASE, risk={"variant": "drawdown", "params": {"reduce_at": 0.1}})
 
-    def test_an_unknown_key_is_refused(self):
+    def test_an_unknown_parameter_is_refused(self):
+        """Ignored, it would leave the rule running on something other than what the
+        configuration says."""
         with pytest.raises(StartupError, match="does not take"):
-            run(**BASE, risk=dict(TIGHT, nonsense=1))
+            run(**BASE, risk={"variant": "drawdown",
+                              "params": dict(SCALE["params"], nonsense=1)})

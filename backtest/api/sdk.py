@@ -148,34 +148,28 @@ def _selection_from(spec):
 
 
 def _brake_from(spec):
-    """Build the book-wide risk rule, or ``None``.
+    """Build the book-wide risk rule as a component, or ``None``.
 
-    Every stage is required. Where to start cutting, where to stop opening, how hard to cut
-    and when to release govern the whole book, and a platform-chosen set would do so
-    without appearing in the configuration a person reads back.
+    **Which form** is the researcher's, not the platform's. The document lists this slot's
+    responses as "to be defined" and names two examples; both are registered, and a
+    configuration that does not say which one it wants is refused rather than given the
+    one I happened to write first.
     """
-    from backtest.portfolio.constraints import DrawdownBrake
+    from backtest.core.component import build, variants
 
     if not spec:
         return None
-    if isinstance(spec, DrawdownBrake):
-        return spec
     opts = dict(spec)
-    needed = ("reduce_at", "halt_at", "resume_at", "keep")
-    missing = [k for k in needed if k not in opts]
-    if missing:
+    if "variant" not in opts:
+        offered = ", ".join(v.name for v in variants("headwind"))
         raise StartupError(
-            f"risk needs {', '.join(missing)}. Each one governs the whole book and the "
-            f"platform does not pick it. For example risk={{\"reduce_at\": 0.10, "
-            f"\"halt_at\": 0.20, \"resume_at\": 0.05, \"keep\": 0.5}}"
+            f"risk needs a variant: which form of book-wide rule to run. Registered: "
+            f"{offered}. They respond to different things -- the distance from the "
+            f"high-water mark, or one session's loss -- and which matters is a question "
+            f'about the strategy. For example risk={{"variant": "drawdown", "params": '
+            f'{{"reduce_at": 0.10, "halt_at": 0.20, "keep": 0.5}}}}'
         )
-    unknown = sorted(set(opts) - set(needed) - {"liquidate_at"})
-    if unknown:
-        raise StartupError(
-            f"risk got {', '.join(unknown)}, which it does not take. It takes "
-            f"{', '.join(needed)} and optionally liquidate_at"
-        )
-    return DrawdownBrake(**opts)
+    return build({"slot": "headwind", **opts})
 
 
 def _components_from(spec) -> dict[str, Any]:
@@ -476,6 +470,14 @@ class Result:
         # Which engine ran, and the limits it ran under. These change the trades and are
         # not part of the config, so they are hashed separately and explicitly.
         execution = {"engine": self.raw.ENGINE} | dict(self.raw.limits)
+        # The book-wide risk rule, which changes which trades happen and how large they
+        # are. It was missing, so two runs under different rules -- and under no rule at
+        # all -- shared one id. Third time this class of gap has appeared: a thing that
+        # moves the result reaching the engine without reaching the fingerprint.
+        rule = getattr(self.raw, "risk_rule", None)
+        execution["risk_rule"] = (
+            {"ref": rule.ref, "params": dict(rule.params)} if rule is not None else None
+        )
         if len(execution) == 1:
             raise InvariantError(
                 f"the {self.raw.ENGINE} engine produced a result with no recorded limits, "

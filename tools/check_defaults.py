@@ -121,8 +121,40 @@ def unreachable_allowances() -> list[str]:
             for (c, n) in ALLOWED if (c, n) not in known]
 
 
+def component_offenders() -> list[str]:
+    """Component parameters that fill themselves in with a figure.
+
+    The registry is the other place strategy choices live, and it was not watched. Optional
+    is allowed -- a parameter whose absence means "no such rule", like a liquidation level
+    that is simply never reached. What is forbidden is a substituted number: it governs the
+    run and appears nowhere a person reads back, which is the whole of the rule.
+
+    Checked against each form's own signature, because that is where such a value would
+    live rather than in the schema that describes it.
+    """
+    import inspect
+
+    import backtest  # noqa: F401  -- populates the registry
+    from backtest.core.component import variants
+
+    out = []
+    for variant in variants():
+        signature = inspect.signature(variant.decide)
+        for param in variant.params:
+            if param.required:
+                continue
+            default = signature.parameters[param.name].default
+            if default is not None:
+                out.append(
+                    f"{variant.ref}.{param.name} is optional and defaults to "
+                    f"{default!r}. Optional must mean 'no such rule', not a value the "
+                    f"platform chose"
+                )
+    return out
+
+
 def check() -> int:
-    problems = offenders() + unreachable_allowances()
+    problems = offenders() + unreachable_allowances() + component_offenders()
     if problems:
         print("the platform is defaulting a strategy choice:")
         for p in problems:
@@ -133,8 +165,13 @@ def check() -> int:
               "picking one. A default also hides itself: it does not appear in the "
               "configuration a person reads back when asking what the run actually did.")
         return 1
+    import backtest  # noqa: F401
+    from backtest.core.component import variants
+
     watched = sum(len(f) for _, f, _ in WATCHED.values())
-    print(f"OK  {watched} strategy parameters across {len(WATCHED)} slots, none defaulted")
+    in_registry = sum(len(v.params) for v in variants())
+    print(f"OK  {watched} strategy parameters across {len(WATCHED)} slots and "
+          f"{in_registry} across {len(variants())} registered forms, none defaulted")
     return 0
 
 

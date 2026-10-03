@@ -32,7 +32,7 @@ The main loop's order within a day is fixed, and every step's position has a rea
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 import pandas as pd
@@ -126,6 +126,13 @@ class Intent:
     #: silence. See :mod:`backtest.core.actions` for the shared vocabulary.
     kind: Action = Action.OPEN
     reason: str = ""                  # why this order, for a person to read
+    #: For a REDUCE from the book-wide rule: what fraction of the position to **keep**.
+    #:
+    #: Carried on the intent rather than read from the rule at fill time. The two are a
+    #: day apart and the rule may say something different by then -- it frequently does,
+    #: for a form that responds to a single session -- and the instruction that has to be
+    #: honoured is the one that was given.
+    keep: float | None = None
     #: Which slot produced it: ``entry`` / ``take_profit`` / ``stop_loss`` / ``headwind``
     #: / ``position`` / ``review``. This is what makes "which slot closed this trade"
     #: answerable, which is the prerequisite for attribution by component.
@@ -135,6 +142,17 @@ class Intent:
     exit_rule: "ExitRule | None" = None
     tag: str = ""
     note: str = ""
+
+
+def _entry_scale(decision) -> float:
+    """How much of a new position to open under the day's risk verdict.
+
+    Separate from acting on the book: scaling down means new entries are smaller as well
+    as existing ones being cut, and halting or liquidating means there are none at all.
+    """
+    if decision.action is RiskAction.SCALE_DOWN:
+        return float(decision.keep)
+    return 0.0 if decision.blocks_entries else 1.0
 
 
 def _as_float(value) -> float:
@@ -285,8 +303,10 @@ class EventDrivenEngine:
         actions: list[TradeAction] = []
         #: trade_id -> what is needed to keep quoting a contract after its trade closed.
         shadowing: dict[int, dict] = {}
-        self._brake_state = "normal"
+        self._brake_state = "none"
         self._risk = NOTHING
+        self._daily_return = 0.0
+        self._prev_equity = 0.0
         self._last_greeks = None
         self._closed_pnl = records          # the same list, referenced not copied
 
@@ -335,6 +355,12 @@ class EventDrivenEngine:
             # the drawdown is happens to be the commonest input to sizing and
             # reduction decisions.
             self._drawdown = snap.equity_mid / self._peak_equity - 1.0
+            # One session's return, which the daily-loss form reads. Computed here beside
+            # the drawdown and unconditionally, for the same reason: a figure available
+            # only inside the rule's own branch cannot be read by a plan or a review.
+            self._daily_return = (snap.equity_mid / self._prev_equity - 1.0
+                                  if self._prev_equity else 0.0)
+            self._prev_equity = snap.equity_mid
             g = aggregate_greeks(ledger.positions, self.chain, day,
                                  self.market.spot(day).or_else(float("nan")), snap.equity_mid)
             greeks_daily.append(g)
@@ -343,16 +369,23 @@ class EventDrivenEngine:
             # actions, and **it acts on the book** -- scaling down reduces the positions
             # that are open, not only the size of the next entry. The brake used to do the
             # latter while reading as the former.
-            self._risk = self.brake.decide(self._drawdown) if self.brake is not None \
-                else NOTHING
-            if self.brake is not None:
-                new_state = self.brake.state(self._drawdown)
-                if new_state != self._brake_state:
-                    self.events.record(
-                        EventKind.CANDIDATE_DROPPED, day,
-                        f"drawdown brake: {self._brake_state} -> {new_state} "
-                        f"(drawdown {self._drawdown:.1%})")
-                    self._brake_state = new_state
+            # The book-wide risk rule is a **component**, like the stop and the target.
+            # It used to be one hardcoded shape -- step down, halt, release -- whose
+            # numbers were required but whose structure was the platform's. The document
+            # lists this slot's responses as "to be defined" and names two examples; both
+            # are registered, and which one runs is the researcher's.
+            self._risk = self.brake({
+                "drawdown": self._drawdown,
+                "daily_return": self._daily_return,
+                "equity": snap.equity_mid,
+                "positions": len(ledger),
+            }) if self.brake is not None else NOTHING
+            if self.brake is not None and self._risk.action.value != self._brake_state:
+                self.events.record(
+                    EventKind.CANDIDATE_DROPPED, day,
+                    f"{self.brake.ref}: {self._brake_state} -> "
+                    f"{self._risk.action.value} ({self._risk.reason})")
+                self._brake_state = self._risk.action.value
             self._track_excursions(ledger, open_trades, quotes, day, paths)
             self._track_shadow(shadowing, day, shadow)
 
@@ -446,6 +479,7 @@ class EventDrivenEngine:
             paths=tuple(paths), shadow=tuple(shadow), actions=tuple(actions),
             records=tuple(records), snapshots=tuple(snapshots), greeks=tuple(greeks_daily),
             config=self.config, strategy=strategy, events=self.events, ledger=ledger,
+            risk_rule=self.brake,
             limits={
                 "max_concurrent": self.max_concurrent,
                 "enforce_capital": self.enforce_capital,
@@ -632,6 +666,7 @@ class EventDrivenEngine:
                 quantity=quantity, created=day, execute_on=target,
                 trade_id=pos.trade_id, kind=kind, reason=self._risk.describe(),
                 exit_reasons=(ExitReason.RISK_FORCED,) if kind is Action.CLOSE else (),
+                keep=self._risk.keep if kind is Action.REDUCE else None,
                 component_id="headwind",
             ))
         if out:
@@ -744,8 +779,7 @@ class EventDrivenEngine:
             return None
         quantity = self._size(strategy, ledger, contract, day, target)
         if self.brake is not None and self._brake_state == "reduced":
-            quantity = int(quantity * self.brake.scale(
-                self._last_equity / self._peak_equity - 1.0))
+            quantity = int(quantity * _entry_scale(self._risk))
         if quantity <= 0:
             self.events.record(
                 EventKind.CANDIDATE_DROPPED, day,
@@ -889,7 +923,7 @@ class EventDrivenEngine:
                                f"(equity {ctx.equity:,.0f})", plan.tag)
             return None
         if self.brake is not None and self._brake_state == "reduced":
-            quantity = int(quantity * self.brake.scale(self._drawdown))
+            quantity = int(quantity * _entry_scale(self._risk))
             if quantity <= 0:
                 self.events.record(EventKind.CANDIDATE_DROPPED, day,
                                    "0 contracts after the drawdown brake cut the size")
@@ -1010,6 +1044,45 @@ class EventDrivenEngine:
                                "no quote on the execution day", str(intent.contract))
             return None
         row = frame.iloc[0]
+        # **A sell is sized against the book on the fill day, not the decision day.**
+        #
+        # The two are a day apart, and the position can shrink in between -- another
+        # reduction filled, a partial close. A quantity carried over unchanged then
+        # exceeds what is held, which the ledger refuses outright: "reversing through zero
+        # is not supported". It surfaced the moment a risk rule that can fire on
+        # consecutive days was added; the drawdown form changes state too slowly to
+        # overlap with itself, so nothing had ever queued two sells against one position.
+        #
+        # A close takes whatever is held, because that is what closing means. A reduction
+        # is **recomputed from its own ratio** rather than clamped: clamping would turn
+        # "keep half" into "keep whatever is left", which is a different instruction.
+        if intent.kind in (Action.REDUCE, Action.CLOSE):
+            position = ledger.position(intent.contract)
+            held = position.abs_quantity if position is not None else 0
+            if held <= 0:
+                self.events.record(
+                    EventKind.NOT_TRADABLE, day,
+                    f"the position was already gone by the fill day, so the "
+                    f"{intent.kind.value} was not placed", str(intent.contract))
+                return None
+            if intent.kind is Action.CLOSE:
+                wanted = held
+            else:
+                wanted = (held - int(held * intent.keep) if intent.keep is not None
+                          else min(intent.quantity, max(held - 1, 0)))
+                if wanted <= 0 or wanted >= held:
+                    self.events.record(
+                        EventKind.NOT_TRADABLE, day,
+                        f"a reduction of {intent.quantity} against a position of {held} "
+                        f"would take all of it, so it was not placed",
+                        str(intent.contract))
+                    return None
+            if wanted != intent.quantity:
+                self.events.record(
+                    EventKind.EXIT_DEFERRED, day,
+                    f"the {intent.kind.value} was decided on {intent.quantity} and {held} "
+                    f"was held at the fill, so it is {wanted}", str(intent.contract))
+                intent = replace(intent, quantity=wanted)
         tradable = check_tradable(row["bid"], row["ask"], self.config.costs)
         if not tradable.ok:
             self.events.record(EventKind.NOT_TRADABLE, day, tradable.reason or "", str(intent.contract))
