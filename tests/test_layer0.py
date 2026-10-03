@@ -10,7 +10,7 @@ only confirms the clean case passes would leave a broken guard looking healthy.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, timedelta, timedelta
 
 import pytest
 
@@ -23,6 +23,7 @@ from backtest.core.invariants import (
     equity_balances,
     no_expired_position,
     position_matches_fills,
+    trade_record_balances,
 )
 from backtest.core.run_id import run_id
 
@@ -75,21 +76,84 @@ class TestInvariants:
             no_expired_position([Stale()], when=DAY)
 
 
+class TestTradeRecordBalances:
+    """The one invariant the trade table can run.
+
+    The other four read ledger state -- cash, positions, equity, the daily change -- and
+    the trade table has none of those by construction, so they are not applicable there
+    rather than skipped. This one runs in both engines because it is checked when the
+    record is constructed, not at each engine's call site.
+    """
+
+    class Rec:
+        trade_id = 1
+        gross_pnl = 100.0
+        fees = 10.0
+        net_pnl = 90.0
+        fee_commission = 5.0
+        fee_regulatory = 2.0
+        fee_slippage = 3.0
+        contract = None
+        exit_date = DAY
+
+    def _rec(self, **over):
+        r = type("R", (), {**{k: v for k, v in vars(self.Rec).items()
+                              if not k.startswith("__")}, **over})
+        return r()
+
+    def test_a_balanced_record_passes(self):
+        trade_record_balances(self._rec())
+
+    def test_a_net_that_is_not_gross_minus_fees_is_caught(self):
+        """Caught because it produces a plausible number. Nobody reading the trade log
+        can see that the net is five dollars short."""
+        with pytest.raises(InvariantError, match="not gross"):
+            trade_record_balances(self._rec(net_pnl=95.0))
+
+    def test_a_dropped_fee_component_is_caught(self):
+        with pytest.raises(InvariantError, match="dropped or counted twice"):
+            trade_record_balances(self._rec(fee_slippage=0.0, fees=10.0))
+
+    def test_a_double_counted_fee_component_is_caught(self):
+        with pytest.raises(InvariantError, match="dropped or counted twice"):
+            trade_record_balances(self._rec(fees=13.0, net_pnl=87.0))
+
+    def test_closing_after_expiry_is_caught(self):
+        from datetime import timedelta
+
+        class Expired:
+            expiry = DAY - timedelta(days=1)
+
+        with pytest.raises(InvariantError, match="after its contract expired"):
+            trade_record_balances(self._rec(contract=Expired()))
+
+    def test_it_runs_when_a_record_is_built(self):
+        """Checked in ``__post_init__`` rather than at each engine's call site: both
+        engines construct records, and a check either could forget is not a mechanism."""
+        import inspect
+
+        from backtest.core.types import TradeRecord
+
+        assert "trade_record_balances" in inspect.getsource(TradeRecord.__post_init__)
+
+
 class TestRunId:
     STRAT = {"entry": "sma_20 > sma_50", "exit": {"stop_loss": 0.5}}
     SETTINGS = {"start": "2020-01-01", "capital": 100_000}
+    EXEC = {"engine": "event_driven", "max_concurrent": None}
 
     def _id(self, **over):
         strat = {**self.STRAT, **over.pop("strategy", {})}
         return run_id(strategy=strat, settings={**self.SETTINGS, **over.pop("settings", {})},
+                      execution={**self.EXEC, **over.pop("execution", {})},
                       commit="abc123", **over)
 
     def test_the_same_configuration_hashes_the_same(self):
         assert self._id() == self._id()
 
     def test_key_order_does_not_change_the_hash(self):
-        a = run_id(strategy={"a": 1, "b": 2}, settings={}, commit="x")
-        b = run_id(strategy={"b": 2, "a": 1}, settings={}, commit="x")
+        a = run_id(strategy={"a": 1, "b": 2}, settings={}, execution={"engine": "e"}, commit="x")
+        b = run_id(strategy={"b": 2, "a": 1}, settings={}, execution={"engine": "e"}, commit="x")
         assert a == b
 
     def test_a_changed_parameter_changes_the_hash(self):
@@ -101,7 +165,7 @@ class TestRunId:
 
     def test_the_commit_changes_the_hash(self):
         assert self._id() != run_id(strategy=self.STRAT, settings=self.SETTINGS,
-                                    commit="def456")
+                                    execution=self.EXEC, commit="def456")
 
     def test_volatile_fields_are_ignored(self):
         """A run name or a note must not make a repeat look like a new trial, or the
@@ -109,12 +173,31 @@ class TestRunId:
         assert self._id(strategy={"name": "attempt 1"}) == \
                self._id(strategy={"name": "attempt 2"})
 
+    def test_the_engine_changes_the_hash(self):
+        """The same strategy on the same data computed two ways is two results.
+
+        This was the real bug: both engines hashed identically, so the trial counter
+        could not tell them apart and the search looked smaller than it was.
+        """
+        assert self._id() != self._id(execution={"engine": "trade_table"})
+
+    def test_a_limit_changes_the_hash(self):
+        """A concurrency limit is not a presentation choice -- it changes which trades
+        happen at all."""
+        assert self._id() != self._id(execution={"max_concurrent": 1})
+
+    def test_the_execution_settings_cannot_be_omitted(self):
+        """Refused at the source, because the omission is invisible in the result: a
+        hash is a hash either way."""
+        with pytest.raises(ValueError, match="execution settings"):
+            run_id(strategy=self.STRAT, settings=self.SETTINGS, execution={}, commit="x")
+
     def test_two_different_callables_do_not_hash_alike(self):
         def alpha(view): return True
         def beta(view): return False
 
-        a = run_id(strategy={"entry": alpha}, settings={}, commit="x")
-        b = run_id(strategy={"entry": beta}, settings={}, commit="x")
+        a = run_id(strategy={"entry": alpha}, settings={}, execution={"engine": "e"}, commit="x")
+        b = run_id(strategy={"entry": beta}, settings={}, execution={"engine": "e"}, commit="x")
         assert a != b
 
 
@@ -158,6 +241,64 @@ class TestDataView:
                      lambda: v.surface("QQQ")):
             with pytest.raises(NotImplementedError, match="requirements.md"):
                 call()
+
+
+class TestSelectorGetsACutView:
+    """A custom selector receives a view cut at the **decision** day, in both engines.
+
+    The chain it is handed is the execution day's on purpose -- the contract has to be
+    tradable on the day it is bought. The view is the decision day's, so a selector that
+    reaches for the fill day's move raises instead of quietly picking a strike out of it.
+
+    This was the gap: the type said the second argument was a ``DataView``, and both
+    engines passed a bare signal view. Protecting the plan hook and not this one is worse
+    than protecting neither -- the protection reads as systemic while leaving open the gap
+    a custom selector is most likely to walk into.
+    """
+
+    @staticmethod
+    def _probe(seen):
+        def chooser(chain, view):
+            seen["type"] = type(view).__name__
+            seen["as_of"] = view.as_of
+            try:
+                view.spot(view.as_of + timedelta(days=30))
+                seen["guard"] = "did not raise"
+            except LookAheadError:
+                seen["guard"] = "raised"
+            calls = chain[chain["is_call"]]
+            if not len(calls):
+                return None
+            return calls.iloc[(calls["delta"] - 0.4).abs().argsort()].iloc[0]
+        return chooser
+
+    @pytest.mark.parametrize("engine", ["trade_table", "event_driven"])
+    def test_the_selector_gets_a_dataview(self, engine):
+        from backtest.api.sdk import run
+
+        seen: dict = {}
+        run(symbol="QQQ", start="2023-01-01", end="2023-03-31",
+            entry="close < sma_20 * 0.98", select=self._probe(seen),
+            exit={"hold_days": 10, "dte_floor": 7}, engine=engine,
+            sizing={"method": "fixed"}, quantity=1)
+        assert seen["type"] == "DataView"
+        assert seen["guard"] == "raised"
+
+    def test_both_engines_cut_it_at_the_same_day(self):
+        """If they cut it differently, a custom selector gives different trades on each
+        engine and the dual-engine check -- the project's main drift alarm -- reports a
+        difference whose cause is invisible."""
+        from backtest.api.sdk import run
+
+        cuts = {}
+        for engine in ("trade_table", "event_driven"):
+            seen: dict = {}
+            result = run(symbol="QQQ", start="2023-01-01", end="2023-03-31",
+                         entry="close < sma_20 * 0.98", select=self._probe(seen),
+                         exit={"hold_days": 10, "dte_floor": 7}, engine=engine,
+                         sizing={"method": "fixed"}, quantity=1)
+            cuts[engine] = (seen["as_of"], len(result.trades))
+        assert cuts["trade_table"] == cuts["event_driven"]
 
 
 class TestBaselines:

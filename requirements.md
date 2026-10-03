@@ -136,18 +136,19 @@ config and logging. Fix it first and the layers above become swappable.
 | Parameter sweep | **partial** | `research/sweep.py` records the trial count. No heatmap, and the count is recorded but not used |
 | Sizing comparison | **built** | `research/positioning.py` |
 | ExperimentTracker | **absent** | Runs are stored (`app/store.py`: immutable runs, strategies versioned by content hash) but there is no tracker keyed by a `run_id` hash, and no count of trials across an idea |
-| Validation: walk-forward, purged k-fold, bootstrap, hold-out | **absent** | **This is the whole of use two.** Nothing here yet |
-| Baselines: random entry, delta-equivalent underlying | **absent** | The highest-priority gap: one run says whether an idea is worth researching further |
-| Ablation, variant swap, counterfactual exits | **absent** | Each needs the component protocol first, and counterfactual exits need shadow tracking |
+| Validation: walk-forward, purged k-fold, bootstrap, hold-out | **partial** | `research/validation/`: walk-forward with non-overlapping test windows, purged k-fold with an embargo, trade and block bootstrap, the Deflated Sharpe. A locked hold-out is not enforced — nothing stops a result being scored on data already looked at |
+| Baselines: random entry, delta-equivalent underlying | **built** | `research/baselines.py`, as `r.baselines(draws=n)`. Random entry is a percentile across draws, never one draw. Each comparison carries whether it survives a synthetic chain |
+| Ablation, counterfactual exits | **built** | `research/ablation.py` and `research/counterfactual.py`. Variant swap still needs the component protocol |
 
 ### Layer 7 · Interfaces — partial
 
 | Piece | Status | Where / what is missing |
 |---|---|---|
 | Python SDK | **built** | `api/sdk.py`: one `run()` through the whole chain |
-| Local web UI | **built** | `app/`: a form generated from the slot definitions, run history with a pinned baseline, charts, the anomaly scan and the diagnostics panel. Front and back are pinned together by a declared `CONTRACT` and a guard |
+| Local web UI | **built** | `app/`: a form generated from the slot definitions, run history with a pinned baseline, charts, the anomaly scan, the diagnostics panel, and the four validation tools on demand. Front and back are pinned together by a declared `CONTRACT` and a guard |
+| The research tools reachable without code | **built** | `POST /api/validate`: baselines, ablation, counterfactual exits, the trial count. The buttons are rendered from the runner's own declaration, so a tool added there appears there; each run declares which it can answer, so the counterfactual is never offered under the trade table |
 | CLI | **partial** | `run_backtest.py` is an editable script, not a CLI |
-| REST API, JobQueue, ResultStore | **absent** | `app/server.py` is a local service with three endpoints, not the document's REST API |
+| REST API, JobQueue, ResultStore | **absent** | `app/server.py` is a local service with a handful of endpoints, not the document's REST API. There is no job queue: a run blocks its request |
 | LiveAdapter | **absent** | — |
 | Auth | **absent** | Single user |
 
@@ -283,11 +284,11 @@ direction rather than a verdict.
 
 | # | The criterion | Status | What this one tries to kill |
 |---|---|---|---|
-| 4.5 | **A random-entry control**: can random entries at the same frequency do as well | missing → P4 | the signal does nothing and the return is the underlying's drift |
+| 4.5 | **A random-entry control**: can random entries at the same frequency do as well | done | `research/baselines.py`. Same work as 2.15: the percentile across draws, with the comparison valid on a synthetic chain because both sides are priced by it |
 | 4.6 | **Shuffling the signal (a permutation test)**: keep the distribution, shuffle the timing | missing → P4 | the timing does nothing and the exposure was simply long enough |
 | 4.7 | **A reverse test**: does doing the opposite also make money | missing → P4 | both directions making money means the return is beta, not the signal |
 | 4.8 | **Cost sensitivity**: at what cost does the edge disappear | done | `cost_sensitivity()`; the anomaly scan warns above 30% of gross |
-| 4.9 | **Execution-lag sensitivity**: what one more day's delay does | missing → P4 | a marginal edge does not survive real execution |
+| 4.9 | **Execution-lag sensitivity**: what one more day's delay does | done | `run(execution_lag_days=n)`. The engine always supported it and the SDK did not expose it, so the sensitivity could not be run |
 | 4.10 | **Selection perturbation**: the adjacent strike, the adjacent expiry | missing → P4 | holding on one contract only means it was fitted to the chain's noise |
 | 4.11 | **Removing the head**: what is left without the best N trades | partial | `investor_view()` gives the top-5 share and the total without them; the systematic curve is not built |
 | 4.12 | **Sub-period stability**: the sign holding year by year and regime by regime | partial | the anomaly scan reports "one year contributed X%"; `investor_view()` gives the share of profitable years and the worst year |
@@ -299,7 +300,7 @@ direction rather than a verdict.
 | 4.13 | The two engines agreeing | done | two entirely different implementations |
 | 4.14 | **Attribution agreeing with the story** | missing → P2/P4 | if you call it a gamma strategy, gamma should be the main source of profit. A mismatch means your understanding of it is wrong |
 | 4.15 | **MFE/MAE agreeing with the exit levels** | partial, the tool exists but is not a check → P4 | a stop placed where the winners routinely go is killing your own winners |
-| 4.16 | Out-of-sample isolation / walk-forward | missing → P4 | independent in time |
+| 4.16 | Out-of-sample isolation / walk-forward | partial | `research/validation/splits.py`: walk-forward folds and purged k-fold. Nothing **locks** a hold-out, so the discipline still rests on a person |
 | 4.17 | Cross-underlying validation (it holds on QQQ; does it on SPY) | missing → P4 | independent in the underlying |
 | 4.18 | **A consistency table**: every angle's conclusion side by side, with conflicts highlighted | missing → P4 | one angle holding does not count; what matters is whether several angles contradict each other |
 
@@ -308,10 +309,10 @@ direction rather than a verdict.
 | # | The criterion | Status | Note |
 |---|---|---|---|
 | 4.19 | **Effective sample size** (corrected for overlapping positions) | partial | event studies have `effective_sample()`; at the trade level the anomaly scan reports "only M of N do not overlap" |
-| 4.20 | **Block bootstrap confidence intervals** (block length at least the typical holding period) | missing → P4 | an ordinary bootstrap treats overlapping samples as independent and the interval comes out too narrow |
+| 4.20 | **Block bootstrap confidence intervals** (block length at least the typical holding period) | done | `research/validation/intervals.py`. The block length is required rather than defaulted, because the right value is the typical holding period and a default would be a guess presented as a choice |
 | 4.21 | A concentration diagnostic (how much the P&L depends on a few trades) | partial, the distribution exists but is not a diagnostic → P4 | — |
 | 4.22 | Multiple-testing disclosure (how many times it was tried) | partial → P4 | including **exploration by grouping** — stratifying on different dimensions is statistically the same as sweeping parameters |
-| 4.23 | **Evidence graded strong / medium / weak** | missing → P4 | — |
+| 4.23 | **Evidence graded strong / medium / weak** | partial | the Deflated Sharpe grades its own result (unlikely noise / suggestive / not distinguishable / worse than the search would give). There is no grade attached to a run as a whole |
 | 4.24 | **Weak evidence is still shown, labelled as weak, with no binary gate** | missing → P4 | what you want is useful information plus a sense of how much to trust it, not to have it filtered away |
 
 ---
@@ -332,6 +333,12 @@ direction rather than a verdict.
 | 1.19 | **A DataView that cuts at `available_at`**, raising on an out-of-range access | done | `core/dataview.py`. Every read goes through a view cut at `as_of`, and a read past it **raises** rather than returning a number from the future. `ctx.data` in a plan is one of these. The document's `cross_section`, `panel` and `surface` raise NotImplementedError with the reason — one underlying per run, no feature graph, no surface on a constant-IV chain |
 | 1.20 | **Signal and fill never share a quote**: the signal at snapshot t, the fill at t plus a decision latency | partial | Held at daily resolution (T decides, T+1 fills). The plan's intraday form needs intraday option quotes |
 | 1.21 | **Illegal orders are rejected**: trading hours, halts, tick sizes, position limits, borrow | missing | Nothing checks any of these, so principle 2 ("correctness by mechanism") is not held in Layer 4. A future topic: research-questions 10.1 |
+| 1.31 | **Every research conclusion carries whether it survives a synthetic chain**, from the `source` column rather than a flag | done | `research/boundary.py`. Three scopes: underlying (unaffected), option (describes the pricing model), mixed (the comparison itself is biased). `synthetic` is a **required** argument on every research report, so a forgotten argument cannot produce an unlabelled one, and `r.report()` fills it from provenance |
+| 1.33 | **The run fingerprint responds to everything that changes the trades** | done | Locked by a test over six configurations. It did **not**: both engines hashed alike, and so did a run with a concurrency limit and one without. The direction of that error is what made it serious — collapsing distinct configurations into one id makes a search look **smaller** than it was, so the deflated result comes out better than it earned. `execution` is now a required argument to `run_id`, and each engine records the limits it ran under |
+| 1.34 | **The trade log's arithmetic is checked on every record** | done | `invariants.trade_record_balances`, called in `TradeRecord.__post_init__` rather than at each engine's call site. Catches a dropped or double-counted fee component and a trade recorded as closing after its contract expired — both of which produce a plausible number. It is the **only** one of the five the trade table can run: the other four read ledger state, which that engine has none of by construction |
+| 1.36 | **A custom selector reads through the cut view, like every other hook** | done | Both engines pass a `DataView` cut at the **decision** day while the chain stays the execution day's, so a selector reaching for the fill day's move raises. It was typed as a `DataView` and was a bare signal view in both engines — protecting the plan hook and not this one is worse than protecting neither, because the protection then reads as systemic |
+| 1.35 | **Every fill traces back to the slot that asked for it** | partial | `EventDrivenResult.actions` — one `TradeAction` per fill with its `component_id`, and `trace(trade_id)` for one trade's decisions in order. This is the part of the document's traceability chain the engine can supply; orders and targets are not events yet, so the chain is fill → action → slot rather than the full five links. The trade table keeps none: it has no order step |
+| 1.32 | **The engine's processing order matches the document's** | partial | The document's order is corporate actions → market data → signals → portfolio → orders → fills → expiry → accounting. The engine marks to market at step 5, before the strategy runs, rather than last. Equivalent under a one-day lag — nothing changes the portfolio after step 5 — and **it diverges the moment an intraday fill lands on the same day as its signal**. There is also no corporate-action step in the loop at all |
 | 1.30 | **Every assumed number is visible and grouped**, with the document's rule for what may be done with each | done | `core/thresholds.py`. 17 thresholds in the register's four groups; nothing reads a literal, every verdict names the cut it used, and `tools/status.py` prints the table with anything overridden marked. Group 3 (strategy choices) holds nothing, and a test asserts it stays that way |
 | 1.29 | **The document's full invariant set**, checked every day: cash non-negative, position equals cumulative fills, equity equals what is held, daily P&L equals the equity change less flows, nothing expired still held | done | `core/invariants.py`, called from the engine's marking step beside the ledger's own identity. Two layers on purpose: the ledger's is about money, this is about state, and a bug can satisfy one and break the other |
 | 1.22 | **A `run_id` hash over config, code commit, data snapshot and run settings** | done | `core/run_id.py`. The hash of the strategy config, the commit, the data version and the run settings, in `result.manifest()`. Key order and volatile fields (a run name, a note) are ignored so a repeat does not look like a new trial; a dirty tree shows as `+dirty`, because a result from uncommitted code cannot be reproduced from the commit alone |
@@ -348,10 +355,10 @@ direction rather than a verdict.
 |---|---|---|---|
 | 2.9 | **Ablation**: run with one slot switched off or filled by a neutral variant | done | `research/ablation.py`, as `r.ablate()`. Four slots are ablatable; the others raise with the reason rather than reporting a contribution of zero. **It refuses the stop-loss ablation under `risk_pct` sizing** unless the caller accepts the joint reading, because removing the stop also changes the size |
 | 2.10 | **Variant swap**: fill one slot differently, everything else fixed, as a pair of runs differing in one slot alone | missing | Needs 1.16. This is what makes the strategy's change history auditable |
-| 2.11 | **Counterfactual exits**: replay each closed trade under an alternative exit | missing | Needs 1.26. In-sample by construction, so anything it suggests must be confirmed out of sample |
+| 2.11 | **Counterfactual exits**: replay each closed trade under an alternative exit | done | `research/counterfactual.py`, as `r.counterfactual(take_profits=…, stop_losses=…)`. A trade whose alternative never fires is **censored**, never assumed to have closed |
 | 2.12 | **Attribution by component**: split P&L by the slot that opened, sized, reduced, hedged or closed each part | missing | Needs the action envelope to carry `component_id`, which `core/actions.py` now defines |
 | 2.13 | **Interaction tests**: vary two slots jointly and compare against the sum of the single-slot effects | missing | A large gap means the two have to be researched together |
-| 2.14 | **An ExperimentTracker**: every run findable, comparable and reproducible, with the trial count per idea | missing | `app/store.py` stores runs immutably and versions strategies by content hash — the half that exists |
+| 2.14 | **An ExperimentTracker**: every run findable, comparable and reproducible, with the trial count per idea | done | `research/tracker.py` over `Store.run_records()`. The reproducibility hash is its own indexed column, named `fingerprint` rather than `run_id` because that table's `run_id` already means a row's integer key — two meanings behind one name is how the counter would have ended up counting rows instead of configurations. Reachable from the interface as "how much searching this took" |
 | 2.15 | **Baselines**: a delta-equivalent position in the underlying, and random entries with the same structure, delta and days to expiry | done | `research/baselines.py`, as `r.baselines(draws=n)`. Random entry reports a **percentile in a distribution**, never a single draw. `valid_on_synthetic` travels with each comparison: random entry holds on a synthetic chain because both sides share it, and the delta-equivalent does not because one side is real |
 
 ---

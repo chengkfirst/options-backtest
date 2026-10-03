@@ -17,7 +17,7 @@ import pandas as pd
 import pytest
 
 from backtest.core.errors import StartupError
-from backtest.research.counterfactual import replay_exit, sweep_levels
+from backtest.research.counterfactual import grid_report, replay_exit, sweep_levels
 from backtest.research.tracker import count_trials, deflate, describe
 from backtest.research.validation import (
     block_bootstrap,
@@ -410,3 +410,130 @@ class TestThresholdRegistry:
         # contract choice live in config and in the strategy, so the flag is allowed to be
         # empty rather than forced.
         assert all(isinstance(t.priority, bool) for t in THRESHOLDS.values())
+
+
+class TestSyntheticBoundary:
+    """Every option-side conclusion states its boundary, and cannot be printed without one.
+
+    The project claims the synthetic chain's limits are "determined automatically from the
+    source column, with no manual switch". That was true of Result.summary() and of nothing
+    else: the research tools each computed a premium-denominated number and said nothing.
+    A number nobody may act on, that does not say so, is worse than no number — it gets
+    quoted.
+    """
+
+    def test_an_underlying_conclusion_survives_a_synthetic_chain(self):
+        """An event study never touches an option, so the chain cannot affect it."""
+        from backtest.research.boundary import Boundary, Scope
+
+        assert Boundary(Scope.UNDERLYING, synthetic=True).usable
+        assert Boundary(Scope.UNDERLYING, synthetic=True).note() == ""
+
+    def test_an_option_conclusion_does_not(self):
+        from backtest.research.boundary import Boundary, Scope
+
+        b = Boundary(Scope.OPTION, synthetic=True)
+        assert not b.usable and "Black-Scholes" in b.note()
+
+    def test_a_mixed_comparison_is_called_biased_not_merely_limited(self):
+        """The bias does not cancel: it lands entirely on the comparison."""
+        from backtest.research.boundary import Boundary, Scope
+
+        assert "biased" in Boundary(Scope.MIXED, synthetic=True).note()
+
+    def test_real_data_carries_no_warning(self):
+        from backtest.research.boundary import Boundary, Scope
+
+        for scope in Scope:
+            assert Boundary(scope, synthetic=False).note() == ""
+
+    def test_the_boundary_comes_before_the_numbers(self):
+        """A caveat under a table is read once and scrolled past; the number above it is
+        what gets copied into a decision."""
+        from backtest.research.boundary import Boundary, Scope, header
+
+        lines = header(Boundary(Scope.OPTION, synthetic=True), what="an exit level")
+        assert lines and any("!!" in ln for ln in lines)
+
+    @pytest.mark.parametrize("module,func", [
+        ("backtest.research.counterfactual", "report"),
+        ("backtest.research.ablation", "report"),
+    ])
+    def test_synthetic_is_required_not_defaulted(self, module, func):
+        """A default would let a forgotten argument produce an unlabelled report, which is
+        the hole this mechanism exists to close."""
+        import importlib
+        import inspect
+
+        fn = getattr(importlib.import_module(module), func)
+        param = inspect.signature(fn).parameters["synthetic"]
+        assert param.default is inspect.Parameter.empty, f"{module}.{func} defaults it"
+
+    def test_the_mfe_mae_study_also_requires_it(self):
+        """The distribution most often used to set a take-profit or a stop, and the one
+        that went longest without a boundary."""
+        import inspect
+
+        from backtest.research.excursion import ExcursionStudy
+
+        param = inspect.signature(ExcursionStudy.text).parameters["synthetic"]
+        assert param.default is inspect.Parameter.empty
+
+    def test_the_exit_level_sweep_still_requires_its_levels(self):
+        """The boundary does not replace the group-3 rule; both apply."""
+        from backtest.research.counterfactual import sweep_levels
+
+        with pytest.raises(ValueError, match="group 3"):
+            sweep_levels(_trade(), _path(1, [0.0]), _path(1, [0.0]),
+                         take_profits=(0.3,), stop_losses=())
+
+class TestLevelGrid:
+    """The level grid as text. It had numbers and no boundary at all.
+
+    A grid handed to a reader invites reading the best cell, and the best cell is the one
+    that fitted these trades. So the text says that above the numbers and marks the best
+    cell as the least trustworthy, rather than leaving the reader to supply the caution.
+    """
+
+    GRID = pd.DataFrame([
+        {"take_profit": 0.5, "stop_loss": 0.3, "difference": -900.0,
+         "scored": 5, "censored_share": 0.0},
+        {"take_profit": 1.0, "stop_loss": 0.3, "difference": 400.0,
+         "scored": 5, "censored_share": 0.0},
+        {"take_profit": 1.5, "stop_loss": 0.3, "difference": float("nan"),
+         "scored": 0, "censored_share": float("nan")},
+    ])
+
+    def test_the_boundary_comes_before_the_numbers(self):
+        text = grid_report(self.GRID, synthetic=True)
+        assert text.index("!!") < text.index("-900")
+
+    def test_real_data_carries_no_synthetic_warning(self):
+        assert "synthetic chain" not in grid_report(self.GRID, synthetic=False)
+
+    def test_the_best_cell_is_named_as_the_least_trustworthy(self):
+        text = grid_report(self.GRID, synthetic=False)
+        assert "least trustworthy" in text
+        assert "take profit 1.00" in text
+
+    def test_the_plateau_is_what_the_reader_is_pointed_at(self):
+        assert "plateau" in grid_report(self.GRID, synthetic=False)
+
+    def test_an_unscored_cell_is_a_dash_not_a_zero(self):
+        """A cell that scored nothing is not a cell worth zero. Its ``scored`` count is
+        genuinely 0; its **difference** must be a dash."""
+        text = grid_report(self.GRID, synthetic=False)
+        line = next(ln for ln in text.splitlines() if "1.50" in ln)
+        difference = line.split()[2]
+        assert difference == "\u2014", f"the unscored cell shows {difference!r}"
+
+    def test_a_grid_with_nothing_scored_says_so(self):
+        empty = self.GRID.assign(difference=float("nan"))
+        assert "no cell could be scored" in grid_report(empty, synthetic=False)
+
+    def test_heavily_censored_cells_are_flagged(self):
+        """A cell that scored a third of the trades is not comparable with one that
+        scored all of them."""
+        heavy = self.GRID.copy()
+        heavy.loc[0, "censored_share"] = 0.8
+        assert "not comparable" in grid_report(heavy, synthetic=False)

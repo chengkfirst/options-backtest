@@ -113,6 +113,41 @@ def no_expired_position(contracts: Iterable, *, when: date) -> None:
         )
 
 
+def trade_record_balances(record) -> None:
+    """One trade record's arithmetic holds.
+
+    **What it catches:** a fee component dropped or double-counted, and a trade recorded
+    as closing after its contract expired. Both produce a plausible number rather than an
+    error, which is exactly the failure a reader cannot see.
+
+    This is the part of the invariant set the **trade table** can run. The four above all
+    read ledger state -- cash, positions, equity, the daily change -- and the trade table
+    has none of those by construction, so they are not applicable there rather than
+    skipped. Running this one in both engines is also what keeps their arithmetic from
+    drifting apart silently.
+    """
+    net = record.gross_pnl - record.fees
+    if abs(record.net_pnl - net) > TOLERANCE:
+        raise InvariantError(
+            f"trade {record.trade_id}: net P&L {record.net_pnl:.6f} is not gross "
+            f"{record.gross_pnl:.6f} minus fees {record.fees:.6f} (off by "
+            f"{record.net_pnl - net:.6f})"
+        )
+    parts = record.fee_commission + record.fee_regulatory + record.fee_slippage
+    if abs(record.fees - parts) > TOLERANCE:
+        raise InvariantError(
+            f"trade {record.trade_id}: fees {record.fees:.6f} is not the sum of "
+            f"commission, regulatory and slippage {parts:.6f} -- a component was "
+            f"dropped or counted twice"
+        )
+    expiry = getattr(record.contract, "expiry", None)
+    if expiry is not None and record.exit_date > expiry:
+        raise InvariantError(
+            f"trade {record.trade_id} is recorded as closing on {record.exit_date}, "
+            f"after its contract expired on {expiry}"
+        )
+
+
 def check_all(
     *,
     when: date,

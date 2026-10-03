@@ -76,17 +76,33 @@ def run_id(
     *,
     strategy: Mapping[str, Any],
     settings: Mapping[str, Any],
+    execution: Mapping[str, Any],
     data_version: str = "unknown",
     commit: str | None = None,
 ) -> str:
-    """The 16-character hash of the four things that determine a result.
+    """The 16-character hash of what determines a result.
 
     ``strategy`` is the components and their parameters; ``settings`` is the period, the
-    capital and the cost model; ``data_version`` identifies the data snapshot.
+    capital and the cost model; ``execution`` is which engine ran and the limits it ran
+    under; ``data_version`` identifies the data snapshot.
+
+    ``execution`` is a **required** argument rather than part of ``settings`` because it
+    was the thing that went missing. Two runs of the same strategy on the same data, one
+    on each engine, hashed identically -- and so did a run with a concurrency limit and
+    one without, which is not the same set of trades at all. The direction of that error
+    matters: the id exists so the trial counter can tell a rerun from a new trial, and
+    collapsing distinct configurations into one id makes the search look **smaller** than
+    it was, which makes the deflated result look better than it earned.
     """
+    if not execution:
+        raise ValueError(
+            "run_id needs the execution settings: which engine ran, and the limits it "
+            "ran under. Omitting them makes two different computations hash alike"
+        )
     payload = {
         "strategy": _stable(strategy),
         "settings": _stable(settings),
+        "execution": _stable(execution),
         "data": data_version,
         "code": commit if commit is not None else code_version(),
     }

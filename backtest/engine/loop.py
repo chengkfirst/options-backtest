@@ -36,7 +36,7 @@ from datetime import date
 
 import pandas as pd
 
-from backtest.core.actions import Action
+from backtest.core.actions import Action, TradeAction
 from backtest.core.config import BacktestConfig
 from backtest.core.dataview import DataView
 from backtest.core.thresholds import get as _threshold
@@ -73,6 +73,18 @@ from backtest.core.types import (
 ENGINE_NAME = "event_driven"
 
 
+#: Which slot each exit reason belongs to, for attribution by component. ``risk_forced``
+#: is headwind's: it is the only reason the book-wide rules can produce.
+_SLOT_FOR_EXIT = {
+    ExitReason.TAKE_PROFIT: "take_profit",
+    ExitReason.STOP_LOSS: "stop_loss",
+    ExitReason.RISK_FORCED: "headwind",
+    ExitReason.DTE_FLOOR: "stop_loss",
+    ExitReason.TIME_EXIT: "stop_loss",
+    ExitReason.EXPIRY_ITM: "expiry",
+    ExitReason.EXPIRY_OTM: "expiry",
+}
+
 #: Which exit reason a review's ``Close.kind`` files under. The statistics group on
 #: this, so the mapping has to be exact.
 REVIEW_EXIT_KIND = {
@@ -99,6 +111,10 @@ class Intent:
     #: silence. See :mod:`backtest.core.actions` for the shared vocabulary.
     kind: Action = Action.OPEN
     reason: str = ""                  # why this order, for a person to read
+    #: Which slot produced it: ``entry`` / ``take_profit`` / ``stop_loss`` / ``headwind``
+    #: / ``position`` / ``review``. This is what makes "which slot closed this trade"
+    #: answerable, which is the prerequisite for attribution by component.
+    component_id: str = ""
     exit_reasons: tuple[ExitReason, ...] = ()
     #: What a plan carries over: this trade's own exit rule, tag and note.
     exit_rule: "ExitRule | None" = None
@@ -231,6 +247,7 @@ class EventDrivenEngine:
         self._drawdown = 0.0
         paths: list[dict] = []
         shadow: list[dict] = []
+        actions: list[TradeAction] = []
         #: trade_id -> what is needed to keep quoting a contract after its trade closed.
         shadowing: dict[int, dict] = {}
         self._brake_state = "normal"
@@ -241,7 +258,7 @@ class EventDrivenEngine:
             # 3  fill yesterday's intents
             due, queue = [i for i in queue if i.execute_on == day], [i for i in queue if i.execute_on > day]
             for intent in due:
-                closed = self._execute(intent, ledger, open_trades, day)
+                closed = self._execute(intent, ledger, open_trades, day, actions)
                 if closed is not None:
                     records.append(closed)
                     self._start_shadow(closed, shadowing)
@@ -324,12 +341,18 @@ class EventDrivenEngine:
                         self.events.record(EventKind.CANDIDATE_DROPPED, day,
                                            f"review closed it: {action.reason}",
                                            str(pos.contract))
+                    # The slot credited is the one whose reasoning closed it: the first
+                    # exit reason by precedence, or the review's own kind when the review
+                    # acted. Crediting "exit" for all of them would make attribution by
+                    # component useless, which is the whole reason the field exists.
+                    first = resolve_exit_reason(list(reasons)) if reasons else None
                     intents.append(Intent(
                         contract=pos.contract,
                         side=Side.SELL if pos.quantity > 0 else Side.BUY,
                         quantity=pos.abs_quantity, created=day, execute_on=target,
                         trade_id=pos.trade_id, kind=Action.CLOSE, reason="exit",
                         exit_reasons=tuple(reasons),
+                        component_id=_SLOT_FOR_EXIT.get(first, "exit"),
                     ))
                 elif isinstance(action, Reduce):
                     # Round down, and keep at least 1 — reducing to 0 should be
@@ -349,6 +372,7 @@ class EventDrivenEngine:
                             quantity=cut, created=day, execute_on=target,
                             trade_id=pos.trade_id, kind=Action.REDUCE,
                             reason=action.reason or "reduced by review",
+                            component_id="review",
                         ))
                 elif isinstance(action, Add):
                     intents.append(Intent(
@@ -357,6 +381,7 @@ class EventDrivenEngine:
                         quantity=action.contracts, created=day, execute_on=target,
                         trade_id=pos.trade_id, kind=Action.ADD,
                         reason=action.reason or "added by review",
+                        component_id="review",
                     ))
 
             if strategy.entry.condition(view):
@@ -371,9 +396,19 @@ class EventDrivenEngine:
                     queue.append(intent)
 
         return EventDrivenResult(
-            paths=tuple(paths), shadow=tuple(shadow),
+            paths=tuple(paths), shadow=tuple(shadow), actions=tuple(actions),
             records=tuple(records), snapshots=tuple(snapshots), greeks=tuple(greeks_daily),
             config=self.config, strategy=strategy, events=self.events, ledger=ledger,
+            limits={
+                "max_concurrent": self.max_concurrent,
+                "enforce_capital": self.enforce_capital,
+                "execution_lag_days": self.config.execution_lag_days,
+                # The shadow window changes nothing about the trades, only how far past
+                # each exit the prices are kept. It is in the register as an engineering
+                # choice, and it is in the fingerprint because a run without it cannot
+                # answer a counterfactual question a run with it can.
+                "shadow_days": self.shadow_days,
+            },
         )
 
     # ── the steps ─────────────────────────────────────────
@@ -546,9 +581,10 @@ class EventDrivenEngine:
 
         selection = select_contract(
             self.chain.snapshot(target), strategy.select, self.config, self.market.calendar, target,
-            # As above: the chain is the execution day's (target), the view is the
-            # decision day's (day).
-            self.signals.on(day),
+            # The chain is the execution day's (target); the view is cut at the
+            # **decision** day, so a selector that reaches for the fill day's move
+            # raises rather than quietly picking a strike out of it.
+            DataView.at(day, market=self.market, signals=self.signals, chain=self.chain),
         )
         if not selection.ok:
             self.events.record(EventKind.SELECTION_FAILED, target, selection.describe())
@@ -580,7 +616,7 @@ class EventDrivenEngine:
             return None
         return Intent(contract=contract, side=Side.BUY, quantity=quantity,
                       created=day, execute_on=target, trade_id=trade_id,
-                      kind=Action.OPEN, reason="entry")
+                      kind=Action.OPEN, reason="entry", component_id="entry")
 
     def _market_ctx(self, day, ledger) -> Context:
         """The market and portfolio context for a review.
@@ -724,6 +760,7 @@ class EventDrivenEngine:
             contract=contract, side=Side.BUY, quantity=quantity, created=day,
             execute_on=target, trade_id=trade_id,
             kind=Action.OPEN, reason=plan.note or plan.tag or "entry by plan",
+            component_id="plan",
             exit_rule=self._plan_exit_rule(plan, strategy),
             tag=plan.tag, note=plan.note,
         )
@@ -825,8 +862,10 @@ class EventDrivenEngine:
                     return False
         return True
 
-    def _execute(self, intent: Intent, ledger: Ledger, open_trades, day: date) -> TradeRecord | None:
+    def _execute(self, intent: Intent, ledger: Ledger, open_trades, day: date,
+                 actions: list | None = None) -> TradeRecord | None:
         frame = self.chain.series(intent.contract, [day])
+        actions = actions if actions is not None else []
         if frame.empty:
             self.events.record(EventKind.NOT_TRADABLE, day,
                                "no quote on the execution day", str(intent.contract))
@@ -843,6 +882,17 @@ class EventDrivenEngine:
         )
         ledger.apply_fill(contract=intent.contract, side=intent.side, quantity=intent.quantity,
                           price=price, fees=fees, when=day, trade_id=intent.trade_id)
+        # The decision log: one TradeAction per fill, carrying the slot that asked for it
+        # and the values it acted on. This is what turns "which slot closed this trade"
+        # from unanswerable into a lookup, and it is the prerequisite for attribution by
+        # component.
+        actions.append(TradeAction(
+            action=intent.kind, trade_id=intent.trade_id, when=day,
+            component_id=intent.component_id, reason=intent.reason,
+            values={"price": price, "quantity": intent.quantity,
+                    "fees": round(fees.total, 4), "contract": str(intent.contract)},
+            fraction=None, contracts=intent.quantity if intent.kind is Action.ADD else None,
+        ))
 
         if intent.kind is Action.OPEN:
             open_trades[intent.trade_id] = OpenTrade(

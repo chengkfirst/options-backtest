@@ -11,7 +11,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from backtest.api.sdk import Result
+from backtest.api.sdk import Result, run
 from backtest.signals.entry.expression import parse_condition
 from backtest.signals.strategy import EntryRule, ExitRule
 from backtest.engine.strategy import Strategy
@@ -129,6 +129,35 @@ class TestResultSurface:
 
     def test_summary_reports_concurrency_and_capital(self, baseline):
         assert "Peak concurrent positions" in baseline().summary(printout=False)
+
+    def test_every_knob_that_moves_the_trades_moves_the_fingerprint(self):
+        """The fingerprint's whole job is telling a rerun from a new trial.
+
+        Two distinct configurations sharing one id makes the search look **smaller** than
+        it was, so the deflated result comes out better than it earned -- an error in the
+        flattering direction, which is the kind nobody reports.
+        """
+        base = dict(symbol="QQQ", start="2023-01-01", end="2023-06-30",
+                    entry="close < sma_20 * 0.98",
+                    exit={"hold_days": 15, "take_profit": 0.8, "stop_loss": 0.4,
+                          "dte_floor": 7},
+                    sizing={"method": "fixed"}, quantity=1)
+        ids = {
+            name: run(**(base | over)).manifest()["run_id"]
+            for name, over in {
+                "event_driven": {"engine": "event_driven"},
+                "trade_table": {"engine": "trade_table"},
+                "lag": {"engine": "event_driven", "execution_lag_days": 2},
+                "take_profit": {"engine": "event_driven",
+                                "exit": base["exit"] | {"take_profit": 0.9}},
+                "concurrency": {"engine": "event_driven", "max_concurrent": 1},
+                "shadow": {"engine": "event_driven", "shadow_days": 30},
+            }.items()
+        }
+        collisions = {v: [k for k in ids if ids[k] == v] for v in set(ids.values())}
+        assert len(set(ids.values())) == len(ids), \
+            f"these configurations share a fingerprint: " \
+            f"{[g for g in collisions.values() if len(g) > 1]}"
 
     def test_manifest_is_complete(self, baseline, tmp_path):
         paths = baseline().export(tmp_path)

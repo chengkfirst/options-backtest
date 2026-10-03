@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from backtest.core.errors import StartupError
+from backtest.core.invariants import trade_record_balances
 from backtest.core.maybe import Maybe
 
 
@@ -233,6 +234,12 @@ class TradeRecord:
             raise ValueError("quantity must be positive")
         if self.exit_date < self.entry_date:
             raise ValueError("the exit date must not precede the entry date")
+        # The record's own arithmetic, checked here rather than at each engine's call
+        # site: both engines construct records, and a check either of them could forget
+        # is not a mechanism. The ledger invariants cannot run in the trade table -- it
+        # has no cash, positions or equity by construction -- so this is the part of the
+        # invariant set that genuinely applies to both.
+        trade_record_balances(self)
         object.__setattr__(self, "entry_context", MappingProxyType(dict(self.entry_context)))
         object.__setattr__(self, "exit_context", MappingProxyType(dict(self.exit_context)))
 

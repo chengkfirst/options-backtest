@@ -26,6 +26,8 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
+from backtest.research.boundary import Boundary, Scope, header
+
 #: The default levels examined, as fractions of the entry price.
 PROFIT_LEVELS = (0.25, 0.50, 0.75, 1.00, 1.50, 2.00)
 LOSS_LEVELS = (0.20, 0.30, 0.40, 0.50, 0.60, 0.80)
@@ -91,7 +93,16 @@ class ExcursionStudy:
             "losers_mfe_median": float(losers["mfe"].median()) if len(losers) else np.nan,
         }
 
-    def text(self) -> str:
+    #: MFE and MAE are premium excursions, so they are option-side throughout.
+    scope = Scope.OPTION
+
+    def text(self, *, synthetic: bool) -> str:
+        """The distributions, with the boundary stated before them.
+
+        ``synthetic`` is required. These distributions are the usual way a take-profit or a
+        stop gets set, which makes an unlabelled one the most costly thing in this module:
+        a level read off a constant-IV chain is a level fitted to Black-Scholes.
+        """
         s = self.summary()
         warn = ["", "!! The distribution is censored; the conclusions below cannot "
                     "be used to set levels directly:"] + \
@@ -99,6 +110,7 @@ class ExcursionStudy:
         return "\n".join([
             f"MFE / MAE study · {s['n']} trades",
             "─" * 56,
+            *header(Boundary(self.scope, synthetic), what="a premium excursion"),
             f"  furthest in profit (MFE)  median {s['mfe_median']:+.0%}"
             f"  75th {s['mfe_q75']:+.0%}  90th {s['mfe_q90']:+.0%}",
             f"  deepest under (MAE)       median {s['mae_median']:+.0%}"

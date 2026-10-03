@@ -30,19 +30,33 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backtest.research.boundary import Boundary, Scope
+
 #: Trading days per year.
 YEAR = 252
+
+
+#: The equity curve is an option book and the benchmark is the underlying, so every
+#: comparison here puts one side priced by the chain against one side that is not.
+SCOPE = Scope.MIXED
 
 
 def summary(
     equity: pd.DataFrame,
     trades: pd.DataFrame,
     benchmark: "pd.Series | None" = None,
+    *,
+    synthetic: bool | None = None,
 ) -> dict[str, Any]:
     """The investor's set of metrics.
 
-    Beta and the comparison exist only when ``benchmark`` is given — **without it
-    nothing is invented**, and the missing entries state why.
+    Beta and the comparison exist only when ``benchmark`` is given — **without it nothing
+    is invented**, and the missing entries state why.
+
+    ``synthetic`` adds the boundary to the result when the caller knows the provenance.
+    Beta against the underlying is a mixed comparison: the strategy's side is priced by the
+    chain and the benchmark's is not, so on a synthetic chain the bias lands entirely on
+    the comparison rather than cancelling.
     """
     curve = equity["equity_mid"].astype(float)
     out: dict[str, Any] = {}
@@ -50,6 +64,9 @@ def summary(
     out.update(_underwater(curve))
     out.update(_concentration(trades))
     out.update(_vs_benchmark(curve, benchmark))
+    if synthetic is not None:
+        boundary = Boundary(SCOPE, synthetic)
+        out["boundary"] = boundary.note() or "real option data; no synthetic-chain limit"
     return out
 
 

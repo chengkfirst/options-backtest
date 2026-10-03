@@ -26,12 +26,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
+
+from backtest.core.errors import StartupError
 
 ROOT = Path(__file__).resolve().parent.parent
 HOME = ROOT / "research"
@@ -68,7 +71,9 @@ CREATE TABLE IF NOT EXISTS run (
     win_rate     REAL NOT NULL,
     median_pnl   REAL NOT NULL,
     synthetic    INTEGER NOT NULL,      -- whether the data was synthetic, which decides whether the conclusions can be trusted
-    trades_file  TEXT NOT NULL
+    trades_file  TEXT NOT NULL,
+    fingerprint  TEXT NOT NULL DEFAULT '',  -- the reproducibility hash from core/run_id.py: the same code, settings and data give the same value
+    sharpe_annualised REAL                  -- NULL when the engine builds no equity curve. Named for its basis: a bare `sharpe` is what let an annualised figure be passed where a per-period one was wanted
 );
 
 CREATE TABLE IF NOT EXISTS note (
@@ -94,6 +99,21 @@ VERDICTS = {
 }
 
 
+def _finite_or_none(value) -> float | None:
+    """A float the database can hold, or NULL.
+
+    A NaN Sharpe stored as a number comes back as NaN and quietly poisons every average
+    computed over the column; NULL is excluded by SQL and by the trial counter alike.
+    """
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 def spec_fingerprint(spec: dict[str, Any]) -> str:
     """A content fingerprint of a strategy definition, to recognise a save that
     changed nothing."""
@@ -114,8 +134,43 @@ class Store:
         self._db = sqlite3.connect(self.db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
+        # Before touching it: is this ours. Pointed at an unrelated SQLite file, running
+        # the schema script produces "no such column: strategy_name", which is loud but
+        # says nothing useful -- and the indexes in the script would already have been
+        # attempted against someone else's tables.
+        self._check_is_ours()
         self._db.executescript(SCHEMA)
+        self._migrate()
         self._db.commit()
+
+    #: Columns added after the first release. ``CREATE TABLE IF NOT EXISTS`` leaves an
+    #: existing database untouched, so without this a new column exists on a fresh
+    #: machine and is missing on the one holding the actual research -- the same code
+    #: reading two different schemas, which is the quietest failure of all.
+    ADDED: tuple[tuple[str, str, str], ...] = (
+        ("run", "fingerprint", "TEXT NOT NULL DEFAULT ''"),
+        ("run", "sharpe_annualised", "REAL"),
+    )
+
+    #: A column that every version of our ``run`` table has had. Its absence from an
+    #: existing table means the file belongs to something else.
+    OURS = ("run", "strategy_name")
+
+    def _check_is_ours(self) -> None:
+        table, column = self.OURS
+        existing = {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})")}
+        if existing and column not in existing:
+            raise StartupError(
+                f"{self.db_path} has a {table} table with no {column} column, so it is "
+                f"not our database. Point the store at a different directory rather than "
+                f"letting it alter this file"
+            )
+
+    def _migrate(self) -> None:
+        for table, column, decl in self.ADDED:
+            have = {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})")}
+            if column not in have:
+                self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     # ── strategies ────────────────────────────────────────
     def save_strategy(self, name: str, spec: dict[str, Any], note: str = "") -> dict[str, Any]:
@@ -203,8 +258,9 @@ class Store:
             """
             INSERT INTO run (started, seconds, strategy_id, strategy_name, strategy_ver,
                              symbol, start_date, end_date, config, manifest, events,
-                             n_trades, net_pnl, win_rate, median_pnl, synthetic, trades_file)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             n_trades, net_pnl, win_rate, median_pnl, synthetic, trades_file,
+                             fingerprint, sharpe_annualised)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 _now(), round(seconds, 2), strategy["id"], strategy["name"], strategy["version"],
@@ -214,6 +270,14 @@ class Store:
                 json.dumps(events, ensure_ascii=False),
                 summary["n"], summary["net_pnl"], summary["win_rate"], summary["median_pnl"],
                 int(synthetic), "",
+                # The reproducibility hash lives in the manifest. Lifted into its own
+                # column because the trial counter has to group by it, and a value buried
+                # in a JSON blob cannot be grouped or indexed. Named `fingerprint` rather
+                # than `run_id`: this table's `run_id` already means the integer key of a
+                # row, and two meanings behind one name is how the counter would end up
+                # counting rows instead of configurations.
+                str(manifest.get("run_id") or ""),
+                _finite_or_none(summary.get("sharpe_annualised")),
             ),
         )
         run_id = cur.lastrowid
@@ -295,6 +359,32 @@ class Store:
             d[k] = json.loads(d[k])
         d["synthetic"] = bool(d["synthetic"])
         return d
+
+    def run_records(self, idea: str | None = None) -> list[dict[str, Any]]:
+        """Every run in the shape :mod:`backtest.research.tracker` reads.
+
+        ``run_id`` here is the **reproducibility hash**, not this table's integer key:
+        the counter's whole job is to tell a rerun of one configuration from a new trial,
+        and the integer key is new on every rerun. A row saved before the column existed
+        carries an empty hash, and the counter **raises** on it rather than counting it as
+        distinct -- the honest outcome, because that row genuinely cannot be placed.
+        """
+        sql = ("SELECT strategy_name, fingerprint, sharpe_annualised, started, "
+               "n_trades, net_pnl, synthetic FROM run")
+        args: tuple = ()
+        if idea:
+            sql += " WHERE strategy_name = ?"
+            args = (idea,)
+        rows = self._db.execute(sql + " ORDER BY started", args).fetchall()
+        return [{
+            # The counter reads ``sharpe``. The value is annualised, and the caller has
+            # to pass the matching period count -- years, not days. The store's column
+            # keeps the basis in its name so the two cannot be mixed up again.
+            "idea": r["strategy_name"], "run_id": r["fingerprint"],
+            "sharpe": r["sharpe_annualised"],
+            "when": r["started"], "n_trades": r["n_trades"], "net_pnl": r["net_pnl"],
+            "synthetic": bool(r["synthetic"]),
+        } for r in rows]
 
     def delete_run(self, run_id: int) -> None:
         row = self._db.execute("SELECT trades_file FROM run WHERE id=?", (run_id,)).fetchone()

@@ -7,9 +7,9 @@ over and over, and it should not grow with the former's complexity.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
-from typing import Mapping
+from typing import Any, ClassVar, Mapping
 
 import numpy as np
 import pandas as pd
@@ -60,11 +60,20 @@ def trades_frame(records: "tuple[TradeRecord, ...]") -> pd.DataFrame:
 class TradeTableResult:
     """What the trade-table engine produces."""
 
+    #: Which engine produced it. Part of the run fingerprint: the same strategy on the
+    #: same data computed two ways is two results, not one.
+    ENGINE: ClassVar[str] = "trade_table"
+
     records: tuple[TradeRecord, ...]
     config: BacktestConfig
     strategy: Strategy
     events: EventLog
     calendar_sessions: tuple[date, ...]
+    #: **The limits the run actually ran under**, as the engine saw them. In the
+    #: fingerprint because they change which trades happen -- a concurrency limit is not
+    #: a presentation choice. Each engine fills what applies to it; this one has no
+    #: capital or concurrency constraint by construction.
+    limits: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def trades(self) -> pd.DataFrame:
@@ -101,6 +110,9 @@ class TradeTableResult:
 
 @dataclass(frozen=True, slots=True)
 class EventDrivenResult:
+    #: Which engine produced it. See :attr:`TradeTableResult.ENGINE`.
+    ENGINE: ClassVar[str] = "event_driven"
+
     records: tuple[TradeRecord, ...]
     snapshots: tuple[Snapshot, ...]
     config: BacktestConfig
@@ -120,6 +132,40 @@ class EventDrivenResult:
     #: no record of the price after the exit, so "would a wider stop have worked" is
     #: unanswerable without this.
     shadow: tuple = ()
+    #: **The decision log.** One :class:`~backtest.core.actions.TradeAction` per fill,
+    #: carrying the slot that asked for it and the values it acted on. This is what makes
+    #: a fill traceable back to a decision, and the prerequisite for attribution by
+    #: component — without it, "which slot closed this trade" has no answer.
+    actions: tuple = ()
+    #: The limits the run ran under. See :attr:`TradeTableResult.limits`.
+    limits: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def actions_frame(self):
+        """The decision log as a table. One row = one fill, with the slot that caused it."""
+        import pandas as pd
+
+        if not self.actions:
+            return pd.DataFrame(columns=["trade_id", "date", "action", "component_id",
+                                         "reason", "price", "quantity", "contract"])
+        return pd.DataFrame([{
+            "trade_id": a.trade_id, "date": a.when, "action": a.action.value,
+            "component_id": a.component_id, "reason": a.reason,
+            **{k: v for k, v in a.values.items()},
+        } for a in self.actions])
+
+    def trace(self, trade_id: int):
+        """Every decision that touched one trade, in order.
+
+        The document's traceability requirement is a fill traced back through order and
+        signal to the component. This is the part of that chain the engine can supply:
+        there are no orders or targets as events yet, so the chain is fill -> action ->
+        slot rather than the full five links.
+        """
+        frame = self.actions_frame
+        if frame.empty:
+            return frame
+        return frame.loc[frame["trade_id"] == trade_id].sort_values("date")
 
     @property
     def shadow_frame(self):

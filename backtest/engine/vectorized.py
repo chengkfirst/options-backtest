@@ -37,6 +37,7 @@ from backtest.data.options.chain import ChainSource
 from backtest.data.market import MarketData
 from backtest.accounting.tradebook import TradeTableResult, trade_context
 from backtest.engine.strategy import Strategy
+from backtest.core.dataview import DataView
 from backtest.core.errors import InvariantError, StartupError
 from backtest.core.run_log import EventKind, EventLog
 from backtest.core.maybe import Maybe
@@ -190,6 +191,14 @@ class TradeTableEngine:
             config=self.config,
             strategy=strategy,
             events=self.events,
+            limits={
+                # This engine has no capital or concurrency constraint by construction,
+                # recorded rather than left out: "not applied" and "not recorded" look the
+                # same in a fingerprint otherwise.
+                "max_concurrent": None,
+                "enforce_capital": False,
+                "execution_lag_days": self.config.execution_lag_days,
+            },
             calendar_sessions=sessions,
         )
 
@@ -203,11 +212,13 @@ class TradeTableEngine:
             self.config,
             self.market.calendar,
             entry_day,
-            # The chain is the execution day's, the signal view the **decision
-            # day's**. A custom selector may decide what kind of contract to want from
-            # what T showed, but must not see T+1's market — that would be picking a
-            # strike out of the fill day's move.
-            self.signals.on(signal_day),
+            # The chain is the execution day's, the view cut at the **decision day**.
+            # A custom selector may decide what kind of contract to want from what T
+            # showed, but must not see T+1's market — that would be picking a strike out
+            # of the fill day's move. The cut is what makes that a raise rather than a
+            # convention.
+            DataView.at(signal_day, market=self.market, signals=self.signals,
+                        chain=self.chain),
         )
         if not selection.ok:
             self.events.record(

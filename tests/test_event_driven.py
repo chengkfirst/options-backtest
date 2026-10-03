@@ -22,7 +22,8 @@ from backtest.engine.strategy import Strategy
 from backtest.engine.vectorized import TradeTableEngine
 from backtest.core.errors import StartupError
 from backtest.signals.contracts import SelectionRule
-from backtest.core.types import Right
+from backtest.core.actions import Action
+from backtest.core.types import ExitReason, Right
 
 
 def build_strategy(signals, **overrides):
@@ -97,6 +98,64 @@ class TestDualEngine:
         stacked = TradeTableEngine(market, chain, signals, config).run(
             build_strategy(signals, allow_stacking=True))
         assert len(stacked.records) > len(plain.records)
+
+
+class TestDecisionLog:
+    """One action per fill, carrying the slot that asked for it.
+
+    Without it, "which slot closed this trade" has no answer, and attribution by
+    component cannot be built on top.
+    """
+
+    def test_one_action_per_fill(self, both):
+        _, driven = both
+        # Every closed trade had an opening fill and a closing fill. Expiry settles
+        # without an order, so the count is at least the open fills.
+        assert len(driven.actions) >= len(driven.records)
+
+    def test_every_action_names_its_slot(self, both):
+        """An action credited to a generic "exit" makes attribution by component
+        useless, which is the only reason the field exists."""
+        _, driven = both
+        assert all(a.component_id for a in driven.actions)
+
+    def test_a_close_is_credited_to_the_rule_that_fired(self, both):
+        _, driven = both
+        closes = {a.component_id for a in driven.actions if a.action is Action.CLOSE}
+        assert closes and closes <= {"take_profit", "stop_loss", "headwind", "expiry",
+                                     "review", "exit"}
+
+    def test_the_slot_matches_the_recorded_exit_reason(self, both):
+        """The log and the trade table must agree. Two records of the same decision
+        that can disagree is the drift this project refuses."""
+        _, driven = both
+        by_trade = {a.trade_id: a.component_id
+                    for a in driven.actions if a.action is Action.CLOSE}
+        expect = {ExitReason.TAKE_PROFIT: "take_profit", ExitReason.STOP_LOSS: "stop_loss",
+                  ExitReason.RISK_FORCED: "headwind", ExitReason.DTE_FLOOR: "stop_loss",
+                  ExitReason.TIME_EXIT: "stop_loss"}
+        checked = 0
+        for r in driven.records:
+            if r.trade_id in by_trade and r.exit_reason in expect:
+                assert by_trade[r.trade_id] == expect[r.exit_reason], \
+                    f"trade {r.trade_id} exited on {r.exit_reason} but is credited to " \
+                    f"{by_trade[r.trade_id]}"
+                checked += 1
+        assert checked > 0
+
+    def test_one_trade_can_be_traced(self, both):
+        _, driven = both
+        first = driven.records[0].trade_id
+        frame = driven.trace(first)
+        assert len(frame) >= 1
+        assert set(frame["action"]) <= {"open", "close", "reduce", "add", "roll"}
+        assert list(frame["date"]) == sorted(frame["date"])
+
+    def test_the_trade_table_keeps_no_log(self, both):
+        """It has no order step to log: each trade is computed whole. Absent, rather
+        than an empty log implying one was kept."""
+        table, _ = both
+        assert not hasattr(table, "actions")
 
 
 class TestPortfolioState:

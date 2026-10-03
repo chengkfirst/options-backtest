@@ -38,6 +38,8 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+from backtest.research.boundary import Boundary, Scope, header
+
 
 @dataclass(frozen=True, slots=True)
 class Replay:
@@ -198,16 +200,67 @@ def sweep_levels(
     return pd.DataFrame(rows)
 
 
-def report(replays: Sequence[Replay]) -> str:
-    """The replays, best first, each carrying its own caveats."""
+#: Exit levels are option prices, so this is an option-side conclusion.
+SCOPE = Scope.OPTION
+
+
+def grid_report(grid: pd.DataFrame, *, synthetic: bool) -> str:
+    """The level grid as text, with the boundary first and the plateau read for you.
+
+    ``sweep_levels`` returns a table, and a table handed to a reader invites reading the
+    best cell. **The best cell is the cell that fitted these trades.** So this says so
+    above the numbers, marks the best cell as the one to distrust, and reports the
+    censored share per cell -- a cell that only scored a third of the trades is not
+    comparable with one that scored all of them.
+    """
+    lines = ["Counterfactual exit levels", "\u2500" * 68]
+    lines += header(Boundary(SCOPE, synthetic), what="an exit level")
+    usable = grid.dropna(subset=["difference"])
+    if usable.empty:
+        return "\n".join(lines + ["  no cell could be scored: either the run kept no "
+                                  "shadow prices, or every alternative fell outside the "
+                                  "window observed after each exit"])
+    lines += ["  Read the **plateau**, not the peak: a single standout cell is the cell "
+              "that fitted",
+              "  these trades, while a region of adjacent cells that all improve is a "
+              "shape the",
+              "  next period might also have. Every cell here is in-sample by "
+              "construction.", ""]
+    lines += [f"  {'take profit':>12} {'stop loss':>10} {'difference':>12} "
+              f"{'scored':>7} {'censored':>9}"]
+    for _, r in grid.sort_values(["take_profit", "stop_loss"]).iterrows():
+        diff = "       —" if pd.isna(r["difference"]) else f"{r['difference']:+12,.0f}"
+        cens = "     —" if pd.isna(r["censored_share"]) else f"{r['censored_share']:8.0%}"
+        lines.append(f"  {r['take_profit']:>12.2f} {r['stop_loss']:>10.2f} {diff} "
+                     f"{int(r['scored']):>7} {cens}")
+    best = usable.loc[usable["difference"].idxmax()]
+    lines += ["", f"  the best cell is take profit {best['take_profit']:.2f} / stop loss "
+                  f"{best['stop_loss']:.2f} at {best['difference']:+,.0f} -- treat it as "
+                  f"the",
+              "  least trustworthy number here, not the answer"]
+    heavy = usable[usable["censored_share"] > 0.5]
+    if len(heavy):
+        lines += ["", f"  {len(heavy)} of {len(usable)} cells scored under half their "
+                      f"trades; those are not comparable with the rest"]
+    return "\n".join(lines)
+
+
+def report(replays: Sequence[Replay], *, synthetic: bool) -> str:
+    """The replays, best first, each carrying its own caveats.
+
+    ``synthetic`` is required, not defaulted. An exit level is an option-side conclusion,
+    and on a synthetic chain it describes Black-Scholes rather than the market — so a
+    forgotten argument must not be able to produce an unlabelled report.
+    """
     usable = [r for r in replays if r.scored]
     if not usable:
         return ("no alternative exit could be scored. Either the engine ran without "
                 "shadow tracking, or every alternative fell outside the observed window.")
-    lines = ["Counterfactual exits", "─" * 68,
-             "  In-sample by construction: each level was chosen after seeing the path it",
-             "  is scored on. Confirm anything promising out of sample before adopting it.",
-             ""]
+    lines = ["Counterfactual exits", "─" * 68]
+    lines += header(Boundary(SCOPE, synthetic), what="an exit level")
+    lines += ["  In-sample by construction: each level was chosen after seeing the path it",
+              "  is scored on. Confirm anything promising out of sample before adopting it.",
+              ""]
     for r in sorted(usable, key=lambda x: -x.difference):
         lines.append(f"  {r.verdict()}")
     skipped = sum(r.skipped for r in replays)

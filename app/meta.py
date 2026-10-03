@@ -79,6 +79,7 @@ def _meta_payload() -> dict[str, Any]:
     from backtest.data.market import VOL_PROXY_BY_SYMBOL
     from backtest.core.slots import COUPLINGS, as_form_spec
     from backtest.signals.registry import DEFAULT_SIGNALS, describe_signals
+    from runner import VALIDATIONS
 
     return {
         "symbols": sorted(VOL_PROXY_BY_SYMBOL),
@@ -94,6 +95,14 @@ def _meta_payload() -> dict[str, Any]:
             {"a": a, "b": b, "why": why} for a, b, why in COUPLINGS
         ],
         "gaps": _describe_gaps(),
+        # The validation tools, declared once in the runner and rendered from here. A
+        # tool added there appears in the interface without a second edit, which is the
+        # only arrangement under which the two sides cannot drift.
+        "validations": [
+            {"kind": k, "label": v["label"], "why": v["why"],
+             "engines": list(v["engines"]) if v["engines"] else None}
+            for k, v in sorted(VALIDATIONS.items())
+        ],
         "defaults": {
             "symbol": "QQQ", "start": "2020-01-01", "end": "2024-12-31",
             "entry": "sma_20 > sma_50", "right": "call",

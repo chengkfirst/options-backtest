@@ -452,6 +452,99 @@ function renderDiagnostics(diags){
     </details>`).join("");
 }
 
+
+/* ── validate this run ────────────────────────────────────
+   The four tools from the research layer, run on demand. On demand because each one
+   re-runs the strategy — ablation once per slot, baselines once per draw — so running
+   them with every backtest would make the run button slow for something not always
+   wanted.
+
+   The buttons are rendered from META.validations, which the backend builds from the
+   runner's own declaration. A tool added there appears here with no edit on this side;
+   that is the only arrangement in which the two cannot drift apart.
+
+   The output is shown as text, deliberately. Every one of these reports leads with the
+   boundary on its own conclusions — on the synthetic chain an exit level describes
+   Black-Scholes, not the market. Splitting the report into fields for this side to
+   re-assemble is exactly how that line gets dropped. */
+const VALID_INPUTS = {
+  baselines: [{key:"draws", label:"random draws", value:50, hint:"at least 10"}],
+  counterfactual: [
+    {key:"take_profits", label:"take profits", value:"0.5, 1.0, 1.5", text:true},
+    {key:"stop_losses",  label:"stop losses",  value:"0.3, 0.5, 0.7", text:true},
+  ],
+  trials: [{key:"years", label:"years covered", value:"", hint:"the stored Sharpe is annualised"}],
+  ablation: [],
+};
+
+function renderValidations(run){
+  const box = $("validSec");
+  if(!box) return;
+  // META is null when /api/meta could not be fetched; that failure is already in the
+  // problem strip, so this hides the section rather than reporting it twice.
+  const tools = (META && META.validations) || [];
+  const offered = new Set(run.validations || []);
+  box.hidden = !tools.length;
+  $("validOut").hidden = true;
+  $("validTools").innerHTML = tools.map(t => {
+    const can = offered.has(t.kind);
+    const inputs = (VALID_INPUTS[t.kind] || []).map(i =>
+      `<label for="v_${t.kind}_${i.key}">${esc(i.label)}</label>
+       <input id="v_${t.kind}_${i.key}" value="${esc(i.value)}"
+              ${i.hint ? `title="${esc(i.hint)}"` : ""}>`).join("");
+    const action = can
+      ? `<div class="vrow">${inputs}
+           <button class="btn ghost" data-valid="${t.kind}">run</button></div>`
+      : `<div class="unavail">needs the ${(t.engines || []).join(" or ")} engine;
+           this run used ${esc(run.engine)}</div>`;
+    return `<div class="valid-tool">
+      <h4>${esc(t.label)}</h4><p>${esc(t.why)}</p>${action}</div>`;
+  }).join("");
+  $("validTools").querySelectorAll("[data-valid]").forEach(b =>
+    b.addEventListener("click", () => runValidation(b.dataset.valid, b)));
+}
+
+function validParams(kind){
+  const out = {};
+  for(const i of (VALID_INPUTS[kind] || [])){
+    const el = $(`v_${kind}_${i.key}`);
+    if(!el) continue;
+    const raw = el.value.trim();
+    if(!raw) continue;
+    out[i.key] = i.text
+      ? raw.split(",").map(x => x.trim()).filter(Boolean).map(Number)
+      : Number(raw);
+  }
+  return out;
+}
+
+async function runValidation(kind, btn){
+  const out = $("validOut");
+  btn.disabled = true;
+  const was = btn.textContent;
+  btn.textContent = "running…";
+  out.hidden = false;
+  out.textContent = "Running. This re-runs the strategy, so it takes about as long as the backtest did.";
+  try{
+    const r = await fetch("/api/validate", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({id: CURRENT, kind, params: validParams(kind)}),
+    });
+    const data = await r.json().catch(() => ({error:`the service's response was not JSON (HTTP ${r.status})`}));
+    if(!r.ok || data.error){
+      // A refusal belongs where the report would have gone, not in the problem strip:
+      // "the counterfactual needs its levels" is an instruction, not a fault.
+      out.textContent = data.error || `HTTP ${r.status}`;
+      return;
+    }
+    out.innerHTML = esc(data.text).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  }catch(e){
+    out.textContent = `the request failed: ${e.message}. The service may have stopped — check the terminal.`;
+  }finally{
+    btn.disabled = false; btn.textContent = was;
+  }
+}
+
 /* ── the front/back contract ──────────────────────────────
    Which fields the interface needs from the backend is **declared explicitly** here, and
    both sides use the declaration:
@@ -468,10 +561,15 @@ function renderDiagnostics(diags){
 const CONTRACT = {
   run: ["id", "rows", "config", "engine", "started", "seconds",
         "n_trades", "win_rate", "net_pnl", "boundary", "problems",
-        "diagnostics", "anomalies", "manifest", "events", "synthetic"],
+        "diagnostics", "anomalies", "manifest", "events", "synthetic",
+        // Which validation tools this run can answer. Declared per run rather than
+        // assumed, because the counterfactual needs the shadow prices only the
+        // event-driven engine keeps.
+        "validations"],
   // Only the event-driven engine has these; their absence under the trade table is normal
   run_optional: ["equity", "equity_metrics", "scenarios", "attribution"],
-  meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps"],
+  meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps",
+         "validations"],
   sizing_methods: ["fixed", "risk_pct", "fixed_notional", "scale_by_vol"],
 };
 
@@ -540,6 +638,7 @@ function show(runId){
   for(const m of (run.problems || [])) notice(m);
   renderAnomalies(run.anomalies || []);
   renderDiagnostics(run.diagnostics || []);
+  renderValidations(run);
   // Run events are not repeated into the notice strip. They are already in the
   // diagnostics panel, with the distribution of reasons and the date range — a
   // "candidate_dropped: 45" line in the strip is a worse version of the same thing. The

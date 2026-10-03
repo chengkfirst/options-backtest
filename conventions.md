@@ -127,6 +127,28 @@ convention** — pretending they are guarded is more dangerous than admitting th
 | **No threshold is written as a literal** | a cut inside a module turns a judgement ("a plateau") into something that reads as a measurement, and nobody can then answer "what was decided for me". Every one lives in `core/thresholds.py`, in the architecture document's four groups, and every verdict names the cut behind it | a test asserts the groups and that an override reaches the tool |
 | **The platform never defaults a strategy choice** | the document permits optimising a contract delta or an exit level under its protocol; it does not permit the platform picking one. A default decides the search and then reports its winner as a finding | `strategy_parameters_are_never_defaulted()`, asserted by a test |
 | **A slot's logic never calls another slot** | the architecture requires every influence to pass through the trade context and the action vocabulary; direct calls are what make per-slot ablation impossible | a person, until the component protocol exists |
+| **Anything that changes the trades is in the run fingerprint** | two configurations sharing one id make a search look smaller than it was, so the deflated result comes out better than it earned. The error flatters, which is the kind nobody reports | a test over six configurations, and `run_id` refusing to hash without the execution settings |
+| **A stored number carries its basis in its name** | a column called `sharpe` let an annualised figure be passed where a per-period one was wanted. It is `sharpe_annualised` | a person |
+
+---
+
+## One known deviation from the architecture document
+
+The document's daily order is: corporate actions → market data → signals → portfolio →
+orders → fills → expiry → **accounting**. `engine/loop.py` marks the book to market at
+step 5, *before* the strategy runs, rather than last, and has **no corporate-action step
+at all**.
+
+Under the current one-day execution lag these are equivalent: nothing changes the
+portfolio after step 5, so marking there and marking last give the same equity. It stops
+being equivalent the moment an intraday fill lands on the same day as its signal — then
+the mark is taken before a fill that belongs in it, and the equity curve is wrong by that
+fill with nothing raising.
+
+Recorded rather than fixed because fixing it means moving accounting after expiry, which
+changes the daily snapshot order that the invariant checks and the shadow tracking both
+hang off. It is criterion 1.32, and the condition that makes it urgent is intraday
+execution, which does not exist yet.
 
 ---
 

@@ -12,6 +12,7 @@ is a toy, not a research tool.
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any
 
@@ -19,6 +20,23 @@ from compilers import compile_entry, compile_plan, compile_review, compile_signa
 from store import Store
 
 STORE = Store()
+
+#: The last few result objects, by the store's run id.
+#:
+#: The validation tools -- baselines, ablation, counterfactual exits -- all need the
+#: **result object**, not the stored trade log: ablation re-runs the strategy with a slot
+#: removed, baselines re-run with the entry dates shuffled, and the counterfactual reads
+#: the shadow prices kept past each exit, which are not in the trade table at all.
+#:
+#: Kept in memory rather than rebuilt from the stored configuration. Rebuilding would
+#: double every runtime, and -- worse -- would re-run from a serialised config and could
+#: silently differ from the run being validated. A run that has aged out says so and
+#: offers a rerun, which is honest; silently validating a *slightly different* run is not.
+RECENT: "OrderedDict[int, Any]" = OrderedDict()
+
+#: How many. Small because an event-driven result holds a daily snapshot, a path per
+#: position per day and the shadow prices past each exit.
+RECENT_KEEP = 3
 
 COLUMNS = [
     "trade_id", "entry_date", "exit_date", "contract", "quantity",
@@ -162,6 +180,11 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
             "net_pnl": float(stats.get("net_pnl", 0.0)),
             "win_rate": float(stats.get("win_rate", 0.0)),
             "median_pnl": float(dist.get("median", 0.0)) if stats["count"] else 0.0,
+            # Stored so the trial counter can deflate the best result of a search by how
+            # much searching it took. Only the event-driven engine has an equity curve, so
+            # the trade table stores NULL rather than a zero that would read as a real
+            # Sharpe of zero.
+            "sharpe_annualised": _sharpe_of(result),
         },
         trades=slim,
         synthetic=bool(prov.get("all_synthetic")),
@@ -218,7 +241,178 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
         record["anomalies"] = []
         record["problems"].append(f"the anomaly scan failed: {type(exc).__name__}: {exc}")
     record["notes"] = [record["boundary"]] if record["boundary"] else []
+    RECENT[record["id"]] = result
+    while len(RECENT) > RECENT_KEEP:
+        RECENT.popitem(last=False)
+    # Declares to the interface which validation tools this run can actually answer, so a
+    # button is never offered for something that would fail. The counterfactual needs the
+    # shadow prices, which only the event-driven engine keeps.
+    record["validations"] = sorted(
+        k for k, v in VALIDATIONS.items()
+        if v["engines"] is None or kwargs["engine"] in v["engines"]
+    )
     return record
+
+
+#: The validation tools the interface can run on a stored result, and what each needs.
+#:
+#: Declared in one place rather than branched on in the handler: the interface renders its
+#: buttons from this, so a tool added here appears there, and one that cannot run under an
+#: engine is never offered.
+VALIDATIONS: dict[str, dict[str, Any]] = {
+    "baselines": {
+        "label": "against a baseline",
+        "why": "is this better than entering at random, or than just holding the "
+               "underlying. One run of this decides whether an idea is worth researching.",
+        "engines": None,
+    },
+    "ablation": {
+        "label": "what each slot is worth",
+        "why": "remove one component at a time and see what the result loses. A slot "
+               "that costs nothing to remove is not earning its complexity.",
+        "engines": None,
+    },
+    "counterfactual": {
+        "label": "would a different exit have been better",
+        "why": "replays each trade against other take-profit and stop-loss levels using "
+               "the prices kept past the actual exit. A trade whose alternative never "
+               "fired is censored, not assumed to have closed.",
+        "engines": ("event_driven",),
+    },
+    "trials": {
+        "label": "how much searching this took",
+        "why": "counts the distinct configurations tried under this strategy name and "
+               "deflates the best result by the size of the search.",
+        "engines": None,
+    },
+}
+
+
+def validate(run_id: int, kind: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Run one validation tool against a stored run, and return its report as text.
+
+    Text rather than a structure: every one of these reports leads with the boundary on
+    its own conclusions, and the boundary is a sentence, not a field. Splitting it into
+    numbers for the interface to re-assemble is exactly how the boundary gets dropped.
+    """
+    if kind not in VALIDATIONS:
+        raise ValueError(
+            f"there is no validation called {kind!r}; one of "
+            f"{', '.join(sorted(VALIDATIONS))}"
+        )
+    if kind == "trials":
+        return _trials(run_id, params)
+    result = RECENT.get(run_id)
+    if result is None:
+        raise ValueError(
+            f"run {run_id} is no longer in memory (the last {RECENT_KEEP} are kept). "
+            f"These tools re-run the strategy, so they need the run itself rather than "
+            f"its stored trade log -- run it again and validate that one"
+        )
+    engines = VALIDATIONS[kind]["engines"]
+    if engines is not None and result.raw.ENGINE not in engines:
+        raise ValueError(
+            f"{kind} needs the {' or '.join(engines)} engine; this run used "
+            f"{result.raw.ENGINE}"
+        )
+    if kind == "baselines":
+        draws = int(params.get("draws") or 0)
+        if draws and draws < 10:
+            raise ValueError("random entry needs at least 10 draws, or one lucky draw "
+                             "becomes the baseline")
+        return {"text": _text(result.baselines(draws=draws), result.synthetic, kind)}
+    if kind == "ablation":
+        return {"text": _text(result.ablate(accept_coupled=bool(params.get("accept_coupled"))),
+                              result.synthetic, kind)}
+    tps = [float(x) for x in (params.get("take_profits") or [])]
+    sls = [float(x) for x in (params.get("stop_losses") or [])]
+    if not tps or not sls:
+        raise ValueError(
+            "the counterfactual needs the levels to compare against. The platform does "
+            "not pick them: which levels are worth asking about is the research question, "
+            "and a default here would be the platform answering it"
+        )
+    from backtest.research.counterfactual import grid_report
+
+    grid = result.counterfactual(take_profits=tps, stop_losses=sls)
+    return {"text": grid_report(grid, synthetic=result.synthetic)}
+
+
+def _text(obj, synthetic: bool, kind: str) -> str:
+    """One report as text, with its boundary first."""
+    from backtest.research import ablation, baselines, counterfactual
+
+    module = {"baselines": baselines, "ablation": ablation,
+              "counterfactual": counterfactual}[kind]
+    return module.report(obj, synthetic=synthetic)
+
+
+def _trials(run_id: int, params: dict[str, Any]) -> dict[str, Any]:
+    """The trial count under this run's strategy name, and the deflated best."""
+    from backtest.research import tracker
+
+    row = STORE.run(run_id)
+    if row is None:
+        raise ValueError(f"there is no run {run_id}")
+    idea = row["strategy_name"]
+    records = STORE.run_records(idea)
+    unplaced = [r for r in records if not r["run_id"]]
+    lines = [f"Search size under {idea!r}", "-" * 56, ""]
+    if unplaced:
+        lines += [
+            f"  !! {len(unplaced)} of {len(records)} runs were saved before the "
+            f"reproducibility fingerprint was stored, so they cannot be told apart from "
+            f"a rerun. They are left out below, which makes the count a **lower bound**.",
+            "",
+        ]
+        records = [r for r in records if r["run_id"]]
+    if not records:
+        return {"text": "\n".join(lines + ["  no run under this name carries a "
+                                           "fingerprint, so there is nothing to count"])}
+    trials = tracker.count_trials(records, idea=idea,
+                                  groupings=int(params.get("groupings") or 0))
+    lines += [f"  distinct configurations : {trials.distinct}",
+              f"  runs                    : {trials.runs}",
+              f"  reruns                  : {trials.runs - trials.distinct}"]
+    if trials.best_sharpe is None:
+        lines += ["", "  no run recorded a Sharpe, so there is nothing to deflate. Only "
+                      "the event-driven engine builds an equity curve."]
+        return {"text": "\n".join(lines)}
+    # Years, because the stored Sharpe is annualised. Passing days against an annualised
+    # Sharpe is the mistake the deflated-Sharpe guard refuses, and it overstates the
+    # result badly -- so the unit is in the name on both sides.
+    years = float(params.get("years") or 0)
+    if years <= 0:
+        lines += ["", "  the deflated Sharpe needs how many years the best run covered. "
+                      "It is not assumed: the stored Sharpe is annualised, so the period "
+                      "count has to be in years, and guessing it would change the answer."]
+        return {"text": "\n".join(lines)}
+    try:
+        d = tracker.deflate(trials, periods=years)
+    except ValueError as exc:
+        # The deflated Sharpe refuses inputs it cannot support -- too few periods, or a
+        # Sharpe and a period count on different bases. **The refusal is the answer**, not
+        # an error to hide: a six-month backtest genuinely cannot carry one, and showing a
+        # number anyway is the failure this whole tool exists to prevent.
+        lines += ["", f"  the deflated Sharpe cannot be computed here: {exc}"]
+        return {"text": "\n".join(lines)}
+    lines += ["", f"  best Sharpe              : {d.sharpe:.3f}",
+              f"  the best of {d.trials} worthless : {d.benchmark:.3f}",
+              f"  deflated probability     : {d.probability:.0%}", "",
+              "  " + d.verdict()]
+    return {"text": "\n".join(lines)}
+
+
+def _sharpe_of(result) -> float | None:
+    """The run's Sharpe, or ``None`` when this engine cannot produce one.
+
+    ``equity_metrics`` needs a daily equity curve, which the trade table does not build.
+    Returning ``None`` rather than catching everything keeps a real failure visible.
+    """
+    if not hasattr(result.raw, "equity") or result.raw.equity is None:
+        return None
+    value = result.equity_metrics().get("sharpe")
+    return float(value) if value is not None else None
 
 
 def _run_diagnostics(result) -> list[dict[str, Any]]:

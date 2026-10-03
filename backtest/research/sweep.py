@@ -149,6 +149,22 @@ class Plateau:
     def share(self) -> float:
         return self.holding / self.neighbours if self.neighbours else float("nan")
 
+    #: Set by the caller that knows the provenance; None means unstated.
+    synthetic: bool | None = None
+
+    def boundary_note(self) -> str:
+        """The boundary, when the caller stated the provenance.
+
+        A parameter surface is usually swept over exit levels or a target delta, both
+        option-side. Sweeping an underlying-side parameter is possible, which is why the
+        scope is not asserted here — the caller states it.
+        """
+        from backtest.research.boundary import Boundary, Scope
+
+        if self.synthetic is None:
+            return ""
+        return Boundary(Scope.OPTION, self.synthetic).note()
+
     def verdict(self) -> str:
         from backtest.core.thresholds import get
 

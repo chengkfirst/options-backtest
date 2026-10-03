@@ -47,6 +47,7 @@ from typing import Any, Callable, Mapping
 
 from backtest.core.errors import StartupError
 from backtest.portfolio.positioning import Sizing
+from backtest.research.boundary import Boundary, Scope, header
 
 #: What "off" means for each slot, as an override of the assembled strategy.
 #:
@@ -194,14 +195,34 @@ def ablate(
                     full_trades=full_n, ablated_trades=off_n, caveat=caveat)
 
 
-def report(results) -> str:
-    """The ablations as one block, largest contribution first."""
+#: What each slot's contribution rests on. Every exit and sizing slot is measured in
+#: premium, so a synthetic chain makes its contribution a property of the pricing model.
+SCOPE: Mapping[str, Scope] = {
+    "take_profit": Scope.OPTION,
+    "stop_loss": Scope.OPTION,
+    "position": Scope.OPTION,
+    "review": Scope.OPTION,
+    "setup": Scope.UNDERLYING,
+}
+
+
+def report(results, *, synthetic: bool) -> str:
+    """The ablations as one block, largest contribution first.
+
+    ``synthetic`` is required. A slot's contribution is measured in premium, so on a
+    synthetic chain it says what the slot is worth under Black-Scholes.
+    """
     # Unused slots last: they carry no measurement and would otherwise sort among the
     # small contributions, where they read as a result.
     results = sorted(results, key=lambda a: (a.was_unused, -abs(a.contribution)))
     if not results:
         return "no slots were ablated."
     lines = ["Ablation · what each slot is worth", "─" * 64]
+    worst = Scope.UNDERLYING
+    for a in results:
+        if SCOPE.get(a.slot, Scope.OPTION) is not Scope.UNDERLYING:
+            worst = Scope.OPTION
+    lines += header(Boundary(worst, synthetic), what="a slot's contribution in premium")
     for a in results:
         lines.append(f"  {a.verdict()}")
         if not a.was_unused:

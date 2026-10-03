@@ -86,8 +86,14 @@ DERIVED_COLUMNS: tuple[str, ...] = (
     "dte", "sessions_left", "mid", "spread", "moneyness", "is_call", "is_put",
 )
 
-#: A custom selector: takes the day's chain and the **decision day's** signal
-#: view, and returns the chosen row (or None for no trade).
+#: A custom selector: takes the day's chain and the **decision day's** view, and returns
+#: the chosen row (or None for no trade).
+#:
+#: The second argument is a :class:`~backtest.core.dataview.DataView` when the engine has
+#: one — cut at the decision day, so a read of the fill day **raises**. It falls back to a
+#: bare signal view only where no engine built one. Protecting the plan hook and not this
+#: one would be worse than protecting neither: the protection would read as systemic while
+#: leaving the gap a custom selector is most likely to walk into.
 #:
 #: Why the chain is the execution day's while the view is the decision day's — see
 #: ``enrich_chain``.

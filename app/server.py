@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 warnings.filterwarnings("ignore")
 
 from meta import _meta_payload, _tradeoff  # noqa: E402
-from runner import STORE, _finite, run_backtest  # noqa: E402
+from runner import STORE, VALIDATIONS, _finite, run_backtest, validate  # noqa: E402
 from store import VERDICTS  # noqa: E402
 
 PORT = 8765
@@ -192,7 +192,7 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_HEAD()
 
     def do_POST(self):
-        if self.path not in ("/api/run", "/api/note", "/api/run/delete"):
+        if self.path not in ("/api/run", "/api/note", "/api/run/delete", "/api/validate"):
             return self._json({"error": f"unknown endpoint {self.path}"}, 404)
         try:
             length = int(self.headers.get("Content-Length", 0))
@@ -217,6 +217,22 @@ class Handler(SimpleHTTPRequestHandler):
             except (ValueError, KeyError) as exc:
                 return self._json({"error": str(exc)}, 400)
             return self._json({"ok": True})
+
+        if self.path == "/api/validate":
+            try:
+                out = validate(self._run_id(payload), payload.get("kind", ""),
+                               payload.get("params") or {})
+            except (ValueError, KeyError, AttributeError) as exc:
+                # A refusal, not a crash: the levels were not given, the run has aged out
+                # of memory, the engine cannot answer it. The message says which, and the
+                # interface shows it where the report would have gone.
+                return self._json({"error": str(exc)}, 400)
+            except Exception as exc:  # noqa: BLE001
+                detail = traceback.format_exc(limit=6)
+                sys.stderr.write(detail)
+                return self._json({"error": f"{type(exc).__name__}: {exc}",
+                                   "detail": detail}, 400)
+            return self._json(out)
 
         try:
             record = run_backtest(payload)

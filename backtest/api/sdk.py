@@ -34,7 +34,7 @@ from backtest.portfolio.positioning import Sizing
 from backtest.engine.strategy import Strategy
 from backtest.research.sweep import SweepResult, sweep as _sweep
 from backtest.engine.vectorized import TradeTableEngine, TradeTableResult
-from backtest.core.errors import StartupError
+from backtest.core.errors import InvariantError, StartupError
 from backtest.research import metrics as R
 from backtest.signals.contracts import SelectionRule
 from backtest.signals.registry import SignalSet
@@ -134,6 +134,8 @@ def run(
     name: str = "unnamed",
     refresh: bool = False,
     signals: Mapping[str, Callable] | None = None,
+    shadow_days: int | None = None,
+    execution_lag_days: int | None = None,
 ) -> "Result":
     """Run one backtest.
 
@@ -152,6 +154,15 @@ def run(
     registered they can be used by name in the ``entry`` expression.
     ``bars.adjusted("close")`` gives adjusted prices (signals always use adjusted
     prices, or ex-dividend days produce false gaps).
+
+    ``shadow_days`` is how long to keep quoting a contract after its trade closes, which
+    is what counterfactual exit research reads. It defaults from the threshold registry and
+    0 turns it off. Event-driven only: the trade table does not step day by day.
+
+    ``execution_lag_days`` is how many trading days pass between the decision and the fill.
+    It defaults to 1 and exists here so the document's execution-lag sensitivity can
+    actually be run — a strategy whose edge disappears at two days was never going to
+    survive a real desk.
 
     ``engine`` chooses the engine:
 
@@ -174,10 +185,17 @@ def run(
             f"unknown symbol {symbol}; known symbols and their volatility proxies: "
             f"{VOL_PROXY_BY_SYMBOL}"
         )
+    lag = 1 if execution_lag_days is None else int(execution_lag_days)
     config = BacktestConfig(
         symbol=symbol,
         start=_as_date(start),
         end=_as_date(end),
+        execution_lag_days=lag,
+        # The floor has to clear the lag, or an exit decided on T cannot be filled before
+        # the contract expires and the position is dragged into settlement. The config
+        # enforces it; raising the default here keeps a longer lag usable rather than
+        # turning it into a validation error the caller has to solve.
+        min_days_to_expiry=max(5, lag + 1),
         notional_capital=capital,
         contract=ContractSpec(symbol=symbol, vol_proxy=proxy),
         costs=costs or CostConfig(),
@@ -208,9 +226,16 @@ def run(
         from backtest.engine.loop import EventDrivenEngine
 
         outcome = EventDrivenEngine(
-            market, chain_source, signal_set, config, max_concurrent=max_concurrent
+            market, chain_source, signal_set, config, max_concurrent=max_concurrent,
+            shadow_days=shadow_days,
         ).run(strategy)
     else:
+        if shadow_days:
+            raise StartupError(
+                "shadow tracking needs the event-driven engine: the trade table does not "
+                "step day by day, so there is no day on which to quote a closed trade's "
+                "contract. Use engine=\"event_driven\"."
+            )
         if max_concurrent is not None:
             raise StartupError(
                 "the trade-table engine computes trades independently and they know "
@@ -288,6 +313,14 @@ class Result:
             "review": self.raw.strategy.review is not None,
         }
         settings = self.raw.config.describe()
+        # Which engine ran, and the limits it ran under. These change the trades and are
+        # not part of the config, so they are hashed separately and explicitly.
+        execution = {"engine": self.raw.ENGINE} | dict(self.raw.limits)
+        if len(execution) == 1:
+            raise InvariantError(
+                f"the {self.raw.ENGINE} engine produced a result with no recorded limits, "
+                f"so the run fingerprint cannot tell it from a run under different ones"
+            )
         provenance = self.provenance()
         # The data version: with a real source this is its snapshot id. On the synthetic
         # chain it is the generator's parameters, because those are what decide the
@@ -296,12 +329,13 @@ class Result:
                         if provenance.get("all_synthetic") else "vendor")
         commit = code_version()
         return {
-            "run_id": run_id(strategy=strategy, settings=settings,
+            "run_id": run_id(strategy=strategy, settings=settings, execution=execution,
                              data_version=data_version, commit=commit),
             "code": commit,
             "data_version": data_version,
             "strategy": strategy,
             "config": settings,
+            "execution": execution,
             "environment": R.environment(),
             "provenance": provenance,
         }
@@ -463,6 +497,34 @@ class Result:
 
         return study(self.trades, self.raw.strategy.exit)
 
+    def counterfactual(self, *, take_profits, stop_losses):
+        """Replay every closed trade under alternative exit levels.
+
+        The levels are **required**: which ones are worth exploring is a strategy choice,
+        which the architecture document permits optimising under its protocol and does not
+        permit the platform picking. Needs the event-driven engine with shadow tracking on,
+        because an alternative that fires after the real exit is only observable if the
+        contract was still being quoted.
+        """
+        from backtest.research.counterfactual import sweep_levels
+
+        paths = getattr(self.raw, "paths_frame", None)
+        shadow = getattr(self.raw, "shadow_frame", None)
+        if paths is None or shadow is None:
+            raise AttributeError(
+                "counterfactual exits need the event-driven engine: the trade table "
+                "collects neither the path while held nor the shadow after the exit. "
+                "Rerun with engine=\"event_driven\"."
+            )
+        if shadow.empty:
+            raise AttributeError(
+                "nothing was shadowed, so an alternative exit that fires after the real one "
+                "cannot be observed and every such trade would come back censored. Rerun "
+                "with shadow_days set above 0."
+            )
+        return sweep_levels(self.trades, paths, shadow,
+                            take_profits=take_profits, stop_losses=stop_losses)
+
     def equity_metrics(self) -> dict:
         """The metrics that need an equity curve. The trade-table engine cannot
         produce them and says so."""
@@ -505,7 +567,37 @@ class Result:
 
         bars = self._market.bars
         bench = bars.adjusted("close")
-        return summary(self.raw.equity, self.trades, benchmark=bench)
+        return summary(self.raw.equity, self.trades, benchmark=bench,
+                       synthetic=self.synthetic)
+
+    @property
+    def synthetic(self) -> bool:
+        """Whether the option prices came from the synthetic chain.
+
+        Read from the ``source`` column of the trades, not from a flag anyone set, which is
+        what makes the boundary on every conclusion automatic rather than remembered.
+        """
+        return bool(self.provenance().get("all_synthetic"))
+
+    def report(self) -> str:
+        """Every research tool's output, each with its boundary stated.
+
+        One call rather than several, because the boundary is the part that gets skipped
+        when each tool is invoked separately — and it is the part that decides whether any
+        of the numbers may be acted on.
+        """
+        from backtest.research import ablation, baselines
+
+        blocks = [baselines.report(self.baselines(), synthetic=self.synthetic)]
+        try:
+            blocks.append(ablation.report(self.ablate(), synthetic=self.synthetic))
+        except Exception as exc:  # noqa: BLE001
+            blocks.append(f"Ablation could not run: {type(exc).__name__}: {exc}")
+        try:
+            blocks.append(self.excursion().text(synthetic=self.synthetic))
+        except Exception as exc:  # noqa: BLE001
+            blocks.append(f"MFE / MAE could not run: {type(exc).__name__}: {exc}")
+        return "\n\n".join(blocks)
 
     def baselines(self, *, draws: int = 0) -> list:
         """Separate skill from structure: would the underlying, or random timing, have
