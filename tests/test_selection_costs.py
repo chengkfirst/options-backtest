@@ -163,10 +163,34 @@ class TestCosts:
         assert fees.regulatory == pytest.approx(0.20)
         assert fees.total == pytest.approx(fees.commission + fees.regulatory + fees.slippage)
 
-    def test_slippage_always_adverse(self):
+    def test_slippage_is_a_cash_fee_not_part_of_the_fill(self):
+        """It used to be both, so it was charged twice.
+
+        ``fill_price`` moved the price *and* ``order_fees`` charged the same amount, which
+        on a 0.10 slippage over one contract cost 20.00 instead of 10.00. Every test set it
+        to zero, and so does the default, which is why it stood. It is cash now, which is
+        what this module's own docstring always said it was for.
+        """
+        from backtest.execution.costs import order_fees
+
         c = CostConfig(slippage_per_contract=0.02)
-        assert fill_price(2.00, 2.20, Side.BUY, c) == pytest.approx(2.22)
-        assert fill_price(2.00, 2.20, Side.SELL, c) == pytest.approx(1.98)
+        assert fill_price(2.00, 2.20, Side.BUY, c) == pytest.approx(2.20)   # the ask
+        assert fill_price(2.00, 2.20, Side.SELL, c) == pytest.approx(2.00)  # the bid
+        # 0.02 per contract x 3 contracts x 100 multiplier.
+        assert order_fees(3, c, 100).slippage == pytest.approx(6.0)
+
+    def test_slippage_is_adverse_on_both_sides(self):
+        """A buy pays it and a sell pays it; it is never a rebate."""
+        from backtest.execution.costs import execute
+
+        c = CostConfig(slippage_per_contract=0.02, commission_per_contract=0.0,
+                       min_commission_per_order=0.0, regulatory_fee_per_contract=0.0)
+        buy_price, buy_fees = execute(bid=2.0, ask=2.0, side=Side.BUY, quantity=1,
+                                      multiplier=100, costs=c)
+        sell_price, sell_fees = execute(bid=2.0, ask=2.0, side=Side.SELL, quantity=1,
+                                        multiplier=100, costs=c)
+        assert buy_price * 100 + buy_fees.total == pytest.approx(202.0)
+        assert sell_price * 100 - sell_fees.total == pytest.approx(198.0)
 
     def test_fees_add_up(self):
         a = order_fees(2, CostConfig(), 100)

@@ -123,11 +123,20 @@ class TestItActuallyRuns:
     def test_a_component_replaces_the_rule_rather_than_adding_to_it(self):
         """Running both would mean a trade could be closed by the form that was supposed
         to have been replaced, and a comparison of two forms would measure neither."""
-        with_component = _run(components={"stop_loss": {"variant": "premium",
-                                                        "params": {"fraction": 0.99}}})
-        # A 99% premium stop almost never fires, so with the rule replaced there should be
-        # far fewer stop exits than the rule alone would give.
-        assert int((with_component.trades["exit_reason"] == "stop_loss").sum()) == 0
+        # The rule says -40%, the component says -99%. If both ran, the rule would close
+        # trades the component never would; with the component replacing it, only a trade
+        # that lost 99% of its premium may show a stop.
+        both_given = dict(BASE["exit"]) | {"stop_loss": 0.4}
+        rule_only = _run(exit=both_given)
+        replaced = _run(components={"stop_loss": {"variant": "premium",
+                                                  "params": {"fraction": 0.99}}})
+        rule_stops = int((rule_only.trades["exit_reason"] == "stop_loss").sum())
+        replaced_stops = int((replaced.trades["exit_reason"] == "stop_loss").sum())
+        assert rule_stops > 0, "the rule never fired, so this proves nothing"
+        assert replaced_stops < rule_stops, (
+            f"the -40% rule stopped {rule_stops} trades and the -99% component stopped "
+            f"{replaced_stops}; the rule is still running alongside the component"
+        )
 
     def test_giving_both_a_component_and_the_rule_field_raises(self):
         with pytest.raises(StartupError, match="given both as a component"):

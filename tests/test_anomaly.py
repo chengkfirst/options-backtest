@@ -50,7 +50,27 @@ class TestQuietWhenNormal:
         """One rule failing to compute must not stop the rest."""
         t = trades()
         t["exit_date"] = "not a date"        # make the overlap rule uncomputable
-        scan(t)                              # it is enough that it does not raise
+        assert scan(t) is not None
+
+    def test_a_broken_rule_is_reported_rather_than_swallowed(self):
+        """The old version of this accepted silent failure -- "it is enough that it does
+        not raise".
+
+        That contradicts the one principle this project is built on. A scan that came back
+        with three findings when a rule could not run looks exactly like a scan where that
+        rule found nothing, and "found nothing" is what a reader acts on.
+        """
+        t = trades()
+        t["exit_date"] = "not a date"
+        found = scan(t)
+        failures = [f for f in found if f.kind == "rule_failed"]
+        assert failures, "a rule could not run and the scan said nothing about it"
+        assert failures[0].severity == "high"
+        assert "has not been checked" in failures[0].detail
+
+    def test_a_clean_scan_reports_no_failures(self):
+        """The other half: the failure finding must not fire when nothing is broken."""
+        assert not [f for f in scan(trades()) if f.kind == "rule_failed"]
 
 
 class TestRulesFire:

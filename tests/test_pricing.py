@@ -114,7 +114,44 @@ class TestEarlyExercise:
             right=Right.CALL, option_price=1.2, intrinsic=0.0, dividend_in_window=0.5
         )
 
-    def test_quiet_for_puts(self):
+    def test_a_deep_itm_put_has_early_exercise_value_when_rates_are_positive(self):
+        """The old version of this asserted that puts never do, which is not true.
+
+        Exercising a put hands over the stock now and receives the strike now, and the
+        strike earns interest for the remaining life. With the fixture's 4.5% and a year
+        to run, a put whose time value is a few cents is worth exercising -- and a
+        European price for it is simply wrong.
+        """
+        assert has_early_exercise_value(
+            right=Right.PUT, option_price=20.2, intrinsic=20.0,
+            dividend_in_window=0.0, rate=0.045, years_to_expiry=1.0,
+        )
+
+    def test_a_put_is_quiet_when_rates_are_zero(self):
+        """With no carry on the strike there is nothing to gain by exercising early."""
+        assert not has_early_exercise_value(
+            right=Right.PUT, option_price=20.2, intrinsic=20.0,
+            dividend_in_window=0.0, rate=0.0, years_to_expiry=1.0,
+        )
+
+    def test_a_put_with_plenty_of_time_value_is_quiet(self):
+        """Time value above the carry means holding is worth more than exercising."""
+        assert not has_early_exercise_value(
+            right=Right.PUT, option_price=25.0, intrinsic=20.0,
+            dividend_in_window=0.0, rate=0.045, years_to_expiry=1.0,
+        )
+
+    def test_a_dividend_makes_a_put_less_worth_exercising(self):
+        """It works the other way for a put: the coming drop in the stock makes holding
+        more attractive, so the same option can flip to quiet."""
+        kwargs = dict(right=Right.PUT, option_price=20.2, intrinsic=20.0,
+                      rate=0.045, years_to_expiry=1.0)
+        assert has_early_exercise_value(dividend_in_window=0.0, **kwargs)
+        assert not has_early_exercise_value(dividend_in_window=2.0, **kwargs)
+
+    def test_a_put_without_the_rate_cannot_be_assessed(self):
+        """False because there is nothing to test against, not because the answer is no.
+        The caller holding the rate should pass it."""
         assert not has_early_exercise_value(
             right=Right.PUT, option_price=20.2, intrinsic=20.0, dividend_in_window=0.5
         )

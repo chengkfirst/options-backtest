@@ -28,6 +28,7 @@ from backtest.core.invariants import (
     trade_record_balances,
 )
 from backtest.core.run_id import run_id
+from backtest.core.types import Right
 
 DAY = date(2024, 1, 2)
 
@@ -131,12 +132,34 @@ class TestTradeRecordBalances:
 
     def test_it_runs_when_a_record_is_built(self):
         """Checked in ``__post_init__`` rather than at each engine's call site: both
-        engines construct records, and a check either could forget is not a mechanism."""
-        import inspect
+        engines construct records, and a check either could forget is not a mechanism.
 
-        from backtest.core.types import TradeRecord
+        Asserted by building an unbalanced record and watching it raise. The first version
+        searched the source text for the function's name, which passes while the call sits
+        inside a branch that never runs, or behind a flag, or commented out one line below.
+        """
+        from backtest.core.types import ContractId, ExitReason, QuoteSource, TradeRecord
 
-        assert "trade_record_balances" in inspect.getsource(TradeRecord.__post_init__)
+        def build(**over):
+            base = dict(
+                trade_id=1, engine="trade_table", symbol="QQQ",
+                entry_date=DAY, exit_date=DAY, quantity=1,
+                contract=ContractId(symbol="QQQ", expiry=DAY, strike=400.0,
+                                    right=Right.CALL),
+                entry_price=5.0, exit_price=6.0, multiplier=100,
+                gross_pnl=100.0, fees=10.0,
+                fee_commission=5.0, fee_regulatory=2.0, fee_slippage=3.0,
+                net_pnl=90.0, exit_reason=ExitReason.TAKE_PROFIT, suppressed_reasons=(),
+                holding_days=1, source=QuoteSource.SYNTHETIC,
+                entry_context={}, exit_context={},
+            )
+            return TradeRecord(**(base | over))
+
+        build()                                     # balanced: builds
+        with pytest.raises(InvariantError, match="not gross"):
+            build(net_pnl=95.0)                     # net short by the fees
+        with pytest.raises(InvariantError, match="dropped or counted twice"):
+            build(fee_slippage=0.0)                 # a component missing from the sum
 
 
 class TestRunId:
@@ -279,10 +302,11 @@ class TestSelectorGetsACutView:
         from backtest.api.sdk import run
 
         seen: dict = {}
-        run(symbol="QQQ", start="2023-01-01", end="2023-03-31",
+        run(symbol="QQQ", start="2023-01-01", end="2023-06-30",
             entry="close < sma_20 * 0.98", select=self._probe(seen),
             exit={"hold_days": 10, "dte_floor": 7}, engine=engine,
             sizing={"method": "fixed"}, quantity=1)
+        assert seen, "no entry fired, so the selector was never called"
         assert seen["type"] == "DataView"
         assert seen["guard"] == "raised"
 
@@ -295,7 +319,7 @@ class TestSelectorGetsACutView:
         cuts = {}
         for engine in ("trade_table", "event_driven"):
             seen: dict = {}
-            result = run(symbol="QQQ", start="2023-01-01", end="2023-03-31",
+            result = run(symbol="QQQ", start="2023-01-01", end="2023-06-30",
                          entry="close < sma_20 * 0.98", select=self._probe(seen),
                          exit={"hold_days": 10, "dte_floor": 7}, engine=engine,
                          sizing={"method": "fixed"}, quantity=1)

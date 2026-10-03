@@ -98,17 +98,33 @@ class TestCounterfactualExits:
         assert got.scored == 0 and got.censored == 1
         assert "nothing could be scored" in got.verdict()
 
-    def test_the_stop_wins_a_same_day_tie(self):
-        """A daily bar cannot say which came first, and assuming the better one flatters
-        the result."""
+    def test_the_stop_fires_when_the_path_reaches_it(self):
+        """Renamed from "the stop wins a same-day tie", which it never tested.
+
+        **A same-day tie cannot be expressed in this data at all**: a path row carries one
+        ratio per day, so there is no day on which the price both reached +50% and fell to
+        -50%. The old test asserted a tie and fed a path that only ever touches the stop,
+        with an unused variable left beside it. Testing a tie needs intraday high and low
+        on the path, which this format does not carry -- recorded here rather than left as
+        a test whose name describes something that did not happen.
+        """
         trades = _trade(entry_price=5.0, qty=1, mult=100, fees=0.0)
-        path = _path(1, [0.0, 0.9])               # would touch both +80% and -50%? use both
-        both = _path(1, [0.0, -0.6])              # only the stop
-        stopped = replay_exit(trades, both, both.iloc[0:0],
-                             take_profit=0.5, stop_loss=0.5)
+        only_down = _path(1, [0.0, -0.6])
+        stopped = replay_exit(trades, only_down, only_down.iloc[0:0],
+                              take_profit=0.5, stop_loss=0.5)
         assert stopped.scored == 1
         # -50% of a 500 entry is -250.
         assert stopped.alternative == pytest.approx(-250.0)
+
+    def test_a_same_day_tie_cannot_be_expressed_in_this_format(self):
+        """The limit, asserted rather than described.
+
+        If a path row ever gains high and low columns, this test fails and the tie test
+        that belongs here becomes writable -- which is the point of asserting a limit
+        rather than writing it in a comment nobody re-reads.
+        """
+        path = _path(1, [0.0, -0.6])
+        assert "high" not in path.columns and "low" not in path.columns
 
     def test_the_shadow_extends_what_can_be_scored(self):
         """A wider stop fires after the real exit, so it is only observable because the
@@ -237,12 +253,25 @@ class TestDeflatedSharpe:
         with pytest.raises(ValueError, match="annualised figure"):
             deflated_sharpe(1.8, trials=10, periods=504)
 
-    def test_positive_skew_is_accounted_for(self):
-        """Sharpe assumes near-normal returns; a long-options book is not, and ignoring
-        it overstates exactly this payoff shape."""
+    def test_positive_skew_raises_the_probability(self):
+        """Sharpe assumes near-normal returns and a long-options book is not.
+
+        **The direction matters and the first version of this had it backwards.** In
+        Bailey and Lopez de Prado's formula the estimator's variance falls with positive
+        skew, so ignoring it **understates** a positively skewed book -- it does not
+        flatter it. Asserting only that the two differ would pass with the sign reversed
+        in the implementation, which is the error worth catching.
+        """
         plain = deflated_sharpe(0.09, trials=20, periods=504, skew=0.0, kurtosis=3.0)
-        skewed = deflated_sharpe(0.09, trials=20, periods=504, skew=1.5, kurtosis=9.0)
-        assert plain.probability != skewed.probability
+        skewed = deflated_sharpe(0.09, trials=20, periods=504, skew=1.5, kurtosis=3.0)
+        assert skewed.probability > plain.probability
+
+    def test_fat_tails_lower_the_probability(self):
+        """The other half, and it pulls the other way: excess kurtosis raises the
+        estimator's variance, so a fat-tailed book is harder to distinguish from noise."""
+        plain = deflated_sharpe(0.09, trials=20, periods=504, skew=0.0, kurtosis=3.0)
+        fat = deflated_sharpe(0.09, trials=20, periods=504, skew=0.0, kurtosis=9.0)
+        assert fat.probability < plain.probability
 
     def test_the_trial_sharpes_are_preferred_over_an_assumption(self):
         spread = np.array([0.01, 0.03, 0.05, 0.09])

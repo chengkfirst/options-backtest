@@ -69,17 +69,38 @@ class TestItReproduces:
         assert again.trades["net_pnl"].sum() == pytest.approx(
             result.trades["net_pnl"].sum())
 
-    def test_a_dropped_field_is_caught(self, result, tmp_path):
+    def test_a_dropped_field_is_caught(self, monkeypatch, tmp_path):
         """The check has to be able to fail, or it proves nothing.
 
-        A file missing something that changes the result replays to a different
-        fingerprint, and that is exactly what check_round_trip raises on.
+        The first version of this edited a field and watched the fingerprint change --
+        which tests the fingerprint, not the round trip, and never called the thing it
+        claimed to be checking. This drops a field from what gets written, which is the
+        actual failure: a file that looks complete and replays to a different run.
         """
-        path = save(result, tmp_path / "broken.yaml")
-        data = load(path)
-        data["exit"] = {"hold_days": 5, "dte_floor": 7}
-        before = result.manifest()["run_id"]
-        assert run(**data).manifest()["run_id"] != before
+        from backtest.api import config_file
+
+        complete = config_file.to_mapping
+
+        def missing_the_limit(res):
+            out = complete(res)
+            out["run"].pop("max_concurrent", None)   # changes which trades happen
+            return out
+
+        monkeypatch.setattr(config_file, "to_mapping", missing_the_limit)
+        limited = run(**BASE, max_concurrent=1)
+        with pytest.raises(StartupError, match="does not reproduce the run"):
+            config_file.check_round_trip(limited, tmp_path / "dropped.yaml")
+
+    def test_the_round_trip_check_passes_when_nothing_is_dropped(self):
+        """The other half: the check must not fire on a complete file, or it would be
+        unfalsifiable in the opposite direction."""
+        from backtest.api import config_file
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            limited = run(**BASE, max_concurrent=1)
+            assert config_file.check_round_trip(limited, f"{d}/ok.yaml")
 
 
 class TestTheDocumentsShape:

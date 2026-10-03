@@ -69,17 +69,25 @@ def fill_price(bid: float, ask: float, side: Side, costs: CostConfig) -> float:
     """The fill price.
 
     ``adverse_fraction`` is the document's λ: 0 takes the mid, 1 takes the adverse side
-    (pay the ask, receive the bid), and **above 1 is worse than the ask**. Slippage is
-    added on top, always in the direction **against the order**.
+    (pay the ask, receive the bid), and **above 1 is worse than the ask**.
 
     Extrapolating past the quote is deliberate. A strategy whose edge survives only at
     the mid has no edge; testing at λ = 1.5 is how much of it survives a bad fill.
+
+    **Slippage is not here.** It is charged as cash in :func:`order_fees`, which is what
+    this module's own docstring always said it was for -- "listed separately so the report
+    can set it beside commission, because folded into the fill price it is invisible".
+
+    It was in both. A buy moved the price up by ``slippage_per_contract`` *and* paid
+    ``quantity x slippage x multiplier`` as a fee, so a 0.10 slippage on one contract cost
+    20.00 rather than 10.00. Every test set slippage to 0 and so does the default, which is
+    why nothing caught it -- and the architecture document's register lists slippage among
+    the realism assumptions to run a **sensitivity test** on, which is precisely the moment
+    the doubling would have started producing wrong numbers.
     """
     mid = (bid + ask) / 2.0
     adverse = ask if side is Side.BUY else bid
     price = mid + (adverse - mid) * costs.adverse_fraction
-    direction = 1.0 if side is Side.BUY else -1.0
-    price += direction * costs.slippage_per_contract
     return max(price, 0.0)
 
 

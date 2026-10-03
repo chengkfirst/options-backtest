@@ -22,15 +22,23 @@ from backtest.portfolio.risk_actions import (
 )
 
 BASE = dict(
-    symbol="QQQ", start="2021-01-01", end="2023-06-30",
+    symbol="QQQ", start="2022-06-01", end="2023-12-31",
     entry="close < sma_20 * 0.98",
     select={"right": "call", "dte_lo": 21, "dte_hi": 45,
             "delta_lo": 0.25, "delta_hi": 0.45},
     exit={"hold_days": 20, "dte_floor": 7},
     engine="event_driven", sizing={"method": "risk_pct", "risk_pct": 0.05}, quantity=1,
 )
-TIGHT = {"reduce_at": 0.05, "halt_at": 0.08, "resume_at": 0.03, "keep": 0.5,
-         "liquidate_at": 0.10}
+#: Two configurations, because one cannot exercise both stages.
+#:
+#: That is the brake working, not a fixture problem: a rule loose enough to spend time in
+#: the "reduced" band never draws down far enough to liquidate, and one tight enough to
+#: liquidate does so before anything is reduced. Using one set of numbers for both would
+#: mean one of the two tests was passing for a reason unrelated to what it claims.
+SCALE = {"reduce_at": 0.05, "halt_at": 0.30, "resume_at": 0.03, "keep": 0.5}
+LIQUIDATE = {"reduce_at": 0.05, "halt_at": 0.08, "resume_at": 0.03, "keep": 0.5,
+             "liquidate_at": 0.10}
+TIGHT = SCALE
 
 
 class TestVocabulary:
@@ -97,7 +105,11 @@ class TestItActsOnTheBook:
 
     @pytest.fixture(scope="class")
     def braked(self):
-        return run(**BASE, risk=TIGHT)
+        return run(**BASE, risk=SCALE)
+
+    @pytest.fixture(scope="class")
+    def liquidated(self):
+        return run(**BASE, risk=LIQUIDATE)
 
     def test_scaling_down_reduces_positions_that_are_open(self, braked):
         actions = braked.raw.actions_frame
@@ -105,18 +117,18 @@ class TestItActsOnTheBook:
                       (actions["component_id"] == "headwind")]
         assert len(cut) > 0, "the book-wide rule reduced nothing"
 
-    def test_liquidation_closes_them(self, braked):
-        actions = braked.raw.actions_frame
+    def test_liquidation_closes_them(self, liquidated):
+        actions = liquidated.raw.actions_frame
         closed = actions[(actions["action"] == "close") &
                          (actions["component_id"] == "headwind")]
         assert len(closed) > 0
         assert "liquidate" in closed.iloc[0]["reason"]
 
-    def test_a_forced_close_is_recorded_as_such(self, braked):
+    def test_a_forced_close_is_recorded_as_such(self, liquidated):
         """Not as a stop loss. A position cut because the whole book was being closed is
         a different event from one closed because its own thesis broke, and a trade log
         cannot tell them apart without this."""
-        assert (braked.trades["exit_reason"] == "risk_forced").any()
+        assert (liquidated.trades["exit_reason"] == "risk_forced").any()
 
     def test_the_rule_changes_the_result(self):
         """If the equity curves matched, the rule would be decoration."""
@@ -126,18 +138,31 @@ class TestItActsOnTheBook:
 
     def test_a_one_contract_position_is_left_alone_rather_than_closed(self):
         """Rounding has to go the safe way: "reduce" must never become "close", or a
-        scale-down would quietly liquidate every small position."""
-        from backtest.portfolio.risk_actions import RiskAction as RA
+        scale-down would quietly liquidate every small position.
 
-        decision = RiskDecision(RA.SCALE_DOWN, keep=0.5)
-        # The engine's arithmetic: quantity - int(quantity * keep), skipped when it would
-        # take the whole position.
-        for held in (1, 2, 3, 10):
-            cut = held - int(held * decision.keep)
-            assert cut <= held
-            if cut >= held:
-                continue  # skipped by the engine
-            assert held - cut >= 1
+        Run, not recomputed. The first version of this re-derived the engine's own
+        arithmetic in the test and then asserted on its own result, so it never touched
+        the engine and could not have failed.
+        """
+        braked = run(**(BASE | {"quantity": 1,
+                                "sizing": {"method": "fixed", "contracts": 1}}),
+                     risk=TIGHT)
+        actions = braked.raw.actions_frame
+        reduced = actions[(actions["action"] == "reduce") &
+                          (actions["component_id"] == "headwind")]
+        # With one contract held, `quantity - int(quantity x 0.5)` is 1, which is the whole
+        # position -- so the engine must skip it rather than issue a reduction that closes.
+        assert reduced.empty or (reduced["quantity"] < 1).all(), (
+            "a one-contract position was reduced, which can only mean it was closed by a "
+            "rule that said reduce"
+        )
+        # And nothing was closed by the book-wide rule under a scale-down either, except
+        # where the rule actually said liquidate.
+        closed = actions[(actions["action"] == "close") &
+                         (actions["component_id"] == "headwind")]
+        assert all("liquidate" in r for r in closed["reason"]), (
+            "the book-wide rule closed a position without saying liquidate"
+        )
 
 
 class TestRefusals:

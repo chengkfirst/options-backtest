@@ -242,8 +242,11 @@ class TestValidationRefusals:
     def test_only_the_last_few_runs_are_kept(self, store):
         """Bounded, because an event-driven result holds a daily snapshot and a path per
         position per day."""
-        ids = [_run(take_profit=tp)["id"]
-               for tp in (0.5, 0.6, 0.7, 0.8, 0.9)][: runner_mod.RECENT_KEEP + 2]
+        # One more run than the cache holds, whatever the cache holds. The first version
+        # sliced a fixed list of five, so raising RECENT_KEEP above 3 would have failed
+        # the test for a reason that had nothing to do with the behaviour.
+        wanted = runner_mod.RECENT_KEEP + 1
+        ids = [_run(take_profit=round(0.40 + 0.05 * i, 2))["id"] for i in range(wanted)]
         assert len(runner_mod.RECENT) == runner_mod.RECENT_KEEP
         assert ids[-1] in runner_mod.RECENT
         assert ids[0] not in runner_mod.RECENT
@@ -262,10 +265,27 @@ class TestValidationOutput:
             text = runner_mod.validate(rec["id"], kind, params)["text"]
             mark = text.find("!!")
             assert mark > 0, f"{kind} carries no boundary"
-            first_digit = next((i for i, c in enumerate(text) if c.isdigit()
-                                and i > text.find("\n")), len(text))
-            assert mark < first_digit or "synthetic" in text[:mark + 400], \
-                f"{kind} puts its boundary after its numbers"
+            # No escape hatch. The first version allowed the check to pass whenever the
+            # word "synthetic" appeared anywhere near the boundary -- which it always
+            # does, since the boundary says it -- so the ordering was never enforced.
+            #
+            # The numbers start where the report's own table or figures do. Taking the
+            # first digit after the heading rules would catch the heading's own rule
+            # characters, so this looks for the first line that holds a digit beyond the
+            # boundary block.
+            body = [i for i, line in enumerate(text.splitlines())
+                    if any(c.isdigit() for c in line)]
+            boundary_line = text[:mark].count("\n")
+            assert body, f"{kind} reports no numbers at all"
+            assert boundary_line < body[-1], (
+                f"{kind} puts its boundary after its last number"
+            )
+            first_number_line = next(
+                (i for i in body if i > text[:text.find("─")].count("\n")), body[0])
+            assert boundary_line < first_number_line, (
+                f"{kind}: the boundary is on line {boundary_line} and the first number "
+                f"is on line {first_number_line}"
+            )
 
     def test_the_trial_count_refuses_to_guess_the_period_count(self, store):
         """The stored Sharpe is annualised. Passing days against it overstates the

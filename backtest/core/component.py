@@ -64,7 +64,11 @@ def _slot_names() -> tuple[str, ...]:
     """
     from backtest.core.slots import COMPONENTS
 
-    return tuple(c.key for c in COMPONENTS) + ("review",)
+    # ``review`` is a hook rather than one of the document's seven, and ``time_exit`` is
+    # the holding cap and the days-to-expiry floor -- not a document slot either, and a
+    # distinct owner of exits that would otherwise be credited to the stop. Both are
+    # swappable in the same way, so a component may fill them.
+    return tuple(c.key for c in COMPONENTS) + ("review", "time_exit")
 
 
 SLOTS: tuple[str, ...] = _slot_names()

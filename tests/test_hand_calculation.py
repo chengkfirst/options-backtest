@@ -92,30 +92,49 @@ class TestFees:
             fees.commission + fees.regulatory + fees.slippage)
 
 
+#: Stock and ETF costs: a flat commission, no per-contract regulatory fee. The option
+#: model charges per **contract**, and applying it to shares was the error in the first
+#: version of this file -- it made the "hand calculation" disagree with its own assertion.
+STOCK_COSTS = CostConfig(
+    adverse_fraction=1.0,
+    commission_per_contract=0.0,
+    min_commission_per_order=1.00,
+    regulatory_fee_per_contract=0.0,
+    slippage_per_contract=0.0,
+)
+
+
 class TestBuyAndHold:
     """Stage 1's criterion: buy-and-hold matches a hand calculation.
 
     Worked on the underlying, with no option involved, because that is what the stage is:
     a minimal loop with daily bars, one entry, one exit and a flat fee. If this does not
     match, nothing above it can be trusted either.
+
+    The first version of this got it wrong in the way that matters most here. The
+    calculation in the comment said fees of 2.00 and a net of 1,996.00; the assertion said
+    1,995.90, because the code was charging an option's per-contract regulatory fee on
+    shares. **The assertion had been written from the code's output rather than from the
+    paper**, which is the one thing this file exists not to do -- and it passed.
     """
 
     def test_one_round_trip_in_the_underlying(self):
-        # Buy 100 shares at 400.00, sell at 420.00, 1.00 commission each way.
+        # Buy 100 shares at 400.00, sell at 420.00, 1.00 commission each way, no
+        # per-contract fees because these are shares.
         #
         #   gross = (420.00 - 400.00) x 100           = 2,000.00
         #   fees  = 1.00 + 1.00                       =     2.00
         #   net   = 2,000.00 - 2.00                   = 1,998.00
         #
-        # Written out rather than computed, so a change to the arithmetic has to be
-        # reconciled against a number a person can check.
+        # Worked out here, on paper. Nothing below may be changed to agree with the code;
+        # the code has to agree with this.
         shares, buy, sell, fee_each = 100, 400.00, 420.00, 1.00
         gross = (sell - buy) * shares
         net = gross - fee_each * 2
         assert gross == pytest.approx(2_000.00)
         assert net == pytest.approx(1_998.00)
 
-    def test_the_engine_agrees_on_the_same_round_trip(self):
+    def test_the_cost_model_agrees_on_the_same_round_trip(self):
         """The same trade through `execute`, which is what the engine calls.
 
         bid/ask straddling each price with a 2-cent spread and lambda = 1, so the buy
@@ -123,21 +142,84 @@ class TestBuyAndHold:
 
             buy  fill = 400.01,  sell fill = 419.99
             gross = (419.99 - 400.01) x 100 = 1,998.00
-            fees  = 1.00 + 1.00             =     2.00    (minimum, 1 "contract")
-            net                             = 1,996.00
+            fees  = 1.00 + 1.00             =     2.00
+            net   = 1,998.00 - 2.00         = 1,996.00
         """
         buy_price, buy_fees = execute(bid=399.99, ask=400.01, side=Side.BUY,
-                                      quantity=1, multiplier=100, costs=COSTS)
+                                      quantity=1, multiplier=100, costs=STOCK_COSTS)
         sell_price, sell_fees = execute(bid=419.99, ask=420.01, side=Side.SELL,
-                                        quantity=1, multiplier=100, costs=COSTS)
+                                        quantity=1, multiplier=100, costs=STOCK_COSTS)
         assert buy_price == pytest.approx(400.01)
         assert sell_price == pytest.approx(419.99)
+        assert buy_fees.total == pytest.approx(1.00)
+        assert sell_fees.total == pytest.approx(1.00)
 
         gross = (sell_price - buy_price) * 100
-        net = gross - buy_fees.total - sell_fees.total
         assert gross == pytest.approx(1_998.00)
-        assert buy_fees.total == pytest.approx(1.05)
-        assert net == pytest.approx(1_995.90)
+        assert gross - buy_fees.total - sell_fees.total == pytest.approx(1_996.00)
+
+    def test_the_engine_accounts_for_a_round_trip_to_the_hand_figure(self):
+        """**The stage's criterion as stated**, as closely as this system can state it.
+
+        Buy-and-hold *of the underlying* is not a path here: this is an options ledger and
+        shares only ever arrive by assignment or exercise, so there is no "buy 100 QQQ"
+        to run. The equivalent minimal-loop check is a single round trip through the whole
+        chain -- fill, fees, exit, record -- with the arithmetic done from the trade log's
+        own numbers rather than from anything the engine computed.
+
+        What this catches that nothing else does: the engine could price, fill and record
+        consistently and still have the **recording** step wrong -- a multiplier dropped, a
+        fee counted once instead of twice, a sign flipped on a short. Every other test
+        compares the engine to itself and would pass.
+        """
+        from backtest.api.sdk import run
+
+        result = run(
+            symbol="QQQ", start="2023-01-01", end="2023-06-30",
+            entry="close < sma_20 * 0.98",
+            select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                    "delta_lo": 0.25, "delta_hi": 0.45},
+            exit={"hold_days": 10, "dte_floor": 7},
+            engine="trade_table", sizing={"method": "fixed"}, quantity=2,
+        )
+        trades = result.trades
+        assert len(trades), "no trades, so this proves nothing"
+
+        multiplier = result.raw.config.contract.multiplier
+        for _, t in trades.iterrows():
+            #   gross = (exit price - entry price) x multiplier x quantity
+            #   net   = gross - fees
+            gross = (t["exit_price"] - t["entry_price"]) * multiplier * t["quantity"]
+            assert t["gross_pnl"] == pytest.approx(gross, abs=1e-6), (
+                f"trade {t['trade_id']}: the log says gross {t['gross_pnl']:,.4f} and "
+                f"({t['exit_price']:.4f} - {t['entry_price']:.4f}) x {multiplier} x "
+                f"{t['quantity']} is {gross:,.4f}"
+            )
+            assert t["net_pnl"] == pytest.approx(gross - t["fees"], abs=1e-6)
+
+            #   fees = commission + regulatory + slippage, both sides
+            parts = t["fee_commission"] + t["fee_regulatory"] + t["fee_slippage"]
+            assert t["fees"] == pytest.approx(parts, abs=1e-6)
+
+    def test_the_round_trip_pays_commission_twice(self):
+        """One fee where there should be two is a plausible number, and it flatters."""
+        from backtest.api.sdk import run
+
+        result = run(
+            symbol="QQQ", start="2023-01-01", end="2023-06-30",
+            entry="close < sma_20 * 0.98",
+            select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                    "delta_lo": 0.25, "delta_hi": 0.45},
+            exit={"hold_days": 10, "dte_floor": 7},
+            engine="trade_table", sizing={"method": "fixed"}, quantity=2,
+        )
+        costs = result.raw.config.costs
+        # Two contracts: max(2 x 0.65, 1.00) = 1.30 per side, 2.60 for the round trip.
+        one_side = max(2 * costs.commission_per_contract, costs.min_commission_per_order)
+        traded = result.trades.loc[
+            ~result.trades["exit_reason"].isin(["expiry_itm", "expiry_otm"])]
+        assert len(traded), "every trade expired, so no round trip to check"
+        assert traded["fee_commission"].iloc[0] == pytest.approx(one_side * 2)
 
 
 class TestOneLongCallToExpiry:

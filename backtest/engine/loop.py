@@ -76,14 +76,26 @@ from backtest.core.types import (
 ENGINE_NAME = "event_driven"
 
 
-#: Which slot each exit reason belongs to, for attribution by component. ``risk_forced``
-#: is headwind's: it is the only reason the book-wide rules can produce.
+#: Which slot each exit reason belongs to, for attribution by component.
+#:
+#: ``risk_forced`` is headwind's: it is the only reason the book-wide rules can produce.
+#:
+#: The **time-based exits are their own slot**, not the stop's. They were filed under
+#: ``stop_loss``, which put every holding-cap and days-to-expiry close into the stop's
+#: measured contribution -- and contradicted this system's own ablation, which neutralises
+#: the stop and says in as many words that "the holding cap and the days-to-expiry floor
+#: still close it". Two parts of one system disagreeing about which slot owns an exit, with
+#: attribution reading one of them.
+#:
+#: They are not the stop for a reason that survives the naming: a stop is a thesis-failure
+#: rule and a holding cap is a patience rule. Ablating one and keeping the other is a
+#: meaningful experiment; crediting them to the same slot makes it unmeasurable.
 _SLOT_FOR_EXIT = {
     ExitReason.TAKE_PROFIT: "take_profit",
     ExitReason.STOP_LOSS: "stop_loss",
     ExitReason.RISK_FORCED: "headwind",
-    ExitReason.DTE_FLOOR: "stop_loss",
-    ExitReason.TIME_EXIT: "stop_loss",
+    ExitReason.DTE_FLOOR: "time_exit",
+    ExitReason.TIME_EXIT: "time_exit",
     ExitReason.EXPIRY_ITM: "expiry",
     ExitReason.EXPIRY_OTM: "expiry",
 }

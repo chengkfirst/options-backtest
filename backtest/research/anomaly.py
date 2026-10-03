@@ -67,8 +67,22 @@ def scan(
                  _too_good_for_the_sample, _all_losers_same_reason):
         try:
             found = rule(trades, equity=equity, metrics=metrics, costs=costs)
-        except Exception:  # noqa: BLE001
-            continue                      # one rule failing must not kill the scan
+        except Exception as exc:  # noqa: BLE001
+            # One rule failing must not kill the scan -- and it must not vanish either.
+            # A scan that came back with three findings when one rule could not run looks
+            # exactly like a scan where that rule found nothing, and "found nothing" is
+            # the answer a reader acts on. The failure is reported as a finding of its
+            # own, in the same list, so it cannot be missed by someone reading the result
+            # rather than the logs.
+            out.append(Finding(
+                kind="rule_failed",
+                severity="high",
+                headline=f"the {rule.__name__.lstrip('_')} check could not run",
+                detail=(f"{type(exc).__name__}: {exc}. This is not a clean scan -- one "
+                        f"rule produced no answer, which is not the same as finding "
+                        f"nothing. Whatever it looks for has not been checked."),
+            ))
+            continue
         if found:
             out.append(found)
     return sorted(out, key=lambda f: 0 if f.severity == "high" else 1)

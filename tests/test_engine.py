@@ -93,7 +93,7 @@ def scripted(market, config):
             exit=exit_rule,
             quantity=1,
         )
-        return signal_day, entry_day, contract, chain, strategy
+        return signal_day, entry_day, contract, chain, strategy, window
 
     return build
 
@@ -125,36 +125,92 @@ class TestExecutionLag:
         assert "candidate_dropped" in result.events.counts()
 
 
+def _bid(price: float) -> float:
+    """ScriptedChain's bid for a theoretical price: a fixed 2% spread, so the sell side
+    is price minus half of it. Written out so the expected exit price below is a number
+    worked from the fixture rather than read back from the engine."""
+    return round(price - max(price * 0.02, 0.01) / 2, 4)
+
+
 class TestFirstTrigger:
+    """Scripted prices exist so that **which day, at what price, for what reason** each
+    have one right answer.
+
+    These used to assert only the reason. A rule that fired a day late, or filled at the
+    trigger day's price instead of the fill day's, or filled at the mid instead of the
+    bid, would pass every one of them -- and each of those is a quiet overstatement of the
+    result rather than a crash.
+    """
+
+    RULE = ExitRule(hold_days=20, take_profit=1.0, stop_loss=0.5, dte_floor=2)
+
     def test_take_profit(self, market, signals, config, scripted):
-        path = [5.0, 5.5, 11.0, 12.0, 6.0]  # doubles on day 2, fills the next day
-        _, entry, contract, chain, strategy = scripted(
-            path, exit_rule=ExitRule(hold_days=20, take_profit=1.0, stop_loss=0.5, dte_floor=2)
-        )
+        # entry 5.00 on window[0]; 11.00 on window[2] is +120%, past the +100% target.
+        # Decided on window[2], filled on window[3] at that day's bid.
+        path = [5.0, 5.5, 11.0, 12.0, 6.0]
+        _, _, _, chain, strategy, window = scripted(path, exit_rule=self.RULE)
         rec = TradeTableEngine(market, chain, signals, config).run(strategy).records[0]
         assert rec.exit_reason is ExitReason.TAKE_PROFIT
+        assert rec.exit_date == window[3], "the fill is the day after the trigger"
+        assert rec.exit_price == pytest.approx(_bid(12.0)), "sells hit the bid"
 
     def test_stop_loss(self, market, signals, config, scripted):
+        # 2.00 on window[2] is -60%, past the -50% stop. Filled on window[3].
         path = [5.0, 4.5, 2.0, 1.9, 6.0]
-        _, _, _, chain, strategy = scripted(
-            path, exit_rule=ExitRule(hold_days=20, take_profit=1.0, stop_loss=0.5, dte_floor=2)
-        )
+        _, _, _, chain, strategy, window = scripted(path, exit_rule=self.RULE)
         rec = TradeTableEngine(market, chain, signals, config).run(strategy).records[0]
         assert rec.exit_reason is ExitReason.STOP_LOSS
+        assert rec.exit_date == window[3]
+        assert rec.exit_price == pytest.approx(_bid(1.9))
+
+    def test_the_stop_fills_below_the_stop_level_when_the_price_gapped(
+            self, market, signals, config, scripted):
+        """**What a stop actually costs.**
+
+        The level is -50%, so a stop is assumed to lose 2.50 of a 5.00 premium -- which is
+        what `risk_pct` sizing divides by. Here the price is through the stop on the
+        trigger day and lower still on the fill day, so the realised loss is larger. The
+        sizer's budget is therefore an underestimate of the risk actually taken, which is
+        the direction that matters.
+        """
+        path = [5.0, 4.5, 2.0, 1.0, 6.0]       # gaps down again before the fill
+        _, _, _, chain, strategy, window = scripted(path, exit_rule=self.RULE)
+        rec = TradeTableEngine(market, chain, signals, config).run(strategy).records[0]
+        assert rec.exit_reason is ExitReason.STOP_LOSS
+        assert rec.exit_price == pytest.approx(_bid(1.0))
+
+        assumed_loss = 5.0 * 0.5                           # the stop distance
+        realised_loss = 5.0 - rec.exit_price
+        assert realised_loss > assumed_loss, (
+            f"the stop assumed a {assumed_loss:.2f} loss and the fill lost "
+            f"{realised_loss:.2f}"
+        )
 
     def test_time_exit_when_nothing_triggers(self, market, signals, config, scripted):
         path = [5.0, 5.1, 5.2, 5.1, 5.0, 5.05, 5.0, 5.0]
-        _, _, _, chain, strategy = scripted(
-            path, exit_rule=ExitRule(hold_days=4, take_profit=1.0, stop_loss=0.5, dte_floor=2)
+        _, _, _, chain, strategy, window = scripted(
+            path, exit_rule=ExitRule(hold_days=4, take_profit=1.0, stop_loss=0.5,
+                                     dte_floor=2)
         )
         rec = TradeTableEngine(market, chain, signals, config).run(strategy).records[0]
         assert rec.exit_reason is ExitReason.TIME_EXIT
+        # Held four trading days: the decision falls on window[4] and the fill on
+        # window[5], one execution lag later. The window skips the Labor Day holiday, so
+        # the dates are not five calendar days apart -- which is the sort of thing only an
+        # explicit date assertion catches.
+        assert rec.exit_date == window[5]
+        assert rec.exit_price == pytest.approx(_bid(path[5]))
+        # **The realised holding is hold_days plus the execution lag**, not hold_days.
+        # The cap is tested on the close and the fill is the next one, so a rule written
+        # as "hold 4 days" holds 5. Pinned because it is invisible in the configuration
+        # and anyone computing theta over the stated window would be a day out.
+        assert rec.holding_days == 4 + config.execution_lag_days
 
     def test_earliest_trigger_wins(self, market, signals, config, scripted):
         """Through the stop first, then up to the take-profit: it records the stop,
         not whichever turned out better with hindsight."""
         path = [5.0, 2.0, 2.1, 12.0, 12.0]
-        _, _, _, chain, strategy = scripted(
+        _, _, _, chain, strategy, _w = scripted(
             path, exit_rule=ExitRule(hold_days=20, take_profit=1.0, stop_loss=0.5, dte_floor=2)
         )
         rec = TradeTableEngine(market, chain, signals, config).run(strategy).records[0]
@@ -172,7 +228,7 @@ class TestFirstTrigger:
         """
         path = [5.0, 5.2, 11.0, 10.8]  # day 2 both doubles and hits the holding cap;
                                        # fills on day 3
-        _, _, _, chain, strategy = scripted(
+        _, _, _, chain, strategy, _w = scripted(
             path, exit_rule=ExitRule(hold_days=2, take_profit=1.0, stop_loss=0.5, dte_floor=2)
         )
         rec = TradeTableEngine(market, chain, signals, config).run(strategy).records[0]
@@ -181,7 +237,7 @@ class TestFirstTrigger:
 
     def test_dte_floor_triggers(self, market, signals, config, scripted):
         path = [5.0] * 12
-        _, _, _, chain, strategy = scripted(
+        _, _, _, chain, strategy, _w = scripted(
             path,
             exit_rule=ExitRule(hold_days=None, take_profit=None, stop_loss=None, dte_floor=6),
             expiry_offset=8,

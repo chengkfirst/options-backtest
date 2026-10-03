@@ -60,6 +60,8 @@ from datetime import date
 from typing import Any, Sequence
 
 import numpy as np
+
+from backtest.research.boundary import Boundary, Scope, header
 import pandas as pd
 
 def _draws_default() -> int:
@@ -235,26 +237,41 @@ def random_entry(
     )
 
 
+#: A baseline comparison puts one side priced by the chain against one that is not, so a
+#: synthetic chain biases the comparison itself rather than blurring it.
+SCOPE = Scope.MIXED
+
+
 def report(comparisons: Sequence[Comparison], *, synthetic: bool = False) -> str:
     """The baselines as one block of text, each with its verdict.
 
     ``synthetic`` says the option chain was synthetic, which disqualifies any comparison
-    whose two sides are not priced by the same chain. The warning is printed beside that
-    comparison rather than at the top, because a caveat at the top of a report is read
-    once and then scrolled past.
+    whose two sides are not priced by the same chain.
+
+    **The boundary goes in twice, and both are needed.** It leads the report, because that
+    is what decides whether any of the numbers may be acted on and it has to be read before
+    them -- this report used to put it only beside each comparison, which meant the figures
+    came first and a test with an escape hatch in it failed to notice. And it stays beside
+    each comparison, because only some are disqualified: a delta-equivalent comparison puts
+    an option-priced side against a real one and is biased, while random entry prices both
+    sides on the same chain and the bias cancels. One blanket warning at the top would
+    over-warn on the second and under-explain the first.
     """
     if not comparisons:
         return "no baselines were run."
     lines = ["Baselines", "─" * 64]
+    disqualified = [c for c in comparisons if not c.valid_on_synthetic]
+    if synthetic and disqualified:
+        lines += header(Boundary(SCOPE, True), what="a baseline comparison")
     for c in comparisons:
         lines.append(f"  {c.name}")
         lines.append(f"    strategy {c.strategy:>14,.0f}")
         lines.append(f"    baseline {c.baseline:>14,.0f}   excess {c.excess:+,.0f}")
         lines.append(f"    → {c.verdict()}")
         if synthetic and not c.valid_on_synthetic:
-            lines.append("    !! on a synthetic chain this comparison is biased: one "
-                         "side is priced by the chain and")
-            lines.append("       the other by real underlying prices. Read the "
-                         "direction, not the size, and do not act on it.")
+            lines.append("    !! this is one of the comparisons the boundary above "
+                         "applies to: one side is priced")
+            lines.append("       by the chain and the other by real underlying prices, "
+                         "so the bias does not cancel.")
         lines.append("")
     return "\n".join(lines)

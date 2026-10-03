@@ -20,6 +20,8 @@ data source look riskier than it is.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from scipy.optimize import brentq
 from scipy.stats import norm
@@ -175,18 +177,56 @@ def has_early_exercise_value(
     option_price: float,
     intrinsic: float,
     dividend_in_window: float,
+    rate: float = 0.0,
+    years_to_expiry: float = 0.0,
 ) -> bool:
-    """Whether a deep in-the-money call has early-exercise value before a
-    dividend.
+    """Whether an American option is worth exercising early, for either right.
 
-    Using a European model for an American option is an **explicit
-    approximation**. For out-of-the-money and at-the-money options the error is
-    on the order of a tenth of a percent, but for an in-the-money call before an
-    ex-dividend date, with time value below that dividend, the European price is
-    genuinely wrong. This does not change the model; it flags the case so the
-    price is not taken as fair by default.
+    Using a European model for an American option is an **explicit approximation**. For
+    out-of-the-money and at-the-money options the error is on the order of a tenth of a
+    percent. This does not change the model; it flags the cases where the European price
+    is genuinely wrong, so it is not taken as fair by default.
+
+    **Two cases, not one.** This used to answer ``False`` for every put, which is not true
+    and is not conservative:
+
+    - **a call before an ex-dividend date**, when its time value is below the dividend:
+      exercising captures the dividend, which the European price does not allow for
+    - **a deep in-the-money put when rates are above zero**: exercising hands over the
+      stock now and receives the strike now, and the strike earns interest for the
+      remaining life. The carry on the strike is what makes it worth doing, so the test is
+      whether the time value is below that carry.
+
+    The put case needs ``rate`` and ``years_to_expiry``; without them it cannot be
+    assessed and this returns ``False`` **because there is nothing to test against**, not
+    because the answer is no. The caller that has those figures should pass them -- which
+    is why they are arguments rather than a constant read from somewhere.
     """
-    if right is not Right.CALL or dividend_in_window <= 0:
-        return False
     time_value = option_price - intrinsic
-    return intrinsic > 0 and time_value < dividend_in_window
+    if intrinsic <= 0:
+        return False
+    if right is Right.CALL:
+        return dividend_in_window > 0 and time_value < dividend_in_window
+    # The interest earned on the strike over the remaining life, which is what early
+    # exercise of a put buys. A dividend works the other way for a put -- it lowers the
+    # stock and so makes holding more attractive -- so it is subtracted.
+    carry = _strike_carry(intrinsic, option_price, rate, years_to_expiry)
+    if carry <= 0:
+        return False
+    return time_value < carry - dividend_in_window
+
+
+def _strike_carry(intrinsic: float, option_price: float, rate: float,
+                  years: float) -> float:
+    """Interest on the strike over the remaining life, approximated.
+
+    ``strike x (1 - exp(-r x T))`` is the exact figure and the strike is not passed here;
+    the intrinsic value is a lower bound on it for an in-the-money put, so this
+    **understates** the carry and therefore understates how often early exercise is worth
+    it. Understating is the right direction for a flag whose job is to say "the European
+    price may be wrong here": a false negative leaves the existing approximation in place,
+    a false positive would disqualify prices that are fine.
+    """
+    if rate <= 0 or years <= 0:
+        return 0.0
+    return intrinsic * (1.0 - math.exp(-rate * years))

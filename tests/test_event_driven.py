@@ -124,8 +124,22 @@ class TestDecisionLog:
     def test_a_close_is_credited_to_the_rule_that_fired(self, both):
         _, driven = both
         closes = {a.component_id for a in driven.actions if a.action is Action.CLOSE}
-        assert closes and closes <= {"take_profit", "stop_loss", "headwind", "expiry",
-                                     "review", "exit"}
+        assert closes and closes <= {"take_profit", "stop_loss", "time_exit", "headwind",
+                                     "expiry", "review", "exit"}
+
+    def test_a_time_exit_is_not_credited_to_the_stop(self, both):
+        """A stop is a thesis-failure rule and a holding cap is a patience rule.
+
+        Crediting them to one slot makes the experiment that separates them impossible,
+        and it is the experiment the whole seven-slot framing exists for.
+        """
+        _, driven = both
+        by_trade = {a.trade_id: a.component_id
+                    for a in driven.actions if a.action is Action.CLOSE}
+        timed = [r for r in driven.records
+                 if r.exit_reason in (ExitReason.DTE_FLOOR, ExitReason.TIME_EXIT)]
+        assert timed, "no time-based exit in this run, so this proves nothing"
+        assert all(by_trade.get(r.trade_id) != "stop_loss" for r in timed)
 
     def test_the_slot_matches_the_recorded_exit_reason(self, both):
         """The log and the trade table must agree. Two records of the same decision
@@ -133,9 +147,12 @@ class TestDecisionLog:
         _, driven = both
         by_trade = {a.trade_id: a.component_id
                     for a in driven.actions if a.action is Action.CLOSE}
+        # The time-based exits are their own slot. Filing them under stop_loss put every
+        # holding-cap close into the stop's measured contribution, and contradicted the
+        # ablation, which neutralises the stop and keeps the holding cap.
         expect = {ExitReason.TAKE_PROFIT: "take_profit", ExitReason.STOP_LOSS: "stop_loss",
-                  ExitReason.RISK_FORCED: "headwind", ExitReason.DTE_FLOOR: "stop_loss",
-                  ExitReason.TIME_EXIT: "stop_loss"}
+                  ExitReason.RISK_FORCED: "headwind", ExitReason.DTE_FLOOR: "time_exit",
+                  ExitReason.TIME_EXIT: "time_exit"}
         checked = 0
         for r in driven.records:
             if r.trade_id in by_trade and r.exit_reason in expect:

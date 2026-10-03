@@ -320,11 +320,22 @@ class TestAvailability:
         assert source._withheld > 0
 
     def test_a_late_row_is_never_tradable_on_its_own_day(self, tmp_path, market, config):
-        """Not on that day, and not later either: by the time it arrives the market has
-        moved, so it is history rather than a quote to act on."""
+        """Not on that day, and not later either.
+
+        The second half is about **the same row**, asked for again. The first version
+        checked a different row's own day and so never tested it: by the time Tuesday's
+        quote arrives on Thursday the market has moved, and asking "what could I trade on
+        Tuesday" must still exclude it however long afterwards the question is asked.
+        """
         source = self._source(self._frame(), tmp_path, market, config)
-        assert 400.0 not in source.snapshot(date(2023, 1, 5))["strike"].tolist()
-        assert 400.0 not in source.snapshot(date(2023, 1, 7))["strike"].tolist()
+        tuesday = date(2023, 1, 5)
+        assert 400.0 not in source.snapshot(tuesday)["strike"].tolist()
+        # The same day, asked for again later. `snapshot(day)` is "what could be traded on
+        # day", so the answer must not change with when it is asked.
+        for asked_on in (date(2023, 1, 6), date(2023, 1, 9), date(2023, 1, 12)):
+            assert 400.0 not in source.snapshot(tuesday)["strike"].tolist(), (
+                f"the late row became tradable on {tuesday} when asked on {asked_on}"
+            )
 
     def test_a_late_row_is_good_history_once_it_has_arrived(self, tmp_path, market,
                                                             config):

@@ -182,6 +182,27 @@ class TradeTableEngine:
             record = self._build_trade(trade_id + 1, signal_day, entry_day, strategy)
             if record is None:
                 continue
+            if record.exit_date > self.config.end:
+                # **A trade the range cannot resolve is not a trade.**
+                #
+                # This engine was recording one anyway: an entry on the last session,
+                # settled at an expiry weeks after the backtest ended, with a P&L computed
+                # from a price outside the window. The event-driven engine never does
+                # this -- its loop has no session after the last one to exit on, so the
+                # position is simply still open when the run ends -- and the dual-engine
+                # comparison missed it because the built-in selection rule happened not to
+                # enter on the final day.
+                #
+                # Dropping it rather than truncating it: a trade cut short at the range's
+                # end is reported as having closed for a reason it did not, which is worse
+                # than not reporting it.
+                self.events.record(
+                    EventKind.RANGE_TRUNCATED, entry_day,
+                    f"entered on {entry_day} and would not close until "
+                    f"{record.exit_date}, after the backtest ends on {self.config.end}. "
+                    f"Its result would come from prices outside the range",
+                    str(record.contract))
+                continue
             if not strategy.allow_stacking and any(
                 r.contract == record.contract and r.entry_date <= entry_day < r.exit_date
                 for r in held
