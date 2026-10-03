@@ -1,9 +1,25 @@
-"""The regression baseline.
+"""The regression baseline: did the result move.
 
 A determinism test only guarantees that the same code twice gives the same answer; it
 cannot catch **an unintended change in results caused by a change in the code**. The
 baseline comparison covers that: on fixed inputs and a fixed configuration, any
 difference from the baseline has to be caught.
+
+## Why it is its own kind
+
+It answers a question none of the other tests do, and it answers it without saying what
+kind of thing changed. A unit test says the arithmetic is wrong; a guard says a defence
+has stopped working; this says only **something moved**, and the work of deciding what
+is the researcher's. That is why it is labelled `baseline` rather than filed under any of
+the others.
+
+## It runs on the fixture, not on market data
+
+Deliberately. Pinned to a vendor's history it would go red when the vendor revised a
+dividend, which is not a code change and is exactly the failure that teaches people to
+update a baseline without reading the diff. The inputs come from `tests/conftest.py`,
+including its dividend list -- read from there rather than copied, after the copy was
+found sitting beside it.
 
 Updating the baseline is an **explicit act** (``python -m tools.baseline update``), and
 the difference is printed when it happens — otherwise "just update the baseline while
@@ -46,7 +62,7 @@ def build_trades() -> pd.DataFrame:
     from backtest.signals.contracts import SelectionRule
     from backtest.signals.registry import SignalSet
     from backtest.core.types import ContractSpec, Right
-    from tests.conftest import END, make_raw_bars
+    from tests.conftest import DIVIDENDS, END, make_raw_bars
 
     from datetime import date
 
@@ -59,10 +75,12 @@ def build_trades() -> pd.DataFrame:
     market = MarketData(
         config, bars=bars,
         rates=pd.Series(0.045, index=idx), vol_proxy=pd.Series(0.22, index=idx),
-        dividends=pd.Series(
-            [0.55, 0.57, 0.60, 0.62],
-            index=pd.to_datetime(["2022-09-19", "2022-12-19", "2023-03-20", "2023-06-20"]),
-        ),
+        # From the fixture's own list, not a second copy. The two held the same four
+        # values by coincidence of having been written twice; a change to one would have
+        # moved the baseline for a reason that had nothing to do with the code, which is
+        # the one thing a regression baseline must never do.
+        dividends=pd.Series(list(DIVIDENDS.values()),
+                            index=pd.to_datetime(list(DIVIDENDS))),
     )
     signals = SignalSet.from_bars(bars)
     condition, requires = parse_condition("sma_20 > sma_50", signals.names)

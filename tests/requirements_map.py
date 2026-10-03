@@ -301,8 +301,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "a slot with only one form, which cannot be compared"),
     Requirement("6.4.holdout", "6.4",
                 "A final hold-out locked at the start and used once",
-                "a result scored on data already looked at",
-                not_built="nothing prevents it; the largest hole in use two"),
+                "a result scored on data already looked at without saying so"),
     Requirement("6.4.trials", "6.4",
                 "Every trial counted and the best deflated by the size of the search",
                 "a rerun counted as a new trial, or a trial not counted"),
@@ -354,6 +353,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("S.range", "S",
                 "A trade is reported only if the range can resolve it",
                 "a trade settled from prices after the backtest ended"),
+    Requirement("S.unresolved", "S",
+                "A position the range could not resolve is reported as such, not "
+                "silently absent from the trade log",
+                "fewer trades than entries, with nothing saying why"),
 )
 
 #: Every requirement id, for the meta-test.

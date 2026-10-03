@@ -79,6 +79,7 @@ def main() -> int:
               + (f"   {tail[:70]}" if tail else ""))
 
     bad = [n for n, ok, _, _ in results if not ok]
+    _record(passed=not bad, partial=args.fast)
     print()
     if bad:
         print(f"FAIL  {len(bad)} guard(s) did not pass: {', '.join(bad)}")
@@ -87,6 +88,34 @@ def main() -> int:
     print(f"OK  all {len(results)} guards passed"
           + ("  (--fast: slow ones skipped)" if args.fast else ""))
     return 0
+
+
+def _record(*, passed: bool, partial: bool) -> None:
+    """Write down whether this code passed, so a research result can say which it was.
+
+    A figure produced while the guards were red has no backing from the suite, and nothing
+    recorded which kind of result it was. ``backtest.core.run_id.guards_were_green``
+    reads this and reports three states -- green, red, and **no record**, which is the
+    ordinary state on a machine where the guards have not been run and must not be
+    reported as either of the others.
+
+    A ``--fast`` run is recorded as not passing: it skipped the slow guards, so it cannot
+    say the code is green, and saying so would be the quietest possible way to lose the
+    distinction.
+    """
+    import json
+    from datetime import datetime
+
+    from backtest.core.run_id import GUARD_RECORD, code_version
+
+    target = ROOT / GUARD_RECORD
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({
+        "code": code_version(ROOT),
+        "passed": bool(passed and not partial),
+        "partial": bool(partial),
+        "when": datetime.now().isoformat(timespec="seconds"),
+    }, indent=1), encoding="utf-8")
 
 
 if __name__ == "__main__":

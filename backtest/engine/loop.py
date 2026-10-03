@@ -475,6 +475,23 @@ class EventDrivenEngine:
                 if self._validate(intent, ledger, day):
                     queue.append(intent)
 
+        # **A position still open when the run ends is not a trade and must not be
+        # silently absent.**
+        #
+        # There is no forced close at the range end -- an exit decided with no session
+        # left to fill it is skipped, and the position simply stays. That is the right
+        # behaviour: closing it would invent a fill on a day the range does not cover, and
+        # recording it as a time exit would put a trade that never ended into the exit-
+        # reason statistics. What is wrong is saying nothing, because fewer trades with no
+        # explanation reads exactly like a signal that did not fire.
+        if len(ledger):
+            self.events.record(
+                EventKind.UNRESOLVED_POSITION, self.config.end,
+                f"{len(ledger)} position(s) were still open when the range ended and are "
+                f"not in the trade log: they have no exit, and inventing one would be "
+                f"either a fill outside the range or an exit reason that did not happen",
+                ", ".join(str(p.contract) for p in list(ledger.positions)[:5]))
+
         return EventDrivenResult(
             paths=tuple(paths), shadow=tuple(shadow), actions=tuple(actions),
             records=tuple(records), snapshots=tuple(snapshots), greeks=tuple(greeks_daily),

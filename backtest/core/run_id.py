@@ -56,6 +56,48 @@ def code_version(root: Path | None = None) -> str:
         return "unknown"
 
 
+#: Where the guard run records its verdict. Written by ``tools/check.py``, read here.
+GUARD_RECORD = ".cache/guards.json"
+
+
+def guards_were_green(root: Path | None = None) -> "dict[str, object]":
+    """Whether the guards passed on the code this run is using.
+
+    **A result from a commit whose guards were failing is a different kind of result**, and
+    nothing recorded which kind. The suite is the reason to believe the engine computed
+    what it claims; a figure produced while it was red has no such backing, and six months
+    later nobody can tell the two apart.
+
+    Three states, not two. "Green at this commit", "red at this commit", and "**no record**"
+    -- which is the ordinary state on a machine where the guards have not been run, and
+    must not be reported as either of the others.
+    """
+    import json
+
+    root = root or Path(__file__).resolve().parent.parent.parent
+    commit = code_version(root)
+    record = root / GUARD_RECORD
+    if not record.exists():
+        return {"state": "unrecorded",
+                "note": "the guards have not been run on this machine, so whether this "
+                        "code passes them is unknown"}
+    try:
+        saved = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"state": "unrecorded", "note": "the guard record could not be read"}
+
+    if saved.get("code") != commit:
+        return {"state": "stale", "recorded_for": saved.get("code"),
+                "note": f"the last guard run was on {saved.get('code')} and this run is "
+                        f"on {commit}, so it says nothing about this code"}
+    return {"state": "green" if saved.get("passed") else "red",
+            "when": saved.get("when", ""),
+            "note": ("the guards passed on this exact code"
+                     if saved.get("passed")
+                     else "**the guards were failing on this code.** Whatever this run "
+                          "produced has no backing from the suite")}
+
+
 def _stable(obj: Any) -> Any:
     """Reduce to something whose JSON form does not depend on insertion order."""
     if isinstance(obj, Mapping):

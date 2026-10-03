@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -35,6 +35,7 @@ from backtest.engine.strategy import Strategy
 from backtest.research.sweep import SweepResult, sweep as _sweep
 from backtest.engine.vectorized import TradeTableEngine, TradeTableResult
 from backtest.core.errors import InvariantError, StartupError
+from backtest.research.holdout import HoldOut, check as holdout_check
 from backtest.research import metrics as R
 from backtest.signals.contracts import SelectionRule
 from backtest.signals.registry import SignalSet
@@ -238,6 +239,8 @@ def run(
     execution_lag_days: int | None = None,
     components: "Mapping[str, Mapping[str, Any]] | None" = None,
     risk: "Mapping[str, Any] | None" = None,
+    hold_out: "tuple[str | date, str | date] | None" = None,
+    unlock: str = "",
 ) -> "Result":
     """Run one backtest.
 
@@ -304,6 +307,15 @@ def run(
         synthetic=synthetic or SyntheticChainConfig(),
     )
 
+    # The document's research protocol opens with the hold-out, and nothing enforced it:
+    # a run could be scored on data already looked at, repeatedly, with neither the result
+    # nor the record of it saying so. Checked before any work is done, so a refusal costs
+    # nothing.
+    reserved = (HoldOut(_as_date(hold_out[0]), _as_date(hold_out[1]))
+                if hold_out else None)
+    hold_out_note = holdout_check(reserved, start=config.start, end=config.end,
+                                  unlock=unlock)
+
     market = MarketData(config, refresh=refresh)
     signal_set = SignalSet.from_bars(market.bars, extra=signals, vol_proxy=market.vol_proxy)
     chain_source = build_chain_source(chain, market, config)
@@ -365,7 +377,7 @@ def run(
                 "max_concurrent use engine=\"event_driven\"."
             )
         outcome = TradeTableEngine(market, chain_source, signal_set, config).run(strategy)
-    return Result(outcome, market, chain_source, signal_set)
+    return Result(outcome, market, chain_source, signal_set, hold_out=hold_out_note)
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,6 +389,13 @@ class Result:
     _market: Any = None
     _chain: Any = None
     _signals: Any = None
+    #: Whether a hold-out was declared, and whether this run reached into it.
+    #:
+    #: Carried on the result rather than left to the caller to remember, because the
+    #: question a reader has about a number is whether it is out of sample -- and "no
+    #: hold-out was declared" and "declared and respected" are different answers that
+    #: would otherwise look identical.
+    hold_out: Mapping[str, Any] = field(default_factory=dict)
 
     # ---- the data ----
     @property
@@ -409,6 +428,8 @@ class Result:
 
     def provenance(self) -> dict[str, Any]:
         out = R.data_provenance(self.trades)
+        if self.hold_out:
+            out["hold_out"] = dict(self.hold_out)
         # Whether the look-ahead cut rests on the data or on an assumption.
         #
         # The document's first data rule is that nothing enters a backtest without an
@@ -443,7 +464,7 @@ class Result:
         exact thing before.** A dirty working tree shows up as ``+dirty`` on the commit,
         because a result from uncommitted code cannot be reproduced from the commit alone.
         """
-        from backtest.core.run_id import code_version, run_id
+        from backtest.core.run_id import code_version, guards_were_green, run_id
 
         strategy = {
             "name": self.raw.strategy.name,
@@ -499,6 +520,9 @@ class Result:
             "config": settings,
             "execution": execution,
             "environment": R.environment(),
+            # Whether the guards passed on this exact code. A result from a commit whose
+            # suite was failing is a different kind of result, and nothing recorded which.
+            "guards": guards_were_green(),
             "provenance": provenance,
         }
 

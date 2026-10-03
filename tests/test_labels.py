@@ -116,9 +116,7 @@ class TestTheShapeOfTheSuite:
     def test_every_kind_is_used_by_something(self):
         """A kind nobody uses is a category that was invented rather than observed."""
         used = Counter(k for k, _ in resolve().values())
-        # `baseline` is the regression check, which is a tool rather than a pytest test:
-        # it lives in tools/baseline.py and is its own guard.
-        unused = [k for k in KINDS if k not in used and k != "baseline"]
+        unused = [k for k in KINDS if k not in used]
         assert not unused, (
             f"these kinds are defined and nothing carries them: {unused}. Either "
             f"something should, or the kind is not real"
@@ -156,4 +154,14 @@ class TestTheShapeOfTheSuite:
                                           key=lambda x: -len(x[1])):
                     shown = ", ".join(f"{k}/{l}" for k, l in pairs)
                     print(f"    {name:30} {len(pairs)}  ({shown})")
-        assert True
+
+        # The measurement itself has to be alive, or the report is empty for the wrong
+        # reason and reads as "nothing needs splitting". `assert True`, which this had,
+        # is not a test -- it is a function that runs. Covering every file is the claim
+        # that makes the silence meaningful.
+        counted = set(by_file)
+        on_disk = {p.name for p in TESTS.glob("test_*.py")}
+        assert counted == on_disk, (
+            f"the measurement missed {sorted(on_disk - counted)}, so an empty report "
+            f"would not mean what it looks like"
+        )

@@ -10,7 +10,7 @@ import pytest
 
 import tools.check_deps as deps
 
-from tests.kinds import labels
+from tests.kinds import kind, labels
 
 #: What a failure here means, and where it is. See ``tests/kinds.py``.
 pytestmark = labels("architecture", "cross")
@@ -101,6 +101,7 @@ def test_no_bare_optional_floats_across_module_boundaries():
 
 
 @pytest.mark.req("0.4.regression")
+@kind("baseline")
 def test_regression_baseline_unchanged():
     """The baseline comparison: an unintended change in results must be caught, never
     pass silently."""

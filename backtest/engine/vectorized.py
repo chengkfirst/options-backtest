@@ -197,7 +197,7 @@ class TradeTableEngine:
                 # end is reported as having closed for a reason it did not, which is worse
                 # than not reporting it.
                 self.events.record(
-                    EventKind.RANGE_TRUNCATED, entry_day,
+                    EventKind.UNRESOLVED_POSITION, entry_day,
                     f"entered on {entry_day} and would not close until "
                     f"{record.exit_date}, after the backtest ends on {self.config.end}. "
                     f"Its result would come from prices outside the range",

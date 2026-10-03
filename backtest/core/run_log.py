@@ -29,6 +29,13 @@ class EventKind(str, Enum):
     DIVIDEND_UNAVAILABLE = "dividend_unavailable"
     EARLY_EXERCISE_RISK = "early_exercise_risk"
     RANGE_TRUNCATED = "range_truncated"
+    #: A position the backtest range could not resolve: still open when the run ended.
+    #:
+    #: Its own kind rather than sharing RANGE_TRUNCATED, which already means the **data**
+    #: range was shortened. Two different conditions under one name make the count
+    #: meaningless -- and the count is the thing a reader uses to decide whether a trade
+    #: log is complete.
+    UNRESOLVED_POSITION = "unresolved_position"
 
 
 @dataclass(frozen=True, slots=True)
