@@ -93,11 +93,21 @@ class TradeTableEngine:
         "hedge": "hedging across positions: this needs a portfolio view",
         "max_concurrent": "a concurrency limit: trades are computed independently and "
                           "know nothing of each other",
+        "components": "a swapped-in component form: exits here are computed vectorised "
+                      "over the whole holding window at once, so an arbitrary per-day "
+                      "decision function cannot be applied without stepping day by day -- "
+                      "which is the other engine",
     }
 
     def _guard(self, strategy: Strategy) -> None:
         """Refuse a configuration this engine cannot handle correctly, rather than
         returning an approximation."""
+        if strategy.components:
+            slots = ", ".join(sorted(strategy.components))
+            raise StartupError(
+                f"the trade-table engine cannot run a swapped-in component ({slots}): "
+                f"{self.UNSUPPORTED['components']}. Rerun with engine=\"event_driven\"."
+            )
         if strategy.review is not None:
             raise StartupError(
                 "a daily review needs the event-driven engine. The trade-table engine "

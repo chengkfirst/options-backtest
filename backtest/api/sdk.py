@@ -131,6 +131,28 @@ def _selection_from(spec):
     )
 
 
+def _components_from(spec) -> dict[str, Any]:
+    """Turn ``{"stop_loss": {"variant": "underlying", "params": {...}}}`` into components.
+
+    A slot given here decides that slot instead of the matching field on ``exit``. Which
+    form of a slot to use is the question the first of this platform's two uses exists to
+    answer, and the platform offers the forms without choosing between them.
+    """
+    from backtest.core.component import build
+
+    if not spec:
+        return {}
+    out = {}
+    for slot, one in dict(spec).items():
+        if not isinstance(one, Mapping):
+            raise StartupError(
+                f"components[{slot!r}] should be "
+                f'{{"variant": "...", "params": {{...}}}}, got {one!r}'
+            )
+        out[slot] = build({"slot": slot, **dict(one)})
+    return out
+
+
 def _exit_from(spec: Mapping[str, Any] | ExitRule) -> ExitRule:
     if isinstance(spec, ExitRule):
         return spec
@@ -173,6 +195,7 @@ def run(
     signals: Mapping[str, Callable] | None = None,
     shadow_days: int | None = None,
     execution_lag_days: int | None = None,
+    components: "Mapping[str, Mapping[str, Any]] | None" = None,
 ) -> "Result":
     """Run one backtest.
 
@@ -260,6 +283,7 @@ def run(
     else:
         entry_rule = EntryRule(getattr(entry, "__name__", "custom"), entry, ())
 
+    built = _components_from(components)
     strategy = Strategy(
         plan=plan,
         review=review,
@@ -269,6 +293,7 @@ def run(
         exit=_exit_from(exit or {}),
         quantity=quantity,
         name=name,
+        components=built,
     )
     if engine == "event_driven":
         from backtest.engine.loop import EventDrivenEngine
@@ -359,6 +384,14 @@ class Result:
             "sizing": dataclasses.asdict(self.raw.strategy.sizing),
             "plan": self.raw.strategy.plan is not None,
             "review": self.raw.strategy.review is not None,
+            # Each swapped-in component as slot/name@version plus its parameters. The
+            # reference carries the version, so a result from version 1 of a stop cannot
+            # be mistaken for one from version 2 -- which is the whole reason a component
+            # is versioned.
+            "components": {
+                slot: {"ref": c.ref, "params": dict(c.params)}
+                for slot, c in sorted(self.raw.strategy.components.items())
+            },
         }
         settings = self.raw.config.describe()
         # Which engine ran, and the limits it ran under. These change the trades and are
@@ -741,6 +774,41 @@ class Result:
 
         return [_ablate(self.raw.strategy, slot, run_one, accept_coupled=accept_coupled)
                 for slot in wanted]
+
+    def compare_forms(self, slot: str, forms) -> "Any":
+        """Run several **forms** of one slot side by side.
+
+        Ablation asks whether a slot is worth having. This asks which form of it to keep —
+        a stop on the premium against a stop on the underlying — which is what settling a
+        component means, and which a parameter sweep over one form cannot answer.
+
+        ``forms`` is required: which forms, at which parameters, is the research question.
+        Needs the event-driven engine; the trade table computes exits vectorised over the
+        whole holding window and cannot apply a per-day decision function.
+
+        >>> r.compare_forms("stop_loss", [
+        ...     {"variant": "premium",    "params": {"fraction": 0.4}},
+        ...     {"variant": "underlying", "params": {"fraction": 0.03}},
+        ... ])
+        """
+        from backtest.research.forms import compare
+
+        if getattr(self.raw, "ledger", None) is None:
+            raise AttributeError(
+                "comparing forms needs the event-driven engine: the trade table computes "
+                "exits vectorised and cannot apply a per-day decision function. Rerun "
+                "with engine=\"event_driven\"."
+            )
+        market, chain, signals, config = (self._market, self._chain, self._signals,
+                                          self.raw.config)
+
+        def run_one(candidate) -> tuple[float, int]:
+            from backtest.engine.loop import EventDrivenEngine
+
+            out = EventDrivenEngine(market, chain, signals, config).run(candidate)
+            return float(sum(r.net_pnl for r in out.records)), len(out.records)
+
+        return compare(self.raw.strategy, slot, forms, run_one)
 
     def cost_sensitivity(self, multiples=(1.0, 2.0, 3.0)):
         """Does it survive costs doubling? Live costs above backtest costs is the

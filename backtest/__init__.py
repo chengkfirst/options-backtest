@@ -30,3 +30,9 @@ __all__ = [
     "all_of",
     "threshold",
 ]
+
+# The shipped component forms. Imported here, at the composition layer, because the
+# registry lives in Layer 0 and the forms live in Layer 2: Layer 0 cannot reach them
+# without inverting the dependency direction. Importing them at the call site instead
+# would make "is this variant registered" depend on import order.
+from backtest.signals import variants as _variants  # noqa: E402,F401

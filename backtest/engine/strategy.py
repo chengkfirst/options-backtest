@@ -17,7 +17,9 @@ Everything here is **configuration**, not logic. The logic lives in the slots.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, Mapping
 
+from backtest.core.errors import StartupError
 from backtest.core.types import require
 from backtest.portfolio.positioning import Sizing
 from backtest.signals.contracts import ContractChooser, SelectionRule
@@ -61,7 +63,26 @@ class Strategy:
     #: judgement on top rather than replacing it. Only the event-driven engine
     #: supports it. See ``backtest.signals.review``.
     review: "Reviewer | None" = None
+    #: **Swapped-in component forms**, by slot: ``{"stop_loss": Bound(...)}``.
+    #:
+    #: A slot given here is decided by that component instead of by the matching field on
+    #: ``exit``. This is what makes "settle the seven components" a comparison rather than
+    #: a parameter sweep: a premium stop and an underlying stop are different forms of one
+    #: slot, not different values of one parameter, and only the event-driven engine can
+    #: run an arbitrary one -- the trade table computes exits vectorised over an array and
+    #: refuses, the way it already refuses a plan and a daily review.
+    components: Mapping[str, Any] = field(default_factory=dict)
     name: str = "unnamed"
 
     def __post_init__(self) -> None:
+        # A component and the matching rule field both set is a silent override: one of
+        # the two decides and the other looks as though it does. Refused, so a comparison
+        # between two forms of a slot cannot quietly be measuring a third thing.
+        for slot in self.components:
+            if getattr(self.exit, slot, None) is not None:
+                raise StartupError(
+                    f"{slot} is given both as a component ({self.components[slot].ref}) "
+                    f"and as exit.{slot}={getattr(self.exit, slot)!r}. The component "
+                    f"would decide and the rule would look as though it did. Give one"
+                )
         require(self.quantity >= 1, "quantity must be at least 1 contract")

@@ -46,6 +46,7 @@ from backtest.data.options.chain import ChainSource
 from backtest.data.market import MarketData
 from backtest.signals.plan import Context, Plan
 from backtest.signals.review import Add, Close, PositionView, Reduce
+from backtest.signals.variants import exit_context
 from backtest.signals.strategy import ExitRule
 from backtest.engine.strategy import Strategy
 from backtest.core.errors import InvariantError, StartupError
@@ -577,9 +578,32 @@ class EventDrivenEngine:
         if quote is not None:
             exit_price = quote[0] if pos.quantity > 0 else quote[1]
             ratio = (exit_price / trade.entry_price - 1.0) * (1 if pos.quantity > 0 else -1)
-            if rule.take_profit is not None and ratio >= rule.take_profit:
+            # A swapped-in component decides its slot **instead of** the matching field on
+            # the rule -- never as well. Running both would mean a trade could be closed by
+            # the form that was supposed to have been replaced, and the comparison between
+            # two forms would be measuring neither.
+            spot = self.market.spot(day).or_else(float("nan"))
+            ctx = exit_context(
+                premium_ratio=ratio,
+                underlying_move=((spot / trade.entry_spot - 1.0) * trade.direction
+                                 if math.isfinite(trade.entry_spot) and math.isfinite(spot)
+                                 else float("nan")),
+                days_held=cal.sessions_between(trade.entry_date, day),
+                days_to_expiry=cal.sessions_between(day, pos.contract.expiry),
+                iv=float(quote[2]["iv"]) if len(quote) > 2 and quote[2] is not None
+                   and "iv" in quote[2] else float("nan"),
+            )
+            take = strategy.components.get("take_profit")
+            stop = strategy.components.get("stop_loss")
+            if take is not None:
+                if take(ctx):
+                    reasons.append(ExitReason.TAKE_PROFIT)
+            elif rule.take_profit is not None and ratio >= rule.take_profit:
                 reasons.append(ExitReason.TAKE_PROFIT)
-            if rule.stop_loss is not None and ratio <= -rule.stop_loss:
+            if stop is not None:
+                if stop(ctx):
+                    reasons.append(ExitReason.STOP_LOSS)
+            elif rule.stop_loss is not None and ratio <= -rule.stop_loss:
                 reasons.append(ExitReason.STOP_LOSS)
         if rule.dte_floor is not None and cal.sessions_between(day, pos.contract.expiry) <= rule.dte_floor:
             reasons.append(ExitReason.DTE_FLOOR)
