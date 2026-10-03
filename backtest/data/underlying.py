@@ -40,10 +40,37 @@ class UnderlyingBars:
         self._check_field(field)
         return self.frame[field]
 
-    def adjusted(self, field: str = "close") -> pd.Series:
-        """Adjusted prices. For signals and returns."""
+    def adjusted(self, field: str = "close", *, as_of: "date | None" = None) -> pd.Series:
+        """Adjusted prices. For signals and returns.
+
+        **The adjustment itself is not point-in-time**, and `as_of` is how to make it so.
+
+        The factor comes from the vendor's ``Adj Close``, which is back-adjusted to the
+        day the data was downloaded -- so the value on any earlier row already reflects
+        every dividend paid *after* it. Truncating the frame does not undo that: each
+        remaining row keeps the factor it was given, which is why the truncate-and-
+        recompute check cannot see this and why nothing had ever surfaced it.
+
+        It cancels out of anything scale-free -- a moving-average crossover, a ratio of
+        two prices, a return -- and does not cancel out of anything denominated in
+        dollars: an ATR compared against a figure, a price level, a strike distance.
+
+        ``as_of`` re-bases the factor to 1 on that date, which is the series a person
+        standing on that date would have had. On this fixture the difference is 0.56% over
+        eighteen months; on ten years of a dividend-paying ETF it is tens of percent.
+        """
         self._check_field(field)
-        return self.frame[ADJ_PREFIX + field]
+        series = self.frame[ADJ_PREFIX + field]
+        if as_of is None:
+            return series
+        factor = self.frame[ADJ_PREFIX + "close"] / self.frame["close"]
+        stamp = pd.Timestamp(as_of)
+        usable = factor.index[factor.index <= stamp]
+        if not len(usable):
+            raise DataQualityError(
+                f"no session on or before {as_of} to re-base the adjustment against"
+            )
+        return series / float(factor.loc[usable[-1]])
 
     @property
     def volume(self) -> pd.Series:

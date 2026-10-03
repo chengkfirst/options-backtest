@@ -122,3 +122,76 @@ class TestNoLookahead:
         partial = SignalSet.from_bars(truncated, extra=leaky)
         assert full.on(t)["leak"].is_present
         assert partial.on(t)["leak"].is_missing
+
+
+class TestTheAdjustmentIsNotPointInTime:
+    """The truncate-and-recompute check cannot see this, and it is worth saying why.
+
+    That check truncates the **bars frame** and recomputes. But the adjustment factor
+    comes from the vendor's `Adj Close`, which is back-adjusted to the download date, so
+    every remaining row keeps a value that already reflects dividends paid after it.
+    Truncating does not undo it, and the check comes back clean on a series that genuinely
+    carries future information.
+
+    It cancels out of anything scale-free and does not cancel out of anything in dollars.
+    Both halves are asserted, because "it does not matter" and "it matters" are each only
+    true of one of them.
+    """
+
+    def _bars(self):
+        from tests.conftest import make_raw_bars
+        from backtest.data.underlying import build_bars
+
+        return build_bars("QQQ", make_raw_bars())
+
+    def test_truncating_the_frame_does_not_change_the_adjustment(self):
+        """Which is exactly why the look-ahead check is blind to it."""
+        from backtest.data.underlying import UnderlyingBars
+
+        bars = self._bars()
+        cut = bars.frame.index[200]
+        truncated = UnderlyingBars("QQQ", bars.frame.loc[:cut])
+        assert truncated.adjusted("close").loc[cut] == pytest.approx(
+            bars.adjusted("close").loc[cut], abs=1e-12
+        ), "if these ever differ, truncation has started re-deriving the adjustment"
+
+    def test_returns_are_unaffected(self):
+        """Scale-free, so the factor divides out. Every ratio signal is in this class."""
+        bars = self._bars()
+        cut = bars.frame.index[200].date()
+        back = bars.adjusted("close")
+        pit = bars.adjusted("close", as_of=cut)
+        assert (back.pct_change().dropna() -
+                pit.pct_change().dropna()).abs().max() < 1e-12
+
+    def test_a_price_level_is_affected_and_by_how_much(self):
+        """The half that matters, with the magnitude rather than a warning.
+
+        On this fixture the gap is about half a percent over eighteen months. Over ten
+        years of a dividend-paying ETF it is tens of percent, and any signal comparing a
+        price or an ATR against a figure in dollars is wrong by that amount.
+        """
+        bars = self._bars()
+        cut = bars.frame.index[200].date()
+        back = float(bars.adjusted("close").loc[str(cut)])
+        pit = float(bars.adjusted("close", as_of=cut).loc[str(cut)])
+        assert pit > back, "the back-adjusted price is the lower one before a dividend"
+        gap = (pit - back) / back
+        assert 0.002 < gap < 0.02, f"the gap is {gap:.3%}, which is not what was measured"
+
+    def test_rebasing_makes_the_as_of_day_its_own_traded_price(self):
+        """The property that defines it: on the day you are standing, the adjusted price
+        is the price that traded."""
+        bars = self._bars()
+        cut = bars.frame.index[200].date()
+        assert float(bars.adjusted("close", as_of=cut).loc[str(cut)]) == pytest.approx(
+            float(bars.traded("close").loc[str(cut)]), rel=1e-12
+        )
+
+    def test_a_date_before_the_data_is_refused(self):
+        from datetime import date
+
+        from backtest.core.errors import DataQualityError
+
+        with pytest.raises(DataQualityError, match="re-base"):
+            self._bars().adjusted("close", as_of=date(1990, 1, 1))
