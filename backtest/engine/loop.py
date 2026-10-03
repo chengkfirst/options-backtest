@@ -46,7 +46,7 @@ from backtest.data.options.chain import ChainSource
 from backtest.data.market import MarketData
 from backtest.signals.plan import Context, Plan
 from backtest.signals.review import Add, Close, PositionView, Reduce
-from backtest.signals.variants import exit_context
+from backtest.signals.exit_context import exit_context
 from backtest.signals.strategy import ExitRule
 from backtest.engine.strategy import Strategy
 from backtest.core.errors import InvariantError, StartupError

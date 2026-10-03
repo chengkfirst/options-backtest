@@ -197,7 +197,7 @@ class Bound:
 #: Everything registered, by ``slot/name``.
 #:
 #: **Who fills it.** This module defines the protocol and nothing else; the shipped forms
-#: live in ``backtest.signals.variants``, which is Layer 2, and Layer 0 importing Layer 2
+#: live under ``backtest.signals.<slot>``, which is Layer 2, and Layer 0 importing Layer 2
 #: would invert the dependency direction the whole architecture rests on (the guard refuses
 #: it, which is how this arrangement was found). So the package's own ``__init__`` imports
 #: them once, at Layer 7 where composition belongs, and a test asserts the registry is

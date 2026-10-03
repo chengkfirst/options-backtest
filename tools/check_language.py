@@ -37,7 +37,7 @@ SKIP_DIRS = {".git", ".venv", "__pycache__", ".ipynb_checkpoints", "node_modules
 #: neither is an accent on a proper name — "López de Prado" is a citation in English text,
 #: not a second language. The accented Latin letters are listed rather than allowed by
 #: range, so adding one stays a deliberate act.
-ALLOWED = set("·—–…×÷±≈≤≥≠∞√∑→←↑↓⇒│─└├┌┐┘•◦○●✓✗⚠✅⚠️“”‘’°%‰"
+ALLOWED = set("·—–…×÷±≈≤≥≠∞√∑→←↑↓⇒│─└├┌┐┘•◦○●✓✗⚠✅⚠️“”‘’°%‰§"
               "ΔΓΘΛΞΠΣΦΨΩαβγδεζηθικλμνξπρσςτυφχψω"
               "áàâäãéèêëíìîïóòôöõúùûüñçßÁÀÂÄÃÉÈÊËÍÌÎÏÓÒÔÖÕÚÙÛÜÑÇ")
 

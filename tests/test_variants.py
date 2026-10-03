@@ -236,7 +236,7 @@ class TestExitContext:
     def test_both_measures_are_signed_for_the_position(self):
         """A variant that worked out the direction itself would get a put wrong sooner or
         later, and getting it wrong inverts the stop and the target without raising."""
-        from backtest.signals.variants import exit_context
+        from backtest.signals.exit_context import exit_context
 
         ctx = exit_context(premium_ratio=-0.4, underlying_move=-0.02,
                            days_held=3, days_to_expiry=20)
@@ -246,7 +246,7 @@ class TestExitContext:
 
     def test_a_missing_measure_does_not_fire(self):
         """NaN must read as "cannot tell", never as a level crossed."""
-        from backtest.signals.variants import exit_context
+        from backtest.signals.exit_context import exit_context
 
         ctx = exit_context(premium_ratio=float("nan"), underlying_move=float("nan"),
                            days_held=3, days_to_expiry=20)

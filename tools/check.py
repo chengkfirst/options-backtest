@@ -45,6 +45,7 @@ GUARDS: tuple[tuple[str, list[str], bool], ...] = (
     ("shipped",      [sys.executable, "tools/check_shipped.py"], False),
     ("language",     [sys.executable, "tools/check_language.py"], False),
     ("defaults",     [sys.executable, "tools/check_defaults.py"], False),
+    ("plan",         [sys.executable, "tools/check_plan.py"], False),
     ("components",   [sys.executable, "-m", "pytest", "tests/test_components.py", "-q"], False),
     ("wiring",       [sys.executable, "tools/check_wiring.py"], False),
     ("baseline",     [sys.executable, "-m", "tools.baseline", "check"], False),
