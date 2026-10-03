@@ -144,24 +144,37 @@ class TestItActsOnTheBook:
         arithmetic in the test and then asserted on its own result, so it never touched
         the engine and could not have failed.
         """
-        braked = run(**(BASE | {"quantity": 1,
+        # Small capital so the book actually draws down past the brake's first stage
+        # while still holding one contract per trade.
+        braked = run(**(BASE | {"quantity": 1, "capital": 8_000.0,
                                 "sizing": {"method": "fixed", "contracts": 1}}),
-                     risk=TIGHT)
-        actions = braked.raw.actions_frame
-        reduced = actions[(actions["action"] == "reduce") &
-                          (actions["component_id"] == "headwind")]
-        # With one contract held, `quantity - int(quantity x 0.5)` is 1, which is the whole
-        # position -- so the engine must skip it rather than issue a reduction that closes.
-        assert reduced.empty or (reduced["quantity"] < 1).all(), (
-            "a one-contract position was reduced, which can only mean it was closed by a "
-            "rule that said reduce"
+                     risk=SCALE)
+        # The rule has to have fired, or this proves nothing. `reduced.empty or ...` --
+        # which is what I wrote first -- passes when the rule never ran at all, which is
+        # the same escape hatch this whole round of fixes was about.
+        assert (braked.trades["quantity"] == 1).all(), "the setup did not hold one contract"
+        # The rule has to have **fired**, or this proves nothing. It fires and produces no
+        # order, by design, so the evidence is in the event log rather than in the actions
+        # -- and the engine records it there for exactly this reason: a rule that triggers
+        # and cuts nothing is indistinguishable from one that never triggered, and the two
+        # call for opposite responses.
+        detail = " ".join(e.detail for e in braked.raw.events.events)
+        assert "too small to reduce without closing" in detail, (
+            "the scale-down never triggered on a one-contract book, so the rounding was "
+            "never exercised"
         )
-        # And nothing was closed by the book-wide rule under a scale-down either, except
-        # where the rule actually said liquidate.
-        closed = actions[(actions["action"] == "close") &
-                         (actions["component_id"] == "headwind")]
-        assert all("liquidate" in r for r in closed["reason"]), (
-            "the book-wide rule closed a position without saying liquidate"
+
+        actions = braked.raw.actions_frame
+        assert len(actions), "the run produced no fills at all"
+        by_rule = actions[actions["component_id"] == "headwind"]
+        assert (by_rule["action"] != "reduce").all(), (
+            f"the rule issued a reduction on a one-contract position; reducing the whole "
+            f"position is a close"
+        )
+        # Nor did it close anything: this configuration has no liquidation stage, so a
+        # close credited to the book-wide rule could only be a reduction in disguise.
+        assert (by_rule["action"] != "close").all(), (
+            "the book-wide rule closed a position under a scale-down"
         )
 
 

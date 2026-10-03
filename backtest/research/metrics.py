@@ -85,8 +85,16 @@ def pnl_distribution(trades: pd.DataFrame, notional_capital: float) -> dict[str,
         "max_loss": float(pnl.min()),
         "skew": float(pd.Series(pnl).skew()),
         "kurtosis": float(pd.Series(pnl).kurtosis()),
-        # Median and mean of opposite sign: a few extremes drive the average.
-        "driven_by_outliers": bool(np.sign(mean) != np.sign(median) and median != 0),
+        # Median and mean of opposite sign.
+        #
+        # **Not a warning.** It was called ``driven_by_outliers`` and reported as "does
+        # not generalise", which is an equity frame applied to an option book: a low win
+        # rate with a long right tail is the *normal* payoff of buying options, and the
+        # shape it describes is the one the strategy is supposed to have. The thing a
+        # reader needs to know is narrower and is not a judgement -- that the mean is not
+        # a summary of a typical trade here, so a per-trade expectation read off it will
+        # be wrong in both directions.
+        "mean_unlike_median": bool(np.sign(mean) != np.sign(median) and median != 0),
     }
 
 

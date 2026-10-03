@@ -169,7 +169,13 @@ def normalise(
     out.columns = [str(c).strip().lower() for c in out.columns]
 
     if "right" in out.columns:
-        raw = out["right"].astype(str).str.strip().str.lower()
+        # A numeric column read back as float gives "1.0" and "-1.0", which no alias
+        # matches -- and a parquet column of 1/-1 becomes float the moment it holds a
+        # single null, or depending on which writer produced it. The trailing ".0" is
+        # dropped before matching so the same file does not load on one machine and fail
+        # on another.
+        raw = (out["right"].astype(str).str.strip().str.lower()
+               .str.replace(r"\.0+$", "", regex=True))
         mapped = raw.map(_RIGHT_ALIASES)
         unknown = sorted(set(raw[mapped.isna()]))
         if unknown:

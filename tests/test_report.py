@@ -80,11 +80,20 @@ class TestDistribution:
         got = R.pnl_distribution(make_trades([100.0, -50.0]), 10_000.0)
         assert got["quantiles_pct"]["q50"] == pytest.approx(got["quantiles_abs"]["q50"] / 10_000.0)
 
-    def test_flags_outlier_driven_mean(self):
-        """A negative median with a positive mean: a few extremes drive the average,
-        which does not generalise."""
+    def test_notes_when_the_mean_is_unlike_the_median(self):
+        """A negative median with a positive mean.
+
+        Renamed from "flags outlier-driven mean", which framed the normal payoff of an
+        option buyer as a defect: three small losses and one large win **is** the shape a
+        long-options strategy is meant to have. What a reader needs is narrower -- the
+        mean is not a typical trade here -- and that is not a warning.
+        """
         got = R.pnl_distribution(make_trades([-100.0, -100.0, -100.0, 1000.0]), 100_000.0)
-        assert got["driven_by_outliers"]
+        assert got["mean_unlike_median"]
+
+    def test_it_is_quiet_when_they_agree(self):
+        got = R.pnl_distribution(make_trades([100.0, 120.0, 90.0, 400.0]), 100_000.0)
+        assert not got["mean_unlike_median"]
 
     def test_histogram_bins(self):
         hist = R.histogram(make_trades([1.0, 2.0, 3.0, 40.0]), bins=4)

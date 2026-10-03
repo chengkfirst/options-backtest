@@ -118,21 +118,25 @@ class TestBuyAndHold:
     paper**, which is the one thing this file exists not to do -- and it passed.
     """
 
-    def test_one_round_trip_in_the_underlying(self):
-        # Buy 100 shares at 400.00, sell at 420.00, 1.00 commission each way, no
-        # per-contract fees because these are shares.
-        #
-        #   gross = (420.00 - 400.00) x 100           = 2,000.00
-        #   fees  = 1.00 + 1.00                       =     2.00
-        #   net   = 2,000.00 - 2.00                   = 1,998.00
-        #
-        # Worked out here, on paper. Nothing below may be changed to agree with the code;
-        # the code has to agree with this.
-        shares, buy, sell, fee_each = 100, 400.00, 420.00, 1.00
-        gross = (sell - buy) * shares
-        net = gross - fee_each * 2
-        assert gross == pytest.approx(2_000.00)
-        assert net == pytest.approx(1_998.00)
+    #: The round trip, worked on paper. Buy 100 shares at 400.00, sell at 420.00, 1.00
+    #: commission each way and no per-contract fees because these are shares.
+    #:
+    #:     gross = (420.00 - 400.00) x 100 = 2,000.00
+    #:     fees  = 1.00 + 1.00             =     2.00
+    #:     net   = 2,000.00 - 2.00         = 1,998.00
+    #:
+    #: A constant rather than a test. On its own it asserted its own arithmetic and
+    #: called nothing -- which is the very thing this file was written to stop. As a
+    #: constant it is what the test below compares the code against, which is the only
+    #: job it ever had.
+    SHARES, BUY, SELL, FEE_EACH = 100, 400.00, 420.00, 1.00
+    GROSS, NET = 2_000.00, 1_998.00
+
+    def test_the_paper_figures_are_internally_consistent(self):
+        """One line of arithmetic, so a typo in the constants above is caught before it
+        is used as the standard everything else is measured against."""
+        assert (self.SELL - self.BUY) * self.SHARES == pytest.approx(self.GROSS)
+        assert self.GROSS - self.FEE_EACH * 2 == pytest.approx(self.NET)
 
     def test_the_cost_model_agrees_on_the_same_round_trip(self):
         """The same trade through `execute`, which is what the engine calls.
@@ -149,14 +153,16 @@ class TestBuyAndHold:
                                       quantity=1, multiplier=100, costs=STOCK_COSTS)
         sell_price, sell_fees = execute(bid=419.99, ask=420.01, side=Side.SELL,
                                         quantity=1, multiplier=100, costs=STOCK_COSTS)
-        assert buy_price == pytest.approx(400.01)
-        assert sell_price == pytest.approx(419.99)
-        assert buy_fees.total == pytest.approx(1.00)
-        assert sell_fees.total == pytest.approx(1.00)
+        assert buy_price == pytest.approx(self.BUY + 0.01)
+        assert sell_price == pytest.approx(self.SELL - 0.01)
+        assert buy_fees.total == pytest.approx(self.FEE_EACH)
+        assert sell_fees.total == pytest.approx(self.FEE_EACH)
 
-        gross = (sell_price - buy_price) * 100
-        assert gross == pytest.approx(1_998.00)
-        assert gross - buy_fees.total - sell_fees.total == pytest.approx(1_996.00)
+        # Two cents of spread cost against the paper figures, which assumed no spread.
+        gross = (sell_price - buy_price) * self.SHARES
+        assert gross == pytest.approx(self.GROSS - 0.02 * self.SHARES)
+        assert gross - buy_fees.total - sell_fees.total == pytest.approx(
+            self.NET - 0.02 * self.SHARES)
 
     def test_the_engine_accounts_for_a_round_trip_to_the_hand_figure(self):
         """**The stage's criterion as stated**, as closely as this system can state it.
@@ -358,3 +364,136 @@ def _held_to_expiry(signals, right, quantity):
         quantity=quantity,
         sizing=Sizing(method="fixed", contracts=quantity),
     )
+
+
+class TestBlackScholesIdentity:
+    """The only engine-level check in this suite that is not the code confirming itself.
+
+    Every other test compares the engine to the engine: the two engines agree, the
+    invariants hold, the baseline has not moved. All of them pass on a system that has
+    been consistently wrong since the day it was written.
+
+    The Black-Scholes partial differential equation is not. It is a mathematical identity
+    that any correct set of (price, delta, gamma, theta) must satisfy:
+
+        theta + ½ sigma² S² gamma + r S delta - r V = 0
+
+    It is computed here, from the numbers the pricer returns, with no reference to how it
+    computed them. A sign flipped on theta, a greek in the wrong units, a per-day figure
+    where a per-year one belongs, a dividend yield applied the wrong way -- each breaks
+    this and each would otherwise produce prices that look entirely ordinary.
+
+    It is also what pins the **conventions**. The residual is zero only with theta per
+    year; per day it is off by four orders of magnitude. The units are not documented
+    anywhere a caller would see, so this is where they are fixed.
+    """
+
+    CASES = [
+        # spot, strike, years, rate, vol, dividend yield
+        (400.0, 410.0, 0.25, 0.045, 0.22, 0.0),     # out of the money
+        (400.0, 390.0, 0.25, 0.045, 0.22, 0.0),     # in the money
+        (400.0, 400.0, 0.08, 0.045, 0.22, 0.0),     # at the money, short dated
+        (400.0, 400.0, 2.00, 0.045, 0.22, 0.0),     # at the money, long dated
+        (400.0, 360.0, 0.50, 0.045, 0.45, 0.0),     # deep, high volatility
+        (400.0, 410.0, 0.25, 0.000, 0.22, 0.0),     # zero rates
+        (400.0, 410.0, 0.25, 0.045, 0.22, 0.02),    # with a dividend yield
+    ]
+
+    @pytest.mark.parametrize("right", [Right.CALL, Right.PUT])
+    @pytest.mark.parametrize("spot,strike,years,rate,vol,div", CASES)
+    def test_the_pde_holds(self, right, spot, strike, years, rate, vol, div):
+        import numpy as np
+
+        from backtest.data.options.pricing import bs_price, greeks
+
+        value = float(np.asarray(bs_price(spot, strike, years, rate, vol, div, right)))
+        g = {k: float(np.asarray(v))
+             for k, v in greeks(spot, strike, years, rate, vol, div, right).items()}
+
+        # With a continuous dividend yield the carry term is (r - q) S delta, and the
+        # discounting of the stock leg is what the q in d1 already accounts for.
+        residual = (g["theta"]
+                    + 0.5 * vol ** 2 * spot ** 2 * g["gamma"]
+                    + (rate - div) * spot * g["delta"]
+                    - rate * value)
+        assert residual == pytest.approx(0.0, abs=1e-6), (
+            f"{right.value} S={spot} K={strike} T={years}: the PDE leaves {residual:.6f}, "
+            f"so the price and the greeks are not describing the same option"
+        )
+
+    def test_theta_is_per_year_not_per_day(self):
+        """Pinned by the identity above, and stated here because the units appear nowhere
+        a caller would see them.
+
+        A reader who takes theta for a daily decay and divides by nothing overstates the
+        decay by 365x; one who multiplies understates it by the same. The P&L attribution
+        depends on getting this right and would show the error as residual.
+        """
+        import numpy as np
+
+        from backtest.data.options.pricing import bs_price, greeks
+
+        s, k, t, r, vol = 400.0, 400.0, 0.25, 0.045, 0.22
+        g = {kk: float(np.asarray(v))
+             for kk, v in greeks(s, k, t, r, vol, 0.0, Right.CALL).items()}
+        value = float(np.asarray(bs_price(s, k, t, r, vol, 0.0, Right.CALL)))
+
+        # One day on: the price should fall by roughly theta / 365, not by theta.
+        one_day = float(np.asarray(
+            bs_price(s, k, t - 1 / 365, r, vol, 0.0, Right.CALL)))
+        decay = value - one_day
+        assert decay == pytest.approx(-g["theta"] / 365, rel=0.02), (
+            f"a day of decay is {decay:.4f} and theta/365 is {-g['theta'] / 365:.4f}"
+        )
+
+    def test_put_call_parity(self):
+        """The other identity, and it catches what the PDE does not: a put priced by a
+        formula of its own rather than from the call.
+
+            C - P = S e^(-qT) - K e^(-rT)
+        """
+        import math
+
+        import numpy as np
+
+        from backtest.data.options.pricing import bs_price
+
+        s, k, t, r, vol, q = 400.0, 410.0, 0.25, 0.045, 0.22, 0.02
+        call = float(np.asarray(bs_price(s, k, t, r, vol, q, Right.CALL)))
+        put = float(np.asarray(bs_price(s, k, t, r, vol, q, Right.PUT)))
+        parity = s * math.exp(-q * t) - k * math.exp(-r * t)
+        assert call - put == pytest.approx(parity, abs=1e-8)
+
+    def test_the_chain_prices_what_the_formula_says(self, chain, market, config):
+        """And the same again through the chain the engine actually reads.
+
+        The pricer can be right while the chain feeds it the wrong spot, the wrong tenor
+        or the wrong volatility -- in which case every number downstream is wrong and
+        every engine-versus-engine test still passes.
+        """
+        import numpy as np
+
+        from backtest.data.options.pricing import bs_price
+
+        day = next(d for d in market.calendar.sessions
+                   if config.start <= d <= config.end and len(chain.snapshot(d)))
+        snap = chain.snapshot(day)
+        spot = market.spot(day).unwrap()
+        rate = market.risk_free_rate(day)
+
+        checked = 0
+        for _, row in snap.head(12).iterrows():
+            years = (row["expiry"] - day).days / 365.0
+            if years <= 0 or not np.isfinite(row["iv"]):
+                continue
+            right = Right.CALL if row["right"] == "C" else Right.PUT
+            expected = float(np.asarray(
+                bs_price(spot, float(row["strike"]), years, rate, float(row["iv"]),
+                         0.0, right)))
+            mid = (float(row["bid"]) + float(row["ask"])) / 2.0
+            assert mid == pytest.approx(expected, rel=1e-6), (
+                f"{right.value} {row['strike']} expiring {row['expiry']}: the chain's mid "
+                f"is {mid:.4f} and Black-Scholes at its own IV says {expected:.4f}"
+            )
+            checked += 1
+        assert checked >= 5, "too few contracts checked for this to mean anything"

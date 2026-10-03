@@ -230,7 +230,17 @@ class TestComparison:
             {"variant": "underlying", "params": {"fraction": 0.05}},
         ])
         _, why = c.distinguishes()
-        assert "x the most any single form" in why or "covers by changing its own" in why
+        # Both branches have to carry a figure a reader can judge the separation by, so
+        # this asserts a number is there rather than accepting either wording. The
+        # either-or I wrote first passed on a branch that carries no multiple at all.
+        import re
+
+        assert re.search(r"\d", why), f"the verdict carries no figure at all: {why}"
+        assert ("x the most any single form" in why) or ("covers by changing its own"
+                                                         in why)
+        # And the two numbers it compares are both named, so the reader can do the
+        # division themselves rather than trusting the verb.
+        assert why.count(",") >= 1 or why.count(".") >= 1
 
     def test_the_comparison_is_labelled_mixed_not_option_side(self):
         """A premium form against an underlying form is the one comparison a synthetic

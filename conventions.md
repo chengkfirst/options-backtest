@@ -133,6 +133,38 @@ convention** — pretending they are guarded is more dangerous than admitting th
 
 ---
 
+## The timing rule, and how it differs from the document
+
+**T's close decides, T+1's close fills.** A signal is computed from the bar that has
+closed; the order is filled on the next session's close; the contract chosen is the
+execution day's, while everything the decision reads is cut at the decision day.
+
+The document asks for something finer: a signal at an intraday snapshot (15:45 ET) and a
+fill at a later quote (15:50), with the decision latency between them. It calls filling on
+the same quote the signal was computed from "a subtle form of look-ahead", and the daily
+rule here avoids that -- a whole session apart is more conservative than five minutes, not
+less.
+
+What it costs, stated rather than left to be discovered:
+
+- **a realised holding is `hold_days` plus the lag.** A rule written as "hold 20 days"
+  holds 21. The cap is tested on the close and the fill is the next one. Anyone computing
+  theta over the stated window is a day out, and the configuration does not say so.
+- **no intraday stop can be modelled.** A stop is tested on the close and filled on the
+  next, so a trade that fell through the stop and recovered within a session is recorded
+  as having been stopped out at a price it reached the following day. Whether that is
+  conservative depends on the path and is not knowable from daily data.
+- **the gap through a stop is real and is not what the sizer assumed.** `risk_pct` divides
+  the risk budget by the stop distance, which assumes the loss equals that distance. With
+  a close-to-close fill it routinely exceeds it, so the position taken is larger than the
+  budget intended. Tested in `TestFirstTrigger`.
+
+Changing this needs intraday option quotes, which is a data problem rather than a code
+one. Recorded here because the difference is invisible in a result: a backtest run this
+way looks exactly like one run the document's way.
+
+---
+
 ## One known deviation from the architecture document
 
 The document's daily order is: corporate actions → market data → signals → portfolio →

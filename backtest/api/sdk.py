@@ -544,9 +544,11 @@ class Result:
             f"worst {d['max_loss']:,.0f}",
             f"  skew {d['skew']:.2f} | kurtosis {d['kurtosis']:.2f}",
         ]
-        if d["driven_by_outliers"]:
-            lines.append("  !! The median and the mean have opposite signs: a few "
-                         "extremes drive the average, which does not generalise")
+        if d["mean_unlike_median"]:
+            lines.append("  the median and the mean have opposite signs, which is the "
+                         "ordinary shape of a long-options book")
+            lines.append("  (a low win rate with a long right tail). The mean is not a "
+                         "typical trade here; read both.")
 
         lines += ["", "— by exit reason —"]
         for reason, row in self.by_exit_reason().iterrows():

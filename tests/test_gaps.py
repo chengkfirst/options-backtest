@@ -294,3 +294,83 @@ class TestNoTradeOutlivesTheRange:
         not fire."""
         result = self._run("trade_table")
         assert result.raw.events.counts().get("range_truncated", 0) >= 1
+
+
+class TestTheAdapterAcceptsWhatVendorsActuallySend:
+    """A file that loads on one machine and fails on another is worse than one that never
+    loads: the failure looks like a data problem rather than a parsing one."""
+
+    @staticmethod
+    def _frame(rights):
+        import pandas as pd
+
+        return pd.DataFrame({
+            "right": rights, "asof": ["2023-01-03"] * 2, "symbol": ["QQQ"] * 2,
+            "expiry": ["2023-03-17"] * 2, "strike": [400.0, 400.0],
+            "bid": [5.0, 5.0], "ask": [5.2, 5.2], "underlying_price": [400.0, 400.0],
+        })
+
+    @pytest.mark.parametrize("rights", [
+        ["C", "P"], ["call", "put"], ["Call", "PUT"],
+        [1, -1],            # integers
+        [1.0, -1.0],        # the same column after parquet makes it float
+        ["1.0", "-1.0"],    # and after that float is stringified
+        [1, 0],             # the other integer convention
+    ])
+    def test_every_spelling_a_vendor_uses(self, rights):
+        from backtest.data.options.adapters import normalise
+
+        assert list(normalise(self._frame(rights))["right"]) in (["C", "P"], ["C", "P"])
+
+    def test_an_unrecognised_spelling_raises_with_what_is_accepted(self):
+        """Not a silent drop: a right nobody can parse means every row is a contract of
+        unknown kind, and guessing would price half of them backwards."""
+        from backtest.core.errors import DataQualityError
+        from backtest.data.options.adapters import normalise
+
+        with pytest.raises(DataQualityError, match="Accepted spellings"):
+            normalise(self._frame(["CALL_OPTION", "PUT_OPTION"]))
+
+
+class TestDecayOverAWeekend:
+    """Three calendar days of decay pass over a weekend and one trading day elapses.
+
+    A system that decays by trading day understates a Friday-to-Monday hold by two days of
+    theta, every week, on every position -- which compounds into a figure nobody would
+    question because it is smooth.
+    """
+
+    def test_the_chain_prices_three_days_of_decay_across_a_weekend(self, chain, market):
+        import numpy as np
+
+        fridays = [d for d in market.calendar.sessions if d.weekday() == 4]
+        friday = next(f for f in fridays if len(chain.snapshot(f)))
+        monday = next(d for d in market.calendar.sessions if d > friday)
+        assert (monday - friday).days == 3, "not a clean weekend"
+
+        fri = chain.snapshot(friday)
+        mon = chain.snapshot(monday)
+        key = ["expiry", "strike", "right"]
+        merged = fri.merge(mon, on=key, suffixes=("_fri", "_mon"))
+        assert len(merged), "no contract quoted on both days"
+
+        # Time to expiry has to fall by three calendar days, not one trading day.
+        dte_fri = (merged["expiry"] - friday).dt.days if hasattr(
+            merged["expiry"], "dt") else merged["expiry"].map(lambda e: (e - friday).days)
+        dte_mon = merged["expiry"].map(lambda e: (e - monday).days)
+        assert (dte_fri - dte_mon == 3).all(), (
+            "the chain advanced time by something other than three calendar days over a "
+            "weekend"
+        )
+
+    def test_a_held_position_is_marked_over_the_weekend(self):
+        """The engine must mark on Monday against Monday's quote, not carry Friday's."""
+        result = run(**(BASE | {"start": "2022-06-01", "end": "2023-12-31",
+                                "exit": {"hold_days": 30, "dte_floor": 7}}))
+        equity = result.raw.equity
+        mondays = [d for d in equity.index if d.weekday() == 0]
+        assert mondays, "no Monday in the equity curve"
+        # Equity moves on Mondays: a book carried unchanged over the weekend would show a
+        # flat step every week.
+        changes = equity.loc[mondays, "equity_mid"].diff().abs()
+        assert (changes.dropna() > 0).any(), "the book never moved on a Monday"

@@ -610,6 +610,7 @@ class EventDrivenEngine:
         if target is None or target > self.config.end:
             return []
         out: list[Intent] = []
+        skipped = 0
         for pos in list(ledger.positions):
             if open_trades.get(pos.trade_id) is None or \
                     self._already_queued(queue, pos.contract):
@@ -623,6 +624,7 @@ class EventDrivenEngine:
                 quantity = pos.abs_quantity - int(pos.abs_quantity * self._risk.keep)
                 kind = Action.REDUCE
                 if quantity <= 0 or quantity >= pos.abs_quantity:
+                    skipped += 1
                     continue
             out.append(Intent(
                 contract=pos.contract,
@@ -636,6 +638,16 @@ class EventDrivenEngine:
             self.events.record(EventKind.CANDIDATE_DROPPED, day,
                                f"book-wide risk rule: {self._risk.describe()} "
                                f"({len(out)} positions)")
+        elif skipped:
+            # **The rule fired and did nothing, and that has to be visible.** Every held
+            # position was too small to reduce without closing it, so the scale-down is
+            # correctly a no-op -- and a reader seeing no reduction cannot otherwise tell
+            # that from a rule which never triggered. The two call for opposite responses:
+            # one means the brake is working, the other means it is not configured.
+            self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                               f"book-wide risk rule: {self._risk.describe()}, but all "
+                               f"{skipped} position(s) are too small to reduce without "
+                               f"closing them, so nothing was cut")
         return out
 
     def _exit_reasons(self, pos: Position, trade: OpenTrade, quotes, day: date, strategy: Strategy):
