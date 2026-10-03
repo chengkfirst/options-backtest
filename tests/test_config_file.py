@@ -37,6 +37,7 @@ def result():
 
 
 class TestItReproduces:
+    @pytest.mark.req("0.5.file")
     def test_a_plain_run_round_trips(self, result, tmp_path):
         check_round_trip(result, tmp_path / "plain.yaml")
 
@@ -191,6 +192,7 @@ class TestTheFile:
 
 
 class TestLoading:
+    @pytest.mark.req("0.5.unknown")
     def test_an_unknown_key_raises(self, tmp_path):
         """As the document asks. A misspelled key that was ignored would run something
         other than what the file says, while the file looked right."""

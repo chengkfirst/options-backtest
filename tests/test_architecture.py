@@ -45,6 +45,7 @@ def test_detects_pricing_leak(tmp_path, monkeypatch):
 DATA_MODULES = ("backtest/core/types", "backtest/data", "backtest/accounting")
 
 
+@pytest.mark.req("2.3.boundary")
 def test_no_bare_optional_floats_across_module_boundaries():
     """Scalars crossing module boundaries express absence with Maybe, never a bare
     `float | None`.
@@ -94,6 +95,7 @@ def test_no_bare_optional_floats_across_module_boundaries():
     assert offenders == [], "use Maybe[float] instead:\n" + "\n".join(offenders)
 
 
+@pytest.mark.req("0.4.regression")
 def test_regression_baseline_unchanged():
     """The baseline comparison: an unintended change in results must be caught, never
     pass silently."""

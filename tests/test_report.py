@@ -80,6 +80,7 @@ class TestDistribution:
         got = R.pnl_distribution(make_trades([100.0, -50.0]), 10_000.0)
         assert got["quantiles_pct"]["q50"] == pytest.approx(got["quantiles_abs"]["q50"] / 10_000.0)
 
+    @pytest.mark.req("6.1.metrics")
     def test_notes_when_the_mean_is_unlike_the_median(self):
         """A negative median with a positive mean.
 
@@ -91,6 +92,7 @@ class TestDistribution:
         got = R.pnl_distribution(make_trades([-100.0, -100.0, -100.0, 1000.0]), 100_000.0)
         assert got["mean_unlike_median"]
 
+    @pytest.mark.req("6.4.daily_pnl")
     def test_it_is_quiet_when_they_agree(self):
         got = R.pnl_distribution(make_trades([100.0, 120.0, 90.0, 400.0]), 100_000.0)
         assert not got["mean_unlike_median"]

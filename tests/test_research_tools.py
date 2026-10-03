@@ -98,6 +98,7 @@ class TestCounterfactualExits:
         assert got.scored == 0 and got.censored == 1
         assert "nothing could be scored" in got.verdict()
 
+    @pytest.mark.req("6.4.in_sample")
     def test_the_stop_fires_when_the_path_reaches_it(self):
         """Renamed from "the stop wins a same-day tie", which it never tested.
 
@@ -165,6 +166,7 @@ class TestSplits:
         folds = walk_forward(DAYS, train=200, test=50)
         assert folds[-1].train[0] > folds[0].train[0]
 
+    @pytest.mark.req("6.4.intervals")
     def test_a_period_too_short_is_refused_not_truncated(self):
         """A partial fold is scored on less data and would quietly carry more weight."""
         with pytest.raises(ValueError, match="cannot hold"):
@@ -253,6 +255,7 @@ class TestDeflatedSharpe:
         with pytest.raises(ValueError, match="annualised figure"):
             deflated_sharpe(1.8, trials=10, periods=504)
 
+    @pytest.mark.req("6.4.trials")
     def test_positive_skew_raises_the_probability(self):
         """Sharpe assumes near-normal returns and a long-options book is not.
 
@@ -321,6 +324,7 @@ class TestPlateau:
         grid = self._grid([[0, 0, 0], [0, 1000, 0], [0, 0, 0]])
         assert "spike" in plateau(grid).verdict()
 
+    @pytest.mark.req("R4.method_first")
     def test_a_plateau_is_called_a_plateau(self):
         from backtest.research.sweep import plateau
 

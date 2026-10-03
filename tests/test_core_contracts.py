@@ -19,6 +19,7 @@ from backtest.signals.lifecycle import RUNS_IN, SCOPE, SETTINGS, State, describe
 
 
 class TestActionVocabulary:
+    @pytest.mark.req("2.1.vocabulary")
     def test_every_action_declares_whether_it_is_built(self):
         """An action absent from BUILT would pass require_built by accident."""
         assert set(BUILT) == set(Action), \

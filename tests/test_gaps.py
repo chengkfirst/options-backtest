@@ -93,6 +93,7 @@ class TestTheFingerprintCoversCosts:
     def _id(self, **over):
         return run(**(BASE | over)).manifest()["run_id"]
 
+    @pytest.mark.req("R1.never_optimised")
     def test_lambda_changes_it(self):
         assert self._id(costs=CostConfig(adverse_fraction=1.0)) != \
                self._id(costs=CostConfig(adverse_fraction=1.5))
@@ -117,6 +118,7 @@ class TestShadowTrackingIsPurelyObservational:
     shadowed run is the only one anybody looks at.
     """
 
+    @pytest.mark.req("5.2.shadow")
     def test_the_trades_are_identical(self):
         off = run(**BASE, shadow_days=0)
         on = run(**BASE, shadow_days=20)
@@ -160,6 +162,7 @@ class TestHolidayExpiry:
         )
         assert date(2022, 4, 15) not in expiries
 
+    @pytest.mark.req("0.3.sessions")
     def test_every_expiry_is_a_trading_session(self, market):
         """The general form. A contract expiring on a day the market is shut cannot
         settle, and the engine would mark it against a price that does not exist."""
@@ -273,6 +276,7 @@ class TestNoTradeOutlivesTheRange:
                    sizing={"method": "fixed"}, quantity=1)
 
     @pytest.mark.parametrize("engine", ["trade_table", "event_driven"])
+    @pytest.mark.req("S.range")
     def test_every_exit_falls_inside_the_range(self, engine):
         result = self._run(engine)
         end = result.raw.config.end
@@ -389,6 +393,7 @@ class TestAZeroBidContract:
     COSTS = CostConfig(max_relative_spread=0.2)
 
     @pytest.mark.parametrize("bid,ask", [(0.0, 0.05), (0.0, 1.00), (0.01, 0.05)])
+    @pytest.mark.req("4.2.reject")
     def test_an_unbuyable_contract_is_not_tradable(self, bid, ask):
         from backtest.execution.costs import check_tradable
 

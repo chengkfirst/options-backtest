@@ -65,6 +65,7 @@ class TestAttribution:
         assert result.unusable == 5
         assert len(result.per_trade) == len(trades) - 5
 
+    @pytest.mark.req("5.3.attribution")
     def test_flags_high_residual(self):
         """A large residual means the approximation failed, and has to be flagged
         rather than passed off as a successful attribution."""

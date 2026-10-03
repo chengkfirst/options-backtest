@@ -92,6 +92,7 @@ class TestNoLookahead:
     A code review misses look-ahead; a test like this does not.
     """
 
+    @pytest.mark.req("1.rule4")
     def test_truncated_recomputation_matches(self, market, signals):
         sessions = market.sessions()
         probes = sessions[:: max(1, len(sessions) // PROBE_COUNT)]

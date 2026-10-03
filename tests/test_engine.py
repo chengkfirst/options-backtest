@@ -99,6 +99,7 @@ def scripted(market, config):
 
 
 class TestExecutionLag:
+    @pytest.mark.req("4.2.latency")
     def test_entry_is_next_session_after_signal(self, market, chain, signals, config):
         """The intent forms at T's close and executes at T+1's. Using T's close for
         both the decision and the fill is look-ahead."""

@@ -38,6 +38,7 @@ class TestInvariants:
         check_all(when=DAY, cash=1_000.0, equity=1_500.0, position_value=500.0,
                   stock_value=0.0, contracts=[])
 
+    @pytest.mark.req("0.4.cash")
     def test_negative_cash_is_caught_in_a_cash_account(self):
         """A fill paid for with money the account did not have."""
         with pytest.raises(InvariantError, match="cash is negative"):
@@ -46,12 +47,14 @@ class TestInvariants:
     def test_negative_cash_is_allowed_on_margin(self):
         cash_not_negative(-5_000.0, when=DAY, margin=True)
 
+    @pytest.mark.req("0.4.equity")
     def test_equity_that_does_not_balance_is_caught(self):
         """Catches a multiplier changed without revaluing the position."""
         with pytest.raises(InvariantError, match="does not balance"):
             equity_balances(equity=1_500.0, cash=1_000.0, position_value=400.0,
                             stock_value=0.0, when=DAY)
 
+    @pytest.mark.req("0.4.pnl")
     def test_daily_pnl_that_does_not_match_the_equity_change_is_caught(self):
         """Catches P&L double-counted or a fee taken from cash and not from P&L."""
         with pytest.raises(InvariantError, match="does not match the equity change"):
@@ -63,11 +66,13 @@ class TestInvariants:
         daily_pnl_balances(equity_today=11_000.0, equity_yesterday=1_000.0,
                            external_flows=10_000.0, pnl=0.0, when=DAY)
 
+    @pytest.mark.req("0.4.position")
     def test_a_position_that_does_not_match_its_fills_is_caught(self):
         """Catches a position written by something other than the ledger."""
         with pytest.raises(InvariantError, match="without a fill"):
             position_matches_fills({"QQQ_C": 2}, {"QQQ_C": 1}, when=DAY)
 
+    @pytest.mark.req("0.4.expired")
     def test_an_expired_position_still_held_is_caught(self):
         """Catches an expiry the settlement step missed. Left open, it keeps being marked
         against a quote that no longer exists."""
@@ -173,6 +178,7 @@ class TestRunId:
                       execution={**self.EXEC, **over.pop("execution", {})},
                       commit="abc123", **over)
 
+    @pytest.mark.req("0.4.reproducible")
     def test_the_same_configuration_hashes_the_same(self):
         assert self._id() == self._id()
 
@@ -231,6 +237,7 @@ class TestDataView:
         return DataView.at(day or market.sessions()[60], market=market,
                            signals=signals, chain=chain)
 
+    @pytest.mark.req("0.3.raises")
     def test_reading_the_future_raises(self, market, signals, chain):
         """The whole point. Before this, a read past the decision day succeeded."""
         v = self._view(market, signals, chain)
@@ -298,6 +305,7 @@ class TestSelectorGetsACutView:
         return chooser
 
     @pytest.mark.parametrize("engine", ["trade_table", "event_driven"])
+    @pytest.mark.req("0.4.lookahead")
     def test_the_selector_gets_a_dataview(self, engine):
         from backtest.api.sdk import run
 
@@ -342,6 +350,7 @@ class TestBaselines:
             random_entry(lambda dates: 0.0, n_entries=1, sessions=[DAY], draws=1,
                          strategy_pnl=0.0)
 
+    @pytest.mark.req("6.1.baselines")
     def test_the_delta_equivalent_baseline_is_flagged_on_synthetic_data(self):
         """One side is priced by the chain and the other is not, so a synthetic chain
         biases the comparison itself."""

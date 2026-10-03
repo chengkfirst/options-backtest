@@ -156,6 +156,7 @@ class TestExportConfig:
     ran the export through the loader -- which is what this does.
     """
 
+    @pytest.mark.req("7.1.store")
     def test_an_exported_run_replays_to_the_same_fingerprint(self, store, tmp_path):
         from backtest import run_from
 

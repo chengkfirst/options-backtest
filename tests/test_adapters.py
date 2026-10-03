@@ -107,6 +107,7 @@ class TestChecker:
         r = check_frame(make_vendor())
         assert r.ok and any("volume" in w for w in r.warnings)
 
+    @pytest.mark.req("1.quality")
     def test_duplicate_key_is_fatal(self):
         frame = make_vendor()
         r = check_frame(pd.concat([frame, frame.iloc[:1]], ignore_index=True))

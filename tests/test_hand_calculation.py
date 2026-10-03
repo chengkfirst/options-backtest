@@ -48,11 +48,13 @@ MULTIPLIER = 100
 class TestFillPrice:
     """The document's 4.1: fill = mid + lambda x (ask - mid), lambda >= 1."""
 
+    @pytest.mark.req("4.1.lambda")
     def test_a_buy_at_lambda_one_pays_the_ask(self):
         # bid 4.80, ask 5.20 -> mid 5.00, half-spread 0.20.
         # buy at lambda 1:  5.00 + 1.0 x 0.20 = 5.20, which is the ask.
         assert fill_price(4.80, 5.20, Side.BUY, COSTS) == pytest.approx(5.20)
 
+    @pytest.mark.req("0.4.fills")
     def test_a_sell_at_lambda_one_receives_the_bid(self):
         # sell at lambda 1:  5.00 - 1.0 x 0.20 = 4.80, which is the bid.
         assert fill_price(4.80, 5.20, Side.SELL, COSTS) == pytest.approx(4.80)
@@ -85,6 +87,7 @@ class TestFees:
         assert fees.commission == pytest.approx(1.00)
         assert fees.total == pytest.approx(1.05)
 
+    @pytest.mark.req("4.2.fees")
     def test_the_parts_sum_to_the_total(self):
         """The identity the trade-record invariant also checks, at the other end."""
         fees = order_fees(7, COSTS, MULTIPLIER)
@@ -239,6 +242,7 @@ class TestOneLongCallToExpiry:
     STRIKE = 400.0
     EXPIRY = date(2023, 3, 17)
 
+    @pytest.mark.req("4.2.settle")
     def test_in_the_money_at_expiry(self):
         # Buy 2 contracts of the 400 call at bid 4.80 / ask 5.20, lambda = 1.
         #

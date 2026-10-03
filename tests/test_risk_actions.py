@@ -44,6 +44,7 @@ TIGHT = SCALE
 
 
 class TestVocabulary:
+    @pytest.mark.req("3.1.actions")
     def test_every_action_says_whether_it_is_built(self):
         assert set(BUILT) == set(RiskAction)
 
@@ -113,6 +114,7 @@ class TestItActsOnTheBook:
     def liquidated(self):
         return run(**BASE, risk=LIQUIDATE)
 
+    @pytest.mark.req("3.1.acts")
     def test_scaling_down_reduces_positions_that_are_open(self, braked):
         actions = braked.raw.actions_frame
         cut = actions[(actions["action"] == "reduce") &

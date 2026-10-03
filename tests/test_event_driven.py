@@ -75,6 +75,7 @@ class TestDualEngine:
         table, driven = both
         assert len(table.records) == len(driven.records) > 0
 
+    @pytest.mark.req("5.1.two_engines")
     def test_row_for_row_identical(self, both):
         """Row for row. A difference means one side computed wrongly, or the semantics
         diverged quietly."""
@@ -109,12 +110,14 @@ class TestDecisionLog:
     component cannot be built on top.
     """
 
+    @pytest.mark.req("5.2.tradebook")
     def test_one_action_per_fill(self, both):
         _, driven = both
         # Every closed trade had an opening fill and a closing fill. Expiry settles
         # without an order, so the count is at least the open fills.
         assert len(driven.actions) >= len(driven.records)
 
+    @pytest.mark.req("2.1.component_id")
     def test_every_action_names_its_slot(self, both):
         """An action credited to a generic "exit" makes attribution by component
         useless, which is the only reason the field exists."""
@@ -162,6 +165,7 @@ class TestDecisionLog:
                 checked += 1
         assert checked > 0
 
+    @pytest.mark.req("0.6.trace")
     def test_one_trade_can_be_traced(self, both):
         _, driven = both
         first = driven.records[0].trade_id
@@ -201,6 +205,7 @@ class TestPortfolioState:
         hole in the exit paths."""
         assert len(result.ledger) == 0
 
+    @pytest.mark.req("S.context")
     def test_every_trade_has_both_contexts(self, result):
         for record in result.records[:20]:
             assert "iv" in record.entry_context and "iv" in record.exit_context

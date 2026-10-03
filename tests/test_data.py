@@ -305,6 +305,7 @@ class TestAvailability:
         frame.to_parquet(path)
         return FileChainSource(path, market, config)
 
+    @pytest.mark.req("1.rule1")
     def test_a_row_that_arrived_late_is_withheld(self, tmp_path, market, config):
         source = self._source(self._frame(), tmp_path, market, config)
         visible = source.snapshot(date(2023, 1, 5))
@@ -337,6 +338,7 @@ class TestAvailability:
                 f"the late row became tradable on {tuesday} when asked on {asked_on}"
             )
 
+    @pytest.mark.req("0.3.cut")
     def test_a_late_row_is_good_history_once_it_has_arrived(self, tmp_path, market,
                                                             config):
         """The other question the same method answers: what is known **now** about

@@ -59,6 +59,7 @@ class TestRegistry:
             register(Variant(slot="nonsense", name="x", version=1, describes="",
                              params=(), decide=lambda ctx: True))
 
+    @pytest.mark.req("0.2.registry")
     def test_re_registering_with_different_logic_raises(self):
         """Two runs would otherwise carry the same reference and look like the same run."""
         def first(ctx, **p):
@@ -79,6 +80,7 @@ class TestRegistry:
 
 
 class TestParameters:
+    @pytest.mark.req("0.2.schema")
     def test_a_missing_parameter_is_refused_not_defaulted(self):
         """A component parameter is a strategy choice, so the platform does not pick one."""
         with pytest.raises(StartupError, match="needs fraction"):
@@ -94,6 +96,7 @@ class TestParameters:
         with pytest.raises(StartupError, match="at most 1"):
             get("stop_loss", "premium").bind({"fraction": 5.0})
 
+    @pytest.mark.req("R3.no_defaults")
     def test_an_optional_parameter_means_no_rule_not_a_chosen_value(self):
         """Optional is allowed; a substituted number is not.
 
@@ -189,6 +192,7 @@ class TestFingerprint:
     def _id(self, components):
         return _run(components=components).manifest()["run_id"]
 
+    @pytest.mark.req("0.5.hash")
     def test_two_forms_of_one_slot_do_not_hash_alike(self):
         assert self._id({"stop_loss": {"variant": "premium",
                                        "params": {"fraction": 0.4}}}) != \
@@ -221,6 +225,7 @@ class TestComparison:
         with pytest.raises(StartupError, match="needs the forms to run"):
             compare(r.raw.strategy, "stop_loss", [], lambda s: (0.0, 0))
 
+    @pytest.mark.req("6.3.variant_swap")
     def test_a_comparison_states_what_it_cannot_settle(self):
         from backtest.research.forms import report
 
