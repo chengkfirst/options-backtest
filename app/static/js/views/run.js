@@ -176,7 +176,10 @@ function assumptions(){
          + "with no skew, so option-side conclusions describe the formula, not the market"
        : "where the option prices came from"],
     ["code", m.code || "—",
-     "the commit this ran on. A run cannot be reproduced without it"],
+     String(m.code || "").includes("+dirty")
+       ? "the commit this ran on, plus uncommitted changes. '+dirty' means the named "
+         + "commit does not contain the code that ran, so this run cannot be reproduced"
+       : "the commit this ran on. A run cannot be reproduced without it"],
     ["result id", m.run_id || "—",
      "the hash of everything that determines this result — config, code and data. Two "
      + "runs sharing it are the same run; two differing in any input cannot share it"],
@@ -238,6 +241,22 @@ function limitationItems(){
     if(ABOUT_THE_EVIDENCE.has(found.kind))
       out.push({level: found.severity === "high" ? "bad" : "warn",
                 short: found.headline, detail: found.detail});
+
+  // **Uncommitted code.** The manifest names a commit, which reads as a promise that the
+  // run can be had again; with a dirty tree that promise is false, because the commit it
+  // names does not contain the code that ran and nothing records the difference. It is
+  // the strongest limitation a run can carry — not "the numbers are shaky" but "these
+  // numbers cannot be obtained again" — and the page showed the marker without a word
+  // about what it meant, which is how a reader concludes the engine is random.
+  const code = String(RUN.manifest?.code || "");
+  if(code.includes("+dirty"))
+    out.push({level: "bad", short: "this ran on uncommitted code",
+      detail: `The run records **${code}**: the commit named there does not contain the `
+            + `code that produced these numbers, and the difference is written down `
+            + `nowhere. **This run cannot be reproduced** — re-running the same `
+            + `configuration later will run different code and may give a different `
+            + `answer, with nothing to say why. Commit before a run whose result is `
+            + `meant to be kept.`});
 
   const guards = RUN.manifest?.guards || {};
   if(guards.state && guards.state !== "clean")
