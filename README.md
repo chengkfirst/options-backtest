@@ -247,8 +247,33 @@ r.scenarios()        # historical scenario replay
 r.excursion()        # the MFE / MAE distribution, with **censoring detection**
 r.equity_metrics()   # return, drawdown, Sharpe, capital used
 r.events             # run events: selection failures, untradable, deferrals, dropped candidates
+r.why()              # why each fill happened: order -> target -> signal -> component
 r.manifest()         # the run_id, the commit, the data version, the config, provenance
 ```
+
+`r.why()` is the one worth knowing about. Every fill is followed back to the slot that
+asked for it, through the order it came from and the target that produced the order, with
+the values each step saw — and **it prints the gaps**. A chain that stops early because a
+link was never set reads exactly like a complete one, so each trace says which hops it
+found. A run where no fill can be explained produces the same trade table as one where
+every fill can. Pass a `trade_id` for one trade instead of all of them.
+
+
+## How much of this is the cost assumption
+
+```python
+# skip (three full backtests)
+print(r.realism_test().text(synthetic=True))
+```
+
+λ — how far from the mid an order actually fills — is the assumption results move most on
+and the least observable one in the model: the fill a strategy would have got is the one
+fact a backtest cannot have. The default is 1.0, the far side of the quote, and the run
+at 0.5 is a **sensitivity**, not a result.
+
+The tool refuses a sweep that leaves 1.0 out, and names no best fraction. A sweep of 0.3,
+0.5 and 0.7 is a search for a figure that makes the strategy work, and it is what somebody
+rescuing a result would write.
 
 ## Before refining anything, run the baselines
 
@@ -348,10 +373,11 @@ one.
 
 ```
 backtest/
-  core/         maybe.py errors.py types.py config.py clock.py
-                actions.py  run_log.py  slots.py
-                                        [absent: events.py component.py registry.py
-                                                 dataview.py invariants.py]
+  core/         maybe.py errors.py types.py config.py clock.py actions.py
+                run_log.py slots.py events.py component.py dataview.py
+                invariants.py run_id.py
+                                        [absent: registry.py — the variant registry
+                                                 lives in component.py]
   data/         ingest.py validate (in underlying.py / options/chain.py) store.py
                 market.py multi_asset.py pipeline.py underlying.py
                                         [absent: pit.py universe.py features/]
@@ -359,15 +385,16 @@ backtest/
                                         [absent: contracts.py quotes.py rates.py
                                                  surface.py]
   signals/      lifecycle.py contracts.py registry.py indicators.py strategy.py
-                review.py plan.py
-    setup/      regime.py                           (slot 1)
-    entry/      expression.py                       (slot 2)
-                                        [absent: take_profit/ stop_loss/ headwind/
-                                                 hedge/ rolls/ universe/ filters/
+                review.py plan.py exit_context.py
+                take_profit/ stop_loss/                    (slots 4 and 5)
+                                        [absent: hedge/ rolls/ universe/ filters/
                                                  combiner.py]
+    setup/      regime.py                                   (slot 1)
+    entry/      expression.py                               (slot 2)
   portfolio/    positioning.py (slot 6)  scenarios.py  constraints.py
+                risk_rules/                                 (slot 7, the headwind)
                                         [absent: rebalance.py optimizers/
-                                                 risk_models/ risk_rules/ hedges/]
+                                                 risk_models/ hedges/]
   execution/    costs.py
                                         [absent: orders.py market_rules/ fill_models/
                                                  slippage/ exercise.py sim_broker.py]
@@ -378,14 +405,21 @@ backtest/
                                                  corp_actions.py expiry.py pnl.py
                                                  snapshots.py — all inside ledger.py]
   research/     metrics.py sweep.py positioning.py excursion.py events.py
-                investor.py tradeoff.py anomaly.py
-                                        [absent: tracker.py validation/ baselines.py
-                                                 ablation.py counterfactual.py reports/]
-  api/          sdk.py                   [absent: cli.py rest/ jobs/]
+                investor.py tradeoff.py anomaly.py tracker.py validation/
+                baselines.py ablation.py counterfactual.py delay.py realism.py
+                holdout.py boundary.py forms.py
+                                        [absent: reports/]
+  api/          sdk.py config_file.py    [absent: cli.py rest/ jobs/]
 app/            server.py store.py static/        (the plan's Layer 7 web UI)
 tools/          the guards and the regression baseline
                                         [absent: live/ — no live path]
 ```
+
+Two of the brackets moved rather than shrank. `take_profit/` and `stop_loss/` sat under
+`entry/`, where the indentation reads as "missing from entry" and they are siblings of it;
+`risk_rules/` was listed absent from `portfolio/` after it was built. A bracket whose
+indentation does not say which directory it belongs to cannot be checked, which is half of
+why `tools/check_docs.py` exists.
 
 The shape of the modules that do exist:
 

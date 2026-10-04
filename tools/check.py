@@ -54,6 +54,7 @@ GUARDS: tuple[tuple[str, list[str], bool], ...] = (
     ("wiring",       [sys.executable, "tools/check_wiring.py"], False),
     ("baseline",     [sys.executable, "-m", "tools.baseline", "check"], False),
     ("test suite",   [sys.executable, "-m", "pytest", "tests", "-q"], True),
+    ("doc claims",   [sys.executable, "tools/check_doc_claims.py"], False),
     ("doc examples", [sys.executable, "tools/check_docs.py"], True),
 )
 
