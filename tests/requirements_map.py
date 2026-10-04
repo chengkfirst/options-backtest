@@ -276,14 +276,8 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("4.2.early_exercise", "4.2",
                 "Early exercise before an ex-dividend date, and of a deep in-the-money "
                 "put while rates are positive",
-                "a position being held through a date where exercising it was worth more",
-                not_built="the chain **flags** where the European price is wrong -- both "
-                          "the call before a dividend and the put against the carry on "
-                          "the strike -- and nothing acts on the flag. Acting on it needs "
-                          "an American pricing model to say what the position is worth "
-                          "unexercised, which this does not have; a rule that exercised "
-                          "on the flag alone would be exercising on the failure of the "
-                          "European approximation rather than on a comparison"),
+                "a position held through a day where exercising it was worth more, or "
+                "one exercised on the flag alone rather than on a comparison"),
     Requirement("4.2.reject", "4.2",
                 "Reject orders where the spread or open interest fails the limit, and "
                 "log every rejection",

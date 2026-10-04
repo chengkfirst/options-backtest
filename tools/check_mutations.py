@@ -277,6 +277,46 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_adapters.py::TestChecker",),
     ),
     Mutation(
+        # Reading the root off the tree gives the max of holding and exercising, so
+        # comparing the intrinsic with it is comparing it with itself.
+        "the hold value is the step-1 nodes, not the root",
+        "backtest/data/options/american.py",
+        "    hold = discount * (p * values[0] + (1 - p) * values[1])",
+        "    hold = values[0]",
+        ("tests/test_american.py::TestTheImpossibilities",
+         "tests/test_american.py::TestWhatTheoryRequires"),
+    ),
+    Mutation(
+        "an American value is the greater of holding and exercising",
+        "backtest/data/options/american.py",
+        "        american=max(hold, intrinsic),",
+        "        american=hold,",
+        ("tests/test_american.py::TestWhatTheoryRequires",),
+    ),
+    Mutation(
+        "a node takes the greater of holding and exercising",
+        "backtest/data/options/american.py",
+        "            values[i] = max(held, _intrinsic(node_spot, strike, right))",
+        "            values[i] = held",
+        ("tests/test_american.py::TestWhatTheoryRequires",),
+    ),
+    Mutation(
+        # The flag's job is to over-select. A tree run on every position every session
+        # would be minutes rather than seconds.
+        "the flag screens before the tree is built",
+        "backtest/engine/loop.py",
+        '        if "early_exercise_value" not in str(row.get("quality_flags", "")):',
+        "        if False:",
+        ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
+    ),
+    Mutation(
+        "the tree can overrule the flag",
+        "backtest/engine/loop.py",
+        "        if not verdict.exercise_now:",
+        "        if False:",
+        ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
+    ),
+    Mutation(
         "the scenario limit is read before an entry is placed",
         "backtest/engine/loop.py",
         "        if self.scenario_limit is not None:",

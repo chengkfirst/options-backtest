@@ -52,6 +52,7 @@ class ExitReason(str, Enum):
     TAKE_PROFIT = "take_profit"
     DTE_FLOOR = "dte_floor"
     TIME_EXIT = "time_exit"
+    EARLY_EXERCISE = "early_exercise"
     EXPIRY_ITM = "expiry_itm"
     EXPIRY_OTM = "expiry_otm"
 
@@ -68,6 +69,11 @@ EXIT_PRIORITY: tuple[ExitReason, ...] = (
     ExitReason.TAKE_PROFIT,
     ExitReason.DTE_FLOOR,
     ExitReason.TIME_EXIT,
+    # Early exercise sits with the expiries and above them, because it **is** a
+    # settlement rather than an order: by the time a tree says the intrinsic is worth
+    # more than holding, the position is being given up for its intrinsic either way.
+    # It outranks an expiry for the ordinary reason -- it happens first.
+    ExitReason.EARLY_EXERCISE,
     ExitReason.EXPIRY_ITM,
     ExitReason.EXPIRY_OTM,
 )

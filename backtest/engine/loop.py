@@ -495,6 +495,32 @@ class EventDrivenEngine:
             # approximation and is named in the event rather than removed.
             self._dispose_deliveries(ledger, deliveries, day)
 
+            # 3c  early exercise, where the chain says the European price is wrong
+            #
+            # **The flag screens and the tree decides.** The chain already flags where a
+            # European price is wrong -- a call before a dividend, a deep in-the-money
+            # put against the carry on the strike -- and that flag is one subtraction per
+            # row. The tree is 800 steps and about 320,000 nodes, which is milliseconds
+            # but not milliseconds times every position times every session.
+            #
+            # So the flag is the screen and the tree is the decision, which is also the
+            # right division of labour: the flag says "the European price may be wrong
+            # here", and acting on that alone would be exercising on the failure of an
+            # approximation rather than on a comparison. The tree answers the comparison:
+            # is the intrinsic worth more than holding.
+            for pos in list(ledger.positions):
+                if pos.contract.expiry <= day:
+                    continue              # settled below, as an expiry
+                rec = self._early_exercise(pos, ledger, open_trades, day)
+                if rec is not None:
+                    records.append(rec)
+                    candidates[rec.contract.symbol].closed_trade(day)
+                    before = {p.symbol for p in ledger.stock_positions}
+                    for p in ledger.stock_positions:
+                        if p.symbol not in before or p.symbol in deliveries:
+                            deliveries[p.symbol] = day
+                    self._start_shadow(rec, shadowing, expired=True)
+
             # 4  settle expiries
             for pos in list(ledger.positions):
                 if pos.contract.expiry <= day:
@@ -1768,6 +1794,81 @@ class EventDrivenEngine:
             return {}
         return {slot: c for slot, c in strategy.components.items()
                 if getattr(getattr(c, "variant", None), "stateful", False)}
+
+    def _early_exercise(self, pos: Position, ledger: Ledger, open_trades,
+                        day: date) -> "TradeRecord | None":
+        """Exercise a position early when holding is worth less than exercising.
+
+        Returns the closed trade's record, or ``None`` when it was not exercised -- which
+        is nearly always, and cheaply: the chain's flag is checked before the tree is
+        built.
+
+        **Only for a long position.** A short option is exercised *against* you by
+        whoever is long it, and modelling that needs an assumption about the other side's
+        behaviour -- they may exercise optimally, early, or never. That is a different
+        question with a different answer, and guessing it is worse than not asking.
+        """
+        if self.config.contract.exercise.value != "american":
+            return None
+        if pos.quantity <= 0:
+            return None
+        trade = open_trades.get(pos.trade_id)
+        if trade is None:
+            return None
+
+        frame = self.chain.series(pos.contract, [day])
+        if frame.empty:
+            return None
+        row = frame.iloc[0]
+        if "early_exercise_value" not in str(row.get("quality_flags", "")):
+            return None
+
+        spot = self.market.spot(day)
+        if spot.is_missing:
+            return None
+        years = self.config.time.year_fraction(day, pos.contract.expiry)
+        iv = float(row["iv"]) if "iv" in row and row["iv"] == row["iv"] else None
+        if years <= 0 or iv is None or iv <= 0:
+            return None
+
+        from backtest.data.options.american import value
+
+        verdict = value(
+            spot=spot.unwrap(), strike=pos.contract.strike, years=years,
+            rate=self.market.risk_free_rate(day), vol=iv,
+            dividend_yield=self.market.dividend_yield(day, pos.contract.expiry,
+                                                      spot.unwrap()),
+            right=pos.contract.right,
+        )
+        if not verdict.exercise_now:
+            # The flag fired and the tree disagreed, which is the flag doing its job:
+            # it is a screen, and a screen that never over-selects is a decision.
+            self.events.record(
+                EventKind.EARLY_EXERCISE_RISK, day,
+                f"flagged for early exercise and the tree disagrees: "
+                f"{verdict.describe()}", str(pos.contract))
+            return None
+
+        self.events.record(
+            EventKind.EARLY_EXERCISE_RISK, day,
+            f"exercised early: {verdict.describe()}", str(pos.contract))
+        self.bus.emit(
+            EventType.EXPIRY, day, "ledger", trade_id=pos.trade_id,
+            component_id="exercise",
+            reason=f"exercised early, {verdict.describe()}",
+            data={"contract": str(pos.contract), "intrinsic": verdict.intrinsic,
+                  "hold": verdict.hold})
+
+        kind = ledger.settle_expiry(pos.contract, spot, day)
+        popped = open_trades.pop(pos.trade_id, None)
+        if popped is None:
+            return None
+        quote = dict(popped.entry_quote)
+        quote.update({"asof": day, "underlying_price": spot.unwrap(),
+                      "bid": verdict.intrinsic, "ask": verdict.intrinsic})
+        return self._record(popped, exit_day=day, exit_price=verdict.intrinsic,
+                            exit_fees=None, exit_quote=quote,
+                            reason=ExitReason.EARLY_EXERCISE, suppressed=())
 
     def _settle(self, pos: Position, ledger: Ledger, open_trades, day: date) -> TradeRecord | None:
         spot = self.market.spot(day)
