@@ -41,19 +41,19 @@ let TAB = "overview";  // which tab is open, so a brush can repaint it
 
 /** The tabs of section 6, and what each one is waiting on where it cannot be built. */
 const TABS = [
-  {key: "overview", name: "the curve"},
-  {key: "spread", name: "how the trades are spread"},
-  {key: "slice", name: "cut by a condition"},
-  {key: "attribution", name: "where the money came from"},
+  {key: "overview", name: "overview"},
+  {key: "spread", name: "distribution"},
+  {key: "slice", name: "by condition"},
+  {key: "attribution", name: "attribution"},
   // Not "trades": the table at the bottom of the page is the trades, and one word for two
   // different things is how a reader stops trusting the labels.
-  {key: "trades", name: "what closed them"},
-  {key: "execution", name: "what it cost"},
-  {key: "robustness", name: "does it hold up"},
+  {key: "trades", name: "exits"},
+  {key: "execution", name: "execution"},
+  {key: "robustness", name: "robustness"},
   // What was actually set. It was on the composer and nowhere else, so reading a run
   // meant remembering what you had typed — or going back and hoping the form still held
   // it. A result without its settings beside it is half a record.
-  {key: "settings", name: "what was set"},
+  {key: "settings", name: "settings"},
   {key: "exposure", name: "exposure",
    pending: "daily portfolio greeks and premium at risk against the book's limits. The "
           + "engine computes them; they are not yet kept with the run, so this tab has "
@@ -282,10 +282,23 @@ function metricCards(){
           + "are large by design",
      note: inv && inv.downside_vol != null ? `downside vol ${pct(inv.downside_vol)}` : "",
      missing: "needs an equity curve, which only the event-driven engine builds"},
-    {name: "Calmar", value: inv && num(inv.Calmar), better: "higher",
-     means: "the annual return divided by the worst drawdown — how much was earned per "
-          + "unit of the deepest pain",
-     missing: "needs an equity curve, which only the event-driven engine builds"},
+    // The comparison the page was missing, and the first card a reader should be able to
+    // find: a return shown alone cannot be judged. Beta and alpha ride with it rather than
+    // taking cards of their own — the plan allows eight, and ten wrapped onto an orphaned
+    // second row where the eye stopped before reaching them.
+    {name: "vs buy and hold", better: "higher",
+     value: inv && inv.buy_and_hold != null && inv.strategy_total != null
+       ? pct(inv.strategy_total - inv.buy_and_hold) : null,
+     note: inv && inv.buy_and_hold != null
+       ? `${pct(inv.strategy_total)} against ${pct(inv.buy_and_hold)}`
+         + (inv.beta_vs_underlying != null ? ` · beta ${num(inv.beta_vs_underlying)}` : "")
+       : "",
+     means: "the strategy's total return less what holding the underlying returned over "
+          + "the same period. Negative is the work losing to doing nothing. The beta "
+          + "beside it says how much of the return was simply the underlying moving — "
+          + "near 1 the strategy is the underlying in disguise, above it the underlying "
+          + "with leverage",
+     missing: "needs an equity curve and a benchmark series"},
     {name: "net P&L", value: money(RUN.net_pnl), interval: a.intervals?.net_pnl,
      means: "what the whole run made or lost after costs"},
     {name: "mean per trade", value: RUN.n_trades ? money(RUN.net_pnl / RUN.n_trades) : "—",
@@ -347,6 +360,18 @@ function intervalBar(interval){
 
 /* ── the process tier ───────────────────────────────────────────────────────── */
 
+/** The reserved period, as the chart stack wants it, or null when none was declared.
+ *
+ * It was written as a ternary returning null on both branches — dead code, so the hatch
+ * never appeared and nothing said why. The note the backend writes is prose; the range
+ * itself is the string it reports, which is why this parses rather than guesses. */
+function holdOutRange(){
+  const held = RUN.manifest?.provenance?.hold_out?.hold_out;
+  if(!held) return null;
+  const m = String(held).match(/(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})/);
+  return m ? {from: m[1], to: m[2]} : null;
+}
+
 function buildStack(host){
   const equity = RUN.equity;
   if(!equity || !equity.length){
@@ -361,6 +386,7 @@ function buildStack(host){
   const curve = equity.map(r => r[MARK === "liq" ? "equity_liq" : "equity_mid"]);
   const other = equity.map(r => r[MARK === "liq" ? "equity_mid" : "equity_liq"]);
   const drawdown = equity.map(r => r[MARK === "liq" ? "drawdown_liq" : "drawdown_mid"]);
+  const benchmark = equity.map(r => r.benchmark ?? null);
   const capital = RUN.manifest?.config?.notional_capital;
 
   // Risk events and the range truncation, read from this run's own diagnostics.
@@ -370,15 +396,25 @@ function buildStack(host){
 
   const stack = chartStack(host, {
     dates,
-    holdOut: RUN.manifest?.provenance?.hold_out?.hold_out ? null : null,
+    holdOut: holdOutRange(),
     marks,
     brush: null,
     layers: [
       lineLayer({
         key: "equity", title: `equity, marked at the ${MARK === "liq" ? "bid" : "mid"}`,
-        hint: "the thin line is the other mark", height: 150,
-        values: curve, second: other,
-        secondTitle: MARK === "liq" ? "marked at the mid" : "liquidation value, at the bid",
+        // The benchmark is the comparison that makes the line mean anything: a strategy
+        // return shown alone cannot be judged, and this one is beaten by simply holding
+        // the underlying. Where no benchmark was stored the other mark takes the second
+        // line, which is the previous behaviour.
+        hint: benchmark.some(v => v != null)
+          ? "the thin line is buying and holding the underlying"
+          : "the thin line is the other mark",
+        height: 160,
+        values: curve,
+        second: benchmark.some(v => v != null) ? benchmark : other,
+        secondTitle: benchmark.some(v => v != null)
+          ? "buy and hold the underlying, from the same capital"
+          : (MARK === "liq" ? "marked at the mid" : "liquidation value, at the bid"),
         baseline: curve[0], format: money,
       }),
       drawdown.some(v => v != null) && underwaterLayer({

@@ -235,7 +235,7 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     # a row of zeros.
     if kwargs["engine"] == "event_driven":
         try:
-            equity = _with_drawdown(result.raw.equity)
+            equity = _with_benchmark(_with_drawdown(result.raw.equity), result)
             record["equity"] = json.loads(
                 equity.reset_index().to_json(orient="records", date_format="iso"))
             record["equity_metrics"] = result.equity_metrics()
@@ -298,11 +298,42 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     )
     STORE.record_analysis(
         record["id"], analysis,
-        equity=(_with_drawdown(result.raw.equity)
+        equity=(_with_benchmark(_with_drawdown(result.raw.equity), result)
                 if kwargs["engine"] == "event_driven"
                 and getattr(result.raw, "equity", None) is not None else None),
     )
     return record
+
+
+def _with_benchmark(equity, result):
+    """The daily curve plus **what holding the underlying would have done**.
+
+    The plan's overview is "equity vs benchmark" and the reason is blunt: a return shown
+    on its own cannot be judged. This run reports 50.7% annualised, and the underlying over
+    the same period returned more — a fact the page had no way to state, while showing the
+    strategy's figure in the largest type on the screen.
+
+    Scaled to the same starting capital so the two lines are comparable as money rather
+    than as rates, and aligned on the equity curve's own dates: a benchmark on a different
+    calendar would cross the strategy wherever the calendars disagreed.
+    """
+    bars = getattr(result, "_market", None)
+    if bars is None:
+        return equity
+    try:
+        close = result._market.bars.adjusted("close")
+    except Exception:  # noqa: BLE001
+        # The benchmark is a comparison, not the result. A data source that cannot supply
+        # one loses the line, not the run.
+        return equity
+    out = equity.copy()
+    aligned = close.reindex(out.index).ffill()
+    first = aligned.dropna()
+    if first.empty:
+        return out
+    start_equity = float(out["equity_mid"].iloc[0])
+    out["benchmark"] = aligned / float(first.iloc[0]) * start_equity
+    return out
 
 
 def _with_drawdown(equity):
