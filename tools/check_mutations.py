@@ -277,6 +277,31 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_adapters.py::TestBadDataIsFound",),
     ),
     Mutation(
+        # Execution reading a quantity decided somewhere else is the engine going back to
+        # turning a decision straight into an order, which produces the same result on
+        # any day where no two slots overlap.
+        "an order's quantity is the gap the target named",
+        "backtest/portfolio/target.py",
+        "            out.append(Order(contract=contract, quantity=target - have, held=have,",
+        "            out.append(Order(contract=contract, quantity=-have, held=have,",
+        ("tests/test_target.py::TestTheDiff",
+         "tests/test_target.py::TestTheEngineUsesIt"),
+    ),
+    Mutation(
+        "two slots wanting one contract compose instead of racing",
+        "backtest/portfolio/target.py",
+        "        self._reasons.setdefault(adjustment.contract, []).append(adjustment)",
+        "        self._reasons[adjustment.contract] = [adjustment]",
+        ("tests/test_target.py::TestTwoSlotsWantingOneContract",),
+    ),
+    Mutation(
+        "a contract no slot looked at is left alone",
+        "backtest/portfolio/target.py",
+        "            if target == have:\n                continue",
+        "            if False:\n                continue",
+        ("tests/test_target.py::TestTheDiff",),
+    ),
+    Mutation(
         # The mark not surviving between days turns the trailing stop into a fixed one
         # at the same fraction: a plausible result from a strategy nobody wrote.
         "a stateful form's state survives between days",

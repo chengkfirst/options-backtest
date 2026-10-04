@@ -245,9 +245,8 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("3.2.target", "3.2",
                 "A target portfolio holds the target quantity per contract plus the "
                 "reason for each adjustment",
-                "an adjustment whose reason cannot be named",
-                not_built="no target state and no diffing step; the engine turns an "
-                          "intent into a fill directly"),
+                "an adjustment whose reason cannot be named, or an order whose "
+                "quantity is not the gap the target named"),
     Requirement("3.3.scenario", "3.3",
                 "A scenario rule blocks trades that breach a scenario loss limit",
                 "a trade accepted that the grid says breaches the limit",

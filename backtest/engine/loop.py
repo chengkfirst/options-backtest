@@ -53,6 +53,7 @@ from backtest.engine.strategy import Strategy
 from backtest.core.errors import InvariantError, StartupError
 from backtest.core.events import Event, EventBus, EventType
 from backtest.core.trade_context import TradeContext, market_only
+from backtest.portfolio.target import Adjustment, TargetPortfolio
 from backtest.core.invariants import check_all as check_invariants
 from backtest.core.run_log import EventKind, EventLog
 from backtest.accounting.tradebook import (
@@ -529,11 +530,34 @@ class EventDrivenEngine:
             # 6-7  signals -> the strategy
             view = self.signals.on(day)
             intents: list[Intent] = []
+            #: contract -> what the Intent needs beyond the quantity. The target holds the
+            #: quantity and the reasons, which is what the document asks of it; the exit
+            #: reasons and the slot ride here rather than being pushed into the target,
+            #: where they would make it a second copy of the decision.
+            detail = self._detail = {}
 
-            # The risk rule acts before the per-trade rules do. It has to: a position the
-            # book-wide rule is closing should not also be queued by its own stop on the
-            # same day, and whichever ran first would otherwise decide the attribution.
-            intents.extend(self._risk_intents(ledger, open_trades, queue, day))
+            # **The target portfolio.** Every slot that wants an existing position changed
+            # writes a target quantity for its contract with its reason; execution then
+            # turns the gap between the targets and the book into orders. The document
+            # asks for exactly that, and the engine used to go straight from a decision to
+            # an order -- so there was no moment at which the intended book existed, and
+            # nowhere for "why is this position this size" to be answered except by
+            # replaying the decisions.
+            #
+            # What it buys here, concretely: the book-wide risk rule and a position's own
+            # stop wanting the same contract on the same day used to be two orders, and
+            # whichever was queued first decided the attribution. Against a target they
+            # are two adjustments to one number, and both reasons survive.
+            #
+            # **Entries do not go through it.** A new contract has nothing held to diff
+            # against, so target minus held is the identity and the indirection would add
+            # a step without composing anything.
+            targets = TargetPortfolio()
+            held_now = {p.contract: p.quantity for p in ledger.positions}
+
+            # The risk rule writes its targets before the per-trade rules do, so a
+            # position both want is resolved as an overlap rather than a race.
+            self._risk_targets(targets, ledger, open_trades, queue, day)
 
             for pos in ledger.positions:
                 trade = open_trades.get(pos.trade_id)
@@ -563,14 +587,15 @@ class EventDrivenEngine:
                     # acted. Crediting "exit" for all of them would make attribution by
                     # component useless, which is the whole reason the field exists.
                     first = resolve_exit_reason(list(reasons)) if reasons else None
-                    intents.append(Intent(
-                        contract=pos.contract,
-                        side=Side.SELL if pos.quantity > 0 else Side.BUY,
-                        quantity=pos.abs_quantity, created=day, execute_on=target,
+                    slot = _SLOT_FOR_EXIT.get(first, "exit")
+                    targets.want(Adjustment(
+                        contract=pos.contract, quantity=0, slot=slot, when=day,
+                        reason=(", ".join(r.value for r in reasons) if reasons
+                                else "the review closed it")))
+                    detail[pos.contract] = dict(
                         trade_id=pos.trade_id, kind=Action.CLOSE, reason="exit",
-                        exit_reasons=tuple(reasons),
-                        component_id=_SLOT_FOR_EXIT.get(first, "exit"),
-                    ))
+                        exit_reasons=tuple(reasons), component_id=slot,
+                        execute_on=target)
                 elif isinstance(action, Reduce):
                     # Round down, and keep at least 1 — reducing to 0 should be
                     # expressed as Close; letting a reduction quietly become a close
@@ -583,23 +608,27 @@ class EventDrivenEngine:
                             f"contracts (holding {pos.abs_quantity}), skipped",
                             str(pos.contract))
                     else:
-                        intents.append(Intent(
+                        keep = pos.abs_quantity - cut
+                        targets.want(Adjustment(
                             contract=pos.contract,
-                            side=Side.SELL if pos.quantity > 0 else Side.BUY,
-                            quantity=cut, created=day, execute_on=target,
+                            quantity=keep if pos.quantity > 0 else -keep,
+                            slot="review", when=day,
+                            reason=action.reason or "reduced by review"))
+                        detail[pos.contract] = dict(
                             trade_id=pos.trade_id, kind=Action.REDUCE,
                             reason=action.reason or "reduced by review",
-                            component_id="review",
-                        ))
+                            component_id="review", execute_on=target)
                 elif isinstance(action, Add):
-                    intents.append(Intent(
+                    grown = pos.abs_quantity + action.contracts
+                    targets.want(Adjustment(
                         contract=pos.contract,
-                        side=Side.BUY if pos.quantity > 0 else Side.SELL,
-                        quantity=action.contracts, created=day, execute_on=target,
+                        quantity=grown if pos.quantity > 0 else -grown,
+                        slot="review", when=day,
+                        reason=action.reason or "added by review"))
+                    detail[pos.contract] = dict(
                         trade_id=pos.trade_id, kind=Action.ADD,
                         reason=action.reason or "added by review",
-                        component_id="review",
-                    ))
+                        component_id="review", execute_on=target)
 
             # Setup, then entry. **Two steps, not one.** Slot 1 decides whether this is
             # an environment to trade in and *arms* the candidate; slot 2 looks for
@@ -608,6 +637,22 @@ class EventDrivenEngine:
             # ablation could say what a regime filter was worth, because removing it also
             # removed the timing.
             candidate = candidates[self.config.symbol]
+            # **The diffing step.** Target minus held, per contract, and the result is
+            # what execution gets. A subtraction anybody can check against the ledger,
+            # where an intent could only be checked by waiting to see what it did.
+            for order in targets.orders(held_now):
+                carried = detail.get(order.contract)
+                if carried is None:
+                    raise InvariantError(
+                        f"a target for {order.contract} has no decision detail behind "
+                        f"it, so an order would be placed with no exit reason and no "
+                        f"slot. The target and the detail are written together"
+                    )
+                intents.append(Intent(
+                    contract=order.contract,
+                    side=Side.BUY if order.quantity > 0 else Side.SELL,
+                    quantity=abs(order.quantity), created=day, **carried))
+
             if strategy.setup is None:
                 # No setup slot: always armed, which is exactly what the engine did
                 # before the state existed. This is why the state changes no result.
@@ -661,18 +706,34 @@ class EventDrivenEngine:
                     data={"action": intent.kind.value,
                           "contract": str(intent.contract),
                           "exit_reasons": [r.value for r in intent.exit_reasons]})
-                held = ledger.position(intent.contract)
-                current = held.abs_quantity if held is not None else 0
-                target = (current + intent.quantity if intent.side is Side.BUY
-                          else current - intent.quantity)
+                # **From the target portfolio, not recomputed from the intent.**
+                #
+                # This derived the target by adding the intent's quantity back onto the
+                # position, which is a second computation of a number the target already
+                # holds -- and a second record of a fact the system records once is the
+                # failure that put 22 decision-log rows against 34 fill events earlier
+                # today. An entry has no target (nothing is held to diff against), so it
+                # falls back to the arithmetic and says so.
+                wanted = targets.target_for(intent.contract)
+                adjustments = targets.reasons_for(intent.contract)
+                current = held_now.get(intent.contract, 0)
+                if wanted is None:
+                    current = 0
+                    wanted = (intent.quantity if intent.side is Side.BUY
+                              else -intent.quantity)
+                    why = (f"{intent.reason or intent.kind.value} "
+                           f"(a new position, so there is no gap to close)")
+                else:
+                    why = "; ".join(f"{a.slot}: {a.reason}" for a in adjustments)
                 target_event = self.bus.emit(
                     EventType.TARGET_PORTFOLIO, day, "portfolio",
                     caused_by=signal.id, trade_id=intent.trade_id,
                     component_id=intent.component_id,
-                    reason=f"hold {target} of {intent.contract} "
-                           f"(now {current}): {intent.reason or intent.kind.value}",
-                    data={"contract": str(intent.contract), "target": target,
-                          "current": current})
+                    reason=f"hold {wanted} of {intent.contract} (now {current}): {why}",
+                    data={"contract": str(intent.contract), "target": wanted,
+                          "current": current,
+                          "adjustments": [{"slot": a.slot, "reason": a.reason}
+                                          for a in adjustments]})
                 if not self._validate(intent, ledger, day):
                     self.bus.emit(
                         EventType.REJECT, day, "execution", caused_by=target_event.id,
@@ -875,8 +936,13 @@ class EventDrivenEngine:
             })
             st["left"] -= 1
 
-    def _risk_intents(self, ledger, open_trades, queue, day: date) -> list[Intent]:
-        """Turn the day's risk verdict into orders on the existing book.
+    def _risk_targets(self, targets, ledger, open_trades, queue, day: date) -> None:
+        """Write the day's risk verdict into the target portfolio.
+
+        It used to build orders directly, and ran before the per-trade rules so a position
+        it was closing would not also be queued by its own stop -- a race resolved by call
+        order. Against a target the two are adjustments to one number and both reasons
+        survive, which is what the target exists for.
 
         ``no_new_positions`` needs nothing here -- it is read at entry. ``scale_down`` and
         ``liquidate`` act on what is already held, which is what makes them different from
@@ -888,11 +954,11 @@ class EventDrivenEngine:
         a trade log cannot distinguish them without this.
         """
         if self._risk.action not in (RiskAction.SCALE_DOWN, RiskAction.LIQUIDATE):
-            return []
-        target = self.market.calendar.shift(day, self.config.execution_lag_days)
-        if target is None or target > self.config.end:
-            return []
-        out: list[Intent] = []
+            return
+        due = self.market.calendar.shift(day, self.config.execution_lag_days)
+        if due is None or due > self.config.end:
+            return
+        wanted = 0
         skipped = 0
         for pos in list(ledger.positions):
             if open_trades.get(pos.trade_id) is None or \
@@ -909,19 +975,21 @@ class EventDrivenEngine:
                 if quantity <= 0 or quantity >= pos.abs_quantity:
                     skipped += 1
                     continue
-            out.append(Intent(
+            keep_qty = pos.abs_quantity - quantity
+            targets.want(Adjustment(
                 contract=pos.contract,
-                side=Side.SELL if pos.quantity > 0 else Side.BUY,
-                quantity=quantity, created=day, execute_on=target,
+                quantity=keep_qty if pos.quantity > 0 else -keep_qty,
+                slot="headwind", when=day, reason=self._risk.describe()))
+            self._detail[pos.contract] = dict(
                 trade_id=pos.trade_id, kind=kind, reason=self._risk.describe(),
                 exit_reasons=(ExitReason.RISK_FORCED,) if kind is Action.CLOSE else (),
                 keep=self._risk.keep if kind is Action.REDUCE else None,
-                component_id="headwind",
-            ))
-        if out:
+                component_id="headwind", execute_on=due)
+            wanted += 1
+        if wanted:
             self.events.record(EventKind.CANDIDATE_DROPPED, day,
                                f"book-wide risk rule: {self._risk.describe()} "
-                               f"({len(out)} positions)")
+                               f"({wanted} positions)")
         elif skipped:
             # **The rule fired and did nothing, and that has to be visible.** Every held
             # position was too small to reduce without closing it, so the scale-down is
@@ -932,7 +1000,6 @@ class EventDrivenEngine:
                                f"book-wide risk rule: {self._risk.describe()}, but all "
                                f"{skipped} position(s) are too small to reduce without "
                                f"closing them, so nothing was cut")
-        return out
 
     def _exit_reasons(self, pos: Position, trade: OpenTrade, quotes, day: date, strategy: Strategy):
         # This trade's own rule wins. Under a plan each trade's take-profit and stop
