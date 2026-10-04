@@ -95,6 +95,16 @@ def _meta_payload() -> dict[str, Any]:
             {"a": a, "b": b, "why": why} for a, b, why in COUPLINGS
         ],
         "gaps": _describe_gaps(),
+        # Every cut the interface shows a verdict against, from the one registry that
+        # holds them. **No threshold may be a literal in the JS**: a cut written into the
+        # interface turns a judgement ("the profit is concentrated") into something that
+        # reads as a measurement, and nobody can then answer "what was decided for me".
+        # Each carries what it decides and why, so a flag can name the cut behind it.
+        "thresholds": {
+            name: {"value": t.value, "kind": t.kind, "decides": t.decides,
+                   "because": t.because}
+            for name, t in _thresholds().items()
+        },
         # The validation tools, declared once in the runner and rendered from here. A
         # tool added there appears in the interface without a second edit, which is the
         # only arrangement under which the two sides cannot drift.
@@ -176,6 +186,17 @@ def _meta_payload() -> dict[str, Any]:
         "code_help": USER_CODE_HELP,
         "plan_help": PLAN_HELP,
     }
+
+
+def _thresholds():
+    """The threshold registry, including any override in force.
+
+    Imported here rather than at module level: the app layer loads before a backtest is
+    ever run, and nothing in the interface should pull in the engine to render a form.
+    """
+    from backtest.core.thresholds import THRESHOLDS
+
+    return THRESHOLDS
 
 
 def _describe_gaps() -> list[str]:

@@ -14,6 +14,7 @@ import {$, onClick, show} from "./dom.js";
 import {catchPageErrors, notice} from "./net.js";
 import {go, location_, route, start} from "./router.js";
 import * as bench from "./views/bench.js";
+import * as runView from "./views/run.js";
 
 /* ── the surfaces ──
  * `view` is the id of the section to show; `pending` is what it is waiting on, for the
@@ -60,8 +61,10 @@ function renderPending(surface){
     <button class="btn" type="button" data-goto="/bench">go to the bench</button>`;
 }
 
+const VIEWS = ["view-bench", "view-pending", "view-run"];
+
 function showOnly(viewId){
-  for(const id of ["view-bench", "view-pending"]) show($(id), id === viewId);
+  for(const id of VIEWS) show($(id), id === viewId);
 }
 
 /* ── the theme ──
@@ -114,6 +117,16 @@ for(const surface of SURFACES){
     if(surface.pending) renderPending(surface);
   });
 }
+
+/* One run, analysed. Not in the rail: it is reached from a run, not from a menu — but it
+   is a first-class route, so the URL carries the tab, the brushed range and the mark, and
+   a copied link opens the same view. */
+route("/runs/:id", ({params, query}) => {
+  renderRail();
+  showOnly("view-run");
+  runView.enter({params, query}).catch(e =>
+    notice(`run ${params.id} could not be opened: ${e.message}`));
+}, () => runView.leave());
 
 start("/bench");
 

@@ -184,6 +184,16 @@ class Handler(SimpleHTTPRequestHandler):
             record["engine"] = record["config"].get("engine", "trade_table")
             record["validations"] = validations_for(record["engine"])
             record.setdefault("boundary", "")
+            # The daily curve, if this run kept one. `None` where it did not, which the
+            # analysis page distinguishes from a flat account.
+            curve = STORE.equity(run_id)
+            record["equity"] = (json.loads(curve.reset_index().to_json(
+                orient="records", date_format="iso")) if curve is not None else None)
+            # The event-driven extras live inside `analysis` in the store; the interface
+            # reads them at the top level, as it does for a fresh run.
+            for key in ("equity_metrics", "scenarios", "attribution"):
+                if isinstance(record.get("analysis"), dict) and key in record["analysis"]:
+                    record[key] = record["analysis"][key]
             return self._json(record)
         if url.path == "/api/strategies":
             name = q.get("name")

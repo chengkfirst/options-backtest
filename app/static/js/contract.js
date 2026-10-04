@@ -42,7 +42,22 @@ export const CONTRACT = {
         "rows.*.contract", "rows.*.entry_price", "rows.*.exit_price",
         "rows.*.entry_iv", "rows.*.entry_delta",
         "diagnostics.*.kind", "diagnostics.*.count", "diagnostics.*.first",
-        "diagnostics.*.last", "diagnostics.*.reasons"],
+        "diagnostics.*.last", "diagnostics.*.reasons",
+        // The conclusion tier of the analysis page. Every one of these is a number the
+        // backend computed; the page renders them and derives none of its own.
+        "analysis", "analysis.intervals", "analysis.investor", "analysis.costs",
+        "analysis.by_exit_reason", "analysis.excursion",
+        "analysis.intervals.net_pnl.estimate", "analysis.intervals.net_pnl.low",
+        "analysis.intervals.net_pnl.high", "analysis.intervals.net_pnl.level",
+        "analysis.intervals.net_pnl.caveat",
+        "analysis.investor.Sortino", "analysis.investor.Calmar",
+        "analysis.investor.top5_share", "analysis.investor.without_top5",
+        "analysis.excursion.censoring",
+        // The realism strip: what determined this result, restated where it is read.
+        "manifest.run_id", "manifest.code", "manifest.config.notional_capital",
+        "manifest.config.costs.adverse_fraction", "manifest.execution.execution_lag_days",
+        "manifest.execution.shadow_days", "manifest.provenance.all_synthetic",
+        "manifest.provenance.hold_out", "manifest.guards.state"],
   /* Read defensively, and genuinely absent when nobody asked for one.
    *
    * Selection is a feasible region, not a pinned point, and "blank means no limit" — the
@@ -71,7 +86,12 @@ export const CONTRACT = {
                  "scenarios.*.sessions", "scenarios.*.return",
                  "scenarios.*.max drawdown", "scenarios.*.note"],
   meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps",
-         "validations"],
+         "validations",
+         // Every cut a verdict on the analysis page names. Declared so that a renamed or
+         // retired threshold fails here rather than leaving a flag that silently stops
+         // firing — which is the worst way for a guardrail to end.
+         "thresholds", "thresholds.bootstrap_min_observations.value",
+         "thresholds.cost_share_warning.value", "thresholds.single_trade_share.value"],
   sizing_methods: ["fixed", "risk_pct", "fixed_notional", "scale_by_vol"],
 };
 

@@ -207,7 +207,7 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     # a row of zeros.
     if kwargs["engine"] == "event_driven":
         try:
-            equity = result.raw.equity
+            equity = _with_drawdown(result.raw.equity)
             record["equity"] = json.loads(
                 equity.reset_index().to_json(orient="records", date_format="iso"))
             record["equity_metrics"] = result.equity_metrics()
@@ -248,6 +248,18 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     # button is never offered for something that would fail. The counterfactual needs the
     # shadow prices, which only the event-driven engine keeps.
     record["validations"] = validations_for(kwargs["engine"])
+    # What the conclusion tier of the analysis page reads. Computed by the same research
+    # layer the reports use, never in the browser: a number on screen that the interface
+    # derived for itself is a number the system cannot reproduce.
+    #
+    # The event-driven extras join it rather than sitting beside it, so that **one object
+    # holds everything the page needs** and a stored run can be opened on the same page as
+    # a fresh one.
+    analysis = _analysis(result, record)
+    for key in ("equity_metrics", "scenarios", "attribution"):
+        if key in record:
+            analysis[key] = record[key]
+    record["analysis"] = analysis
     # Keep what this run said about itself, so opening it again by id says the same. The
     # two endpoints that both return "a run" used to return different shapes, and that is
     # why nothing in the interface could use the stored one.
@@ -256,7 +268,85 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
         boundary=record["boundary"], problems=record["problems"],
         diagnostics=record["diagnostics"], anomalies=record["anomalies"],
     )
+    STORE.record_analysis(
+        record["id"], analysis,
+        equity=(_with_drawdown(result.raw.equity)
+                if kwargs["engine"] == "event_driven"
+                and getattr(result.raw, "equity", None) is not None else None),
+    )
     return record
+
+
+def _with_drawdown(equity):
+    """The daily curve plus its drawdown, on both marks.
+
+    Computed here rather than in the browser. A drawdown is a **metric**, not a way of
+    drawing the equity line, and the design plan's third principle is that the backend
+    computes every number the interface shows — otherwise what is on screen is not what
+    the system reproduces. Both marks get one, because they differ by percentage points
+    of maximum drawdown on an option book and the page lets the reader switch.
+    """
+    out = equity.copy()
+    for mark in ("equity_mid", "equity_liq"):
+        if mark in out.columns:
+            out[f"drawdown_{mark.split('_')[1]}"] = out[mark] / out[mark].cummax() - 1.0
+    return out
+
+
+def _analysis(result, record: dict[str, Any]) -> dict[str, Any]:
+    """The conclusion tier: metrics with their intervals, costs, and the investor's view.
+
+    Each part is allowed to fail on its own. A run whose equity curve could not be built
+    still has a trade distribution worth reading, and one tool refusing is not a reason to
+    lose the rest — so every entry says why it is absent rather than disappearing.
+    """
+    from dataclasses import asdict
+
+    out: dict[str, Any] = {}
+
+    def attempt(name: str, fn):
+        try:
+            out[name] = fn()
+        except Exception as exc:  # noqa: BLE001
+            # A refusal is an answer: `bootstrap_trades` declines under ten trades on
+            # purpose, and "a number from fewer observations should be reported as the
+            # observations" is the sentence the reader needs, not a blank.
+            out[name] = None
+            out.setdefault("unavailable", {})[name] = f"{type(exc).__name__}: {exc}"
+
+    trades = result.trades
+    pnl = [float(v) for v in trades["net_pnl"]] if len(trades) else []
+
+    attempt("costs", lambda: result.costs())
+    attempt("by_exit_reason", lambda: json.loads(
+        result.by_exit_reason().reset_index().to_json(orient="records")))
+    attempt("investor", lambda: result.investor_view())
+
+    # The excursion study carries its distribution as a DataFrame, which JSON cannot hold —
+    # the server's serialisation guard caught that rather than dropping the connection.
+    # What the conclusion tier needs from it is the count and the censoring warning; the
+    # distribution itself belongs to the trades tab, which reads it as a table of its own.
+    def excursion():
+        study = result.excursion()
+        return {"n": study.n, "censoring": list(study.censoring)}
+
+    attempt("excursion", excursion)
+
+    # The intervals the design plan asks for on every compared metric: "a difference whose
+    # intervals overlap is not highlighted as an improvement". The trades overlap in time,
+    # so the caveat the method attaches travels with the number.
+    def intervals():
+        import numpy as np
+
+        from backtest.research.validation.intervals import bootstrap_trades
+
+        wanted = (("net_pnl", np.sum, "the total net P&L"),
+                  ("mean_pnl", np.mean, "the mean per trade"))
+        return {name: asdict(bootstrap_trades(pnl, statistic=fn, name=label))
+                for name, fn, label in wanted}
+
+    attempt("intervals", intervals)
+    return out
 
 
 def validations_for(engine: str) -> list[str]:

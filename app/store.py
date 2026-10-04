@@ -172,7 +172,16 @@ class Store:
         ("run", "problems", "TEXT"),
         ("run", "diagnostics", "TEXT"),
         ("run", "anomalies", "TEXT"),
+        # The conclusion tier of the analysis page: metrics with their intervals, the
+        # investor's view, costs, attribution, the historical scenarios. One JSON column
+        # rather than twenty, because none of it is queried — it is read whole, for one
+        # run, by one page.
+        ("run", "analysis", "TEXT"),
     )
+
+    #: The daily curve, kept beside the trade log. Parquet rather than JSON in the row: a
+    #: ten-year run is about 2,500 days times seven columns, which is a table, not a field.
+    EQUITY_DIR = "equity"
 
     #: A column that every version of our ``run`` table has had. Its absence from an
     #: existing table means the file belongs to something else.
@@ -312,6 +321,33 @@ class Store:
         self._db.commit()
         return self.run(run_id)
 
+    def record_analysis(self, run_id: int, analysis: dict[str, Any], equity=None) -> None:
+        """Keep what the analysis page reads, so any stored run can be opened on it.
+
+        Without this the page works for the run you just made and for no other, which is
+        the same as not working: the second of this platform's two uses is re-reading a
+        run from months ago.
+        """
+        self._db.execute("UPDATE run SET analysis=? WHERE id=?",
+                         (json.dumps(analysis, ensure_ascii=False, default=str), run_id))
+        self._db.commit()
+        if equity is not None and len(equity):
+            directory = self.home / self.EQUITY_DIR
+            directory.mkdir(parents=True, exist_ok=True)
+            equity.to_parquet(directory / f"run_{run_id:05d}.parquet")
+
+    def equity(self, run_id: int):
+        """One run's daily curve, or ``None`` when it was never kept.
+
+        ``None`` rather than an empty frame, for the reason the trade log raises: "the
+        trade table engine builds no curve" and "this run predates the column" are both
+        true of some rows, and neither is "the account was flat".
+        """
+        import pandas as pd
+
+        path = self.home / self.EQUITY_DIR / f"run_{run_id:05d}.parquet"
+        return pd.read_parquet(path) if path.exists() else None
+
     def record_notices(self, run_id: int, *, boundary: str, problems: list,
                        diagnostics: list, anomalies: list) -> None:
         """Keep what the run said about itself: its boundary, problems, diagnostics, scan.
@@ -446,7 +482,7 @@ class Store:
         # NULL stays None, and that is the point: `None` reads as "this run did not record
         # it" and `[]` as "nothing fired". Defaulting the first to the second would make
         # every run saved before these columns existed claim a clean scan.
-        for k in ("problems", "diagnostics", "anomalies"):
+        for k in ("problems", "diagnostics", "anomalies", "analysis"):
             d[k] = json.loads(d[k]) if d.get(k) else None
         d["synthetic"] = bool(d["synthetic"])
         return d

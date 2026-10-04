@@ -1,0 +1,486 @@
+/* run.css — the run analysis surface: three tiers, one time axis.
+ *
+ * The geometry is the design plan's section 6: a conclusion tier that sticks, a fluid
+ * process tier, and a detail tier of about 280 px. Every value is a token.
+ */
+
+#view-run {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - var(--topbar-height));
+}
+
+/* ── tier 1: the conclusion ── */
+.tier-top {
+  position: sticky;
+  top: var(--topbar-height);
+  z-index: 3;
+  background: var(--surface-0);
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-4) var(--space-5) var(--space-3);
+}
+
+.run-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.run-head h2 {
+  font-family: var(--display);
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
+  margin: 0;
+}
+
+.run-idea {
+  font-family: var(--sans);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-secondary);
+  margin-left: var(--space-2);
+}
+
+.run-cfg {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.run-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.run-actions .chip {
+  text-decoration: none;
+  line-height: 1.7;
+}
+
+/* The realism strip: read-only, and it must read as read-only. No control affordance,
+   no hover lift — these are facts about the run, not switches. */
+.realism {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+}
+
+.realism-chip b {
+  color: var(--text-muted);
+  font-weight: var(--weight-regular);
+  margin-right: var(--space-1);
+}
+
+/* ── the protocol flags ── */
+.flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.flags-none {
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+}
+
+.flag {
+  border: 1px solid var(--border);
+  border-left-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  font-size: var(--font-sm);
+  max-width: 100%;
+}
+
+.flag > summary {
+  cursor: pointer;
+  padding: var(--space-1) var(--space-3);
+  list-style: none;
+  color: var(--text-secondary);
+}
+
+.flag > summary::-webkit-details-marker { display: none; }
+.flag[open] > summary { color: var(--text-primary); }
+.flag.ok { border-left-color: var(--success); }
+.flag.warn { border-left-color: var(--warning); }
+.flag.bad { border-left-color: var(--danger); }
+
+.flag p {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-3);
+  color: var(--text-secondary);
+  max-width: 68ch;
+}
+
+/* ── the metric cards ── */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.card dt {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.card dd {
+  margin: 2px 0 0;
+  font-family: var(--mono);
+  font-size: var(--font-xl);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.card-note, .card-why {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+/* Below the minimum trade count the cards are muted, not hidden: the number exists, it
+   simply cannot carry weight, and hiding it would invite rerunning until it appears. */
+.card.thin dd { color: var(--text-secondary); }
+.card.empty dd { color: var(--text-muted); }
+
+/* The interval, drawn as a bar beneath the point estimate. */
+.interval {
+  margin-top: var(--space-2);
+}
+
+.interval-bar {
+  display: block;
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.interval.crosses .interval-bar {
+  background: color-mix(in srgb, var(--warning) 55%, transparent);
+}
+
+.interval-zero {
+  position: absolute;
+  top: -3px;
+  width: 1px;
+  height: 9px;
+  background: var(--text-primary);
+}
+
+.interval-text {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+/* ── the tabs ── */
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-0);
+}
+
+.tabs .tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--font-base);
+  padding: var(--space-2) var(--space-3);
+}
+
+.tabs .tab:hover { color: var(--text-primary); }
+
+.tabs .tab.on {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+/* ── tier 2: the chart stack ── */
+.tier-mid {
+  flex: 1;
+  min-height: 240px;
+  padding: var(--space-3) var(--space-5);
+}
+
+.stack { position: relative; }
+
+.layer-chart + .layer-chart { margin-top: var(--space-2); }
+
+.layer-bar {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  height: 28px;
+  font-size: var(--font-sm);
+}
+
+.layer-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  padding: 0 var(--space-1);
+}
+
+.layer-title { color: var(--text-primary); }
+.layer-hint { color: var(--text-muted); font-size: var(--font-xs); }
+
+.layer-value {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.layer-svg { display: block; width: 100%; cursor: crosshair; }
+.stack-axis { display: block; width: 100%; }
+
+.layer-svg .series { stroke-width: 1.5; }
+.layer-svg .series.second { stroke-width: 1; opacity: 0.55; }
+.layer-svg .underwater { fill: var(--danger); opacity: 0.22; }
+.layer-svg .area { opacity: 0.18; }
+.layer-svg .rule { stroke: var(--border-strong); stroke-dasharray: 3 3; }
+.layer-svg .limit { stroke: var(--warning); stroke-dasharray: 4 3; opacity: 0.8; }
+.layer-svg .cross { stroke: var(--text-muted); stroke-width: 1; }
+.layer-svg .brushed { fill: var(--accent); opacity: 0.12; }
+.layer-svg .holdout { fill: var(--text-muted); opacity: 0.1; }
+
+.layer-svg .y-label, .stack-axis .tick {
+  fill: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+}
+
+.stack-axis .mark { fill: var(--warning); opacity: 0.8; }
+
+/* The tooltip is fixed at the top right and lists every layer, so reading one date
+   across four quantities needs no eye travel (the design plan's section 13). */
+.stack-tip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  pointer-events: none;
+  min-width: 190px;
+}
+
+.tip-date { color: var(--text-primary); margin-bottom: 2px; }
+.tip-row { display: flex; justify-content: space-between; gap: var(--space-3); }
+.tip-key { color: var(--text-muted); }
+.tip-val { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* ── tier 3: the trades ── */
+.tier-detail {
+  border-top: 1px solid var(--border);
+  background: var(--surface-1);
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+
+.tier-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5);
+}
+
+.tier-head h3 {
+  font-family: var(--display);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  margin: 0;
+}
+
+.tier-detail .scroll { overflow: auto; padding: 0 var(--space-5) var(--space-4); }
+
+table.trades, table.plain {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+table.trades th, table.plain th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-weight: var(--weight-regular);
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: right;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+table.trades td, table.plain td {
+  text-align: right;
+  padding: 0 var(--space-2);
+  height: var(--row-compact);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+table.trades .left, table.plain .left { text-align: left; }
+table.trades .mono { font-family: var(--mono); font-size: var(--font-xs); }
+table.trades tbody tr:hover { background: var(--surface-2); }
+
+table.trades tbody tr:focus-visible {
+  outline: none;
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.pos { color: var(--success); }
+.neg { color: var(--danger); }
+
+/* ── the other tabs ── */
+.pad { padding: var(--space-4) 0; max-width: 980px; }
+.pad h4 {
+  font-family: var(--display);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  margin: var(--space-5) 0 var(--space-1);
+}
+
+.sub {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  font-weight: var(--weight-regular);
+}
+
+td.bar {
+  width: 55%;
+}
+
+td.bar span {
+  display: block;
+  height: 12px;
+  border-radius: 2px;
+  opacity: 0.75;
+}
+
+.warn-text { color: var(--warning); }
+
+.checks {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.checks li {
+  border: 1px solid var(--border);
+  border-left-width: 2px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-1);
+  font-size: var(--font-sm);
+}
+
+.checks li.can { border-left-color: var(--success); }
+.checks li.cannot { border-left-color: var(--text-muted); }
+.checks li b { display: block; color: var(--text-primary); }
+.checks li span { color: var(--text-secondary); }
+.checks li em { display: block; color: var(--text-muted); font-style: normal;
+                margin-top: var(--space-1); }
+
+/* ── the conclusion tier, once the reader has scrolled past it ──
+   The design plan: "The top tier is sticky; on scroll the metric cards shrink to one
+   line." Without the shrink the tier is around 500 px of sticky header and the chart
+   stack below it has no room left — the page looks as though the charts are missing.
+
+   What survives the shrink is what a reader glancing up needs: the run's identity and the
+   numbers. The realism strip and the flags are read once, before the numbers, so they
+   give up their space and come back on scrolling up. */
+.tier-top.compact {
+  padding-bottom: var(--space-2);
+}
+
+.tier-top.compact .realism,
+.tier-top.compact .flags,
+.tier-top.compact .flags-none,
+.tier-top.compact .card-note,
+.tier-top.compact .card-why,
+.tier-top.compact .interval {
+  display: none;
+}
+
+.tier-top.compact .cards {
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  margin-top: var(--space-2);
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.tier-top.compact .card {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.tier-top.compact .card dd {
+  font-size: var(--font-md);
+  margin: 0;
+}
+
+.tier-top.compact .run-cfg { display: none; }
+
+/* The run id in the bench's history, as a link to this surface. The row itself still
+   previews the run in place; the id opens it properly. */
+.run-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.run-link:hover { border-bottom-color: var(--accent); }

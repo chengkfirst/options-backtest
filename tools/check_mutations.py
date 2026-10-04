@@ -277,6 +277,40 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_adapters.py::TestBadDataIsFound",),
     ),
     Mutation(
+        # The omission the equality test found: an order in flight names the ORDER event
+        # it was published as, and a fresh bus hands out ids from 1.
+        "a resumed run's event ids follow on from the first part's",
+        "backtest/engine/loop.py",
+        "            self.bus.resume(held.events, held.next_event_id)",
+        "            pass  # self.bus.resume(...)",
+        ("tests/test_runner.py::"
+         "TestAResumedRunIsTheSameRun::test_the_event_stream_follows_on",),
+    ),
+    Mutation(
+        "a resumed run restores the equity counters rather than restarting them",
+        "backtest/engine/loop.py",
+        '        self._peak_equity = counters.get("peak_equity", start_equity)',
+        "        self._peak_equity = start_equity",
+        ("tests/test_runner.py::"
+         "TestAResumedRunIsTheSameRun::"
+         "test_the_equity_curve_is_continuous_across_the_cut",),
+    ),
+    Mutation(
+        "a resumed run restores every stateful component",
+        "backtest/engine/loop.py",
+        "                component.set_state(state)",
+        "                pass  # component.set_state(state)",
+        ("tests/test_runner.py::TestAResumedRunIsTheSameRun",),
+    ),
+    Mutation(
+        "a batch counts the configurations that failed as trials",
+        "backtest/engine/runner.py",
+        "        nobody wrote down.\n        \"\"\"\n        return len(self.entries)",
+        "        nobody wrote down.\n        \"\"\"\n"
+        "        return len([e for e in self.entries if e.ran])",
+        ("tests/test_runner.py::TestTheBatchRunner",),
+    ),
+    Mutation(
         # Execution reading a quantity decided somewhere else is the engine going back to
         # turning a decision straight into an order, which produces the same result on
         # any day where no two slots overlap.

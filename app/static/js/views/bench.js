@@ -614,7 +614,8 @@ function paintRuns(){
       const s = stats(r.rows);
       const d = (baseSum !== null && r.id !== BASE) ? s.sum - baseSum : null;
       return `<tr data-run="${r.id}" class="${r.id === CURRENT ? "on" : ""}">
-        <td class="n">${r.id}</td>
+        <td class="n"><a class="run-link" href="#/runs/${r.id}"
+          title="open run ${r.id} on the analysis page">${r.id}</a></td>
         <td><span class="cfg" title="${cfgLine(r.config)}">${cfgLine(r.config)}</span></td>
         <td class="n">${s.n}</td>
         <td class="n">${s.n ? pct(s.win) : "—"}</td>
@@ -626,7 +627,10 @@ function paintRuns(){
     }).join("") + `</tbody>`;
   $("runs").querySelectorAll("tbody tr").forEach(tr =>
     tr.addEventListener("click", e => {
-      if(e.target.dataset.pin) return;
+      // The id is a link to the analysis page; the rest of the row previews the run here.
+      // Letting the row handler also fire would navigate and then immediately re-render
+      // the surface being left.
+      if(e.target.dataset.pin || e.target.closest(".run-link")) return;
       showRun(+tr.dataset.run);
     }));
   $("runs").querySelectorAll(".pin").forEach(b =>
