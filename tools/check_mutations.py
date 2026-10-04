@@ -277,6 +277,29 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_adapters.py::TestChecker",),
     ),
     Mutation(
+        "the scenario limit is read before an entry is placed",
+        "backtest/engine/loop.py",
+        "        if self.scenario_limit is not None:",
+        "        if False:",
+        ("tests/test_scenario_rule.py::TestTheEngineReadsIt",),
+    ),
+    Mutation(
+        # Every comparison with a missing value is false, so the scenario a limit is
+        # most wanted for would be the one it silently ignored.
+        "an unpriced scenario is a breach, not a pass",
+        "backtest/portfolio/scenario_rule.py",
+        "        if math.isnan(change):",
+        "        if False:",
+        ("tests/test_scenario_rule.py::TestTheUnknownCellIsNotAPass",),
+    ),
+    Mutation(
+        "a limit over a shock the grid cannot price is refused",
+        "backtest/portfolio/scenario_rule.py",
+        "        if beyond:",
+        "        if False:",
+        ("tests/test_scenario_rule.py::TestTheUnknownCellIsNotAPass",),
+    ),
+    Mutation(
         # The omission the equality test found: an order in flight names the ORDER event
         # it was published as, and a fresh bus hands out ids from 1.
         "a resumed run's event ids follow on from the first part's",

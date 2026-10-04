@@ -222,6 +222,38 @@ def run_batch(configs, *, runner=None):
     return _run_batch(configs, runner=runner if runner is not None else run)
 
 
+def _scenario_limit_from(given):
+    """The scenario limit from a mapping, with the unknown key refused.
+
+    Refused rather than ignored, as everywhere else here: a misspelled ``max_los``
+    accepted silently is a researcher who believes a limit is in force and is reading
+    the unlimited result.
+    """
+    from backtest.portfolio.scenario_rule import ScenarioLimit
+
+    if given is None:
+        return None
+    if isinstance(given, ScenarioLimit):
+        return given
+    known = {"max_loss", "scenarios"}
+    unknown = sorted(set(given) - known)
+    if unknown:
+        raise StartupError(
+            f"these are not scenario-limit settings: {unknown}. It takes "
+            f"{', '.join(sorted(known))}"
+        )
+    missing = sorted(known - set(given))
+    if missing:
+        raise StartupError(
+            f"a scenario limit needs {', '.join(missing)}. Which shocks a strategy "
+            f"should survive is a research choice, so there is no default -- for example "
+            f"scenario_limit={{'max_loss': 5000, 'scenarios': [[-0.05, 0.5]]}}"
+        )
+    return ScenarioLimit(max_loss=float(given["max_loss"]),
+                         scenarios=tuple(tuple(float(x) for x in pair)
+                                         for pair in given["scenarios"]))
+
+
 def _lifecycle_from(given) -> "Lifecycle":
     """The lifecycle settings from a mapping, with the unknown key refused.
 
@@ -295,6 +327,10 @@ def run(
     until: "str | date | None" = None,
     #: Continue a run from a checkpoint. See ``backtest.engine.runner``.
     resume_from: "Any | None" = None,
+    #: A scenario loss limit that **blocks** an entry whose addition would breach it:
+    #: ``{"max_loss": 5000, "scenarios": [[-0.05, 0.5], [-0.10, 1.0]]}``. Both keys are
+    #: required -- which shocks a strategy should survive is a research choice.
+    scenario_limit: "Mapping[str, Any] | None" = None,
 ) -> "Result":
     """Run one backtest.
 
@@ -411,9 +447,17 @@ def run(
         outcome = EventDrivenEngine(
             market, chain_source, signal_set, config, max_concurrent=max_concurrent,
             shadow_days=shadow_days, brake=_brake_from(risk),
+            scenario_limit=_scenario_limit_from(scenario_limit),
         ).run(strategy, until=_as_date(until) if until else None,
               resume_from=resume_from)
     else:
+        if scenario_limit is not None:
+            raise StartupError(
+                "the trade-table engine cannot enforce a scenario limit. The limit is "
+                "checked against the book as it would be with the trade in it, and the "
+                "trade table evaluates each trade independently with no book. Use "
+                "engine='event_driven'"
+            )
         if until is not None or resume_from is not None:
             raise StartupError(
                 "the trade-table engine cannot be stopped at a session or resumed. It "

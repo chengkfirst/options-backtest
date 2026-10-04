@@ -249,8 +249,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "quantity is not the gap the target named"),
     Requirement("3.3.scenario", "3.3",
                 "A scenario rule blocks trades that breach a scenario loss limit",
-                "a trade accepted that the grid says breaches the limit",
-                not_built="the grid reports and does not constrain"),
+                "a trade accepted that the grid says breaches the limit"),
     # ── 4.x Execution ─────────────────────────────────────────────────────
     Requirement("4.1.lambda", "4.1",
                 "fill = mid + lambda x (ask - mid), lambda >= 1",

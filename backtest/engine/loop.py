@@ -253,6 +253,7 @@ class EventDrivenEngine:
         limits=None,
         brake=None,
         shadow_days: int | None = None,
+        scenario_limit=None,
     ) -> None:
         self.market = market
         self.chain = chain
@@ -269,6 +270,9 @@ class EventDrivenEngine:
         #: run's** causal chain, and two runs sharing one would interleave their chains
         #: with nothing in a trace saying which run a link came from.
         self.bus = bus if bus is not None else EventBus()
+        #: The scenario loss limit, or None. Read before an entry is placed: the stress
+        #: grid reported for a long time and nothing consulted it when it mattered.
+        self.scenario_limit = scenario_limit
         #: None means no limit. With None and enforce_capital=False, this engine
         #: should agree with the trade-table engine.
         self.max_concurrent = max_concurrent
@@ -858,6 +862,12 @@ class EventDrivenEngine:
                 # choice, and it is in the fingerprint because a run without it cannot
                 # answer a counterfactual question a run with it can.
                 "shadow_days": self.shadow_days,
+                # It blocks entries, so it changes which trades happen. Fifth time
+                # something that moves the result has had to be added here explicitly.
+                "scenario_limit": (
+                    {"max_loss": self.scenario_limit.max_loss,
+                     "scenarios": list(self.scenario_limit.scenarios)}
+                    if self.scenario_limit is not None else None),
             },
             checkpoint=(self._checkpoint(
                 strategy, sessions[-1], ledger=ledger, queue=queue,
@@ -1257,9 +1267,67 @@ class EventDrivenEngine:
                 f"{strategy.sizing.method}) — less than one means no trade, and it is "
                 f"never rounded up", str(contract))
             return None
+        # **The scenario limit, read before the order is placed.** The stress grid has
+        # reported for a long time and nothing consulted it at the moment it mattered, so
+        # a limit a researcher had set lived in a report rather than in the book.
+        #
+        # Checked against the book **as it would be** with this trade in it, which is the
+        # only version of the question worth asking: a limit on the book as it stands
+        # would pass every trade that breaches it.
+        if self.scenario_limit is not None:
+            blocked = self._scenario_breaches(ledger, contract, quantity, day)
+            if blocked:
+                from backtest.portfolio.scenario_rule import describe
+
+                self.events.record(
+                    EventKind.CANDIDATE_DROPPED, day,
+                    describe(blocked, self.scenario_limit), str(contract))
+                self.bus.emit(
+                    EventType.RISK, day, "portfolio", component_id="headwind",
+                    reason=f"the scenario limit blocked an entry: "
+                           f"{blocked[0].describe()}",
+                    data={"breaches": len(blocked)})
+                return None
         return Intent(contract=contract, side=Side.BUY, quantity=quantity,
                       created=day, execute_on=target, trade_id=trade_id,
                       kind=Action.OPEN, reason="entry", component_id="entry")
+
+    def _scenario_breaches(self, ledger, contract, quantity: int, day: date):
+        """The scenarios this trade would push past the limit.
+
+        The candidate's greeks are added to the book's, which is an approximation and a
+        stated one: it ignores that the new contract's gamma makes the book's delta move
+        differently from the sum of the two. For a limit whose job is to stop a position
+        being opened that is the right side of the approximation -- the sum overstates
+        nothing and understates the interaction, so a breach reported here is real.
+        """
+        from backtest.portfolio.scenario_rule import check
+        from backtest.portfolio.scenarios import PortfolioGreeks, aggregate_greeks
+
+        frame = self.chain.series(contract, [day])
+        if frame.empty:
+            # No quote for the candidate, so its contribution cannot be priced. The
+            # entry will fail at the fill for the same reason, and refusing here with a
+            # scenario reason would attribute it to the limit.
+            return ()
+        row = frame.iloc[0]
+        spot = self.market.spot(day).or_else(float("nan"))
+        book = aggregate_greeks(ledger.positions, self.chain, day, spot,
+                                self._last_equity)
+        mult = self.config.contract.multiplier
+        added = {g: float(row[g]) * quantity * mult if g in row else 0.0
+                 for g in ("delta", "gamma", "vega", "theta")}
+        with_trade = PortfolioGreeks(
+            day=day, spot=spot,
+            delta=book.delta + added["delta"],
+            gamma=book.gamma + added["gamma"],
+            vega=book.vega + added["vega"],
+            theta=book.theta + added["theta"],
+            n_positions=book.n_positions + 1,
+            equity=book.equity,
+            missing=book.missing,
+        )
+        return check(with_trade, self.scenario_limit)
 
     def _market_ctx(self, day, ledger) -> Context:
         """The market and portfolio context for a review.
