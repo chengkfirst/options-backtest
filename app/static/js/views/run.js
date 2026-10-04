@@ -671,103 +671,83 @@ function numericCols(rows){
     !EXCLUDE.has(c) && typeof rows[0][c] === "number" && Number.isFinite(rows[0][c]));
 }
 
-/** Every setting this run was given, grouped the way the composer asks for them.
+/** Every setting this run was given, **generated from the component definitions**.
  *
- * The same seven components in the same order, so a reader who filled the form in
- * recognises what they are looking at rather than translating between two vocabularies.
- * A slot that was left alone says so — "not set" is a real answer and is different from a
- * slot that does not exist yet. */
+ * The groups, their order, the fields in each and what each field means all come from
+ * `META.form`, which the backend builds from `backtest/core/slots.py` — the same
+ * definition the composer draws its form from. It was hand-written here once, and that is
+ * a second copy of a definition that will change: the moment a component asks for
+ * something different, on whatever professional grounds, the composer follows it and a
+ * hand-written reader goes quietly stale. One definition, two renderings.
+ *
+ * The values are found by field name across the stored configuration, because which
+ * sub-object a field landed in (`select`, `exit`, `sizing`, or the top level) is the
+ * backend's filing decision and not something this view should know.
+ */
 function settingsTab(){
   const c = RUN.config || {};
-  const sel = c.select || {}, ex = c.exit || {}, sizing = c.sizing || {};
-  const band = (lo, hi, unit = "") =>
-    lo != null && hi != null ? `${lo}–${hi}${unit}`
-      : lo != null ? `at least ${lo}${unit}` : hi != null ? `at most ${hi}${unit}` : null;
+  const form = META?.form;
+  if(!form || !form.length)
+    return `<p class="hint">The component definitions could not be fetched, so there is
+      nothing to lay these settings out against.</p>`;
 
-  // A slot decided by a registered form says so **where that slot is**, not only in a
-  // summary line at the bottom. Reading "(4) stop loss" and seeing only a holding cap
-  // would say no stop was set, which is the opposite of true.
-  const byForm = {...(c.components || {})};
-  if(c.risk?.variant) byForm.headwind = c.risk;
-  const form = slot => {
-    const f = byForm[slot];
-    if(!f) return [];
-    const shown = Object.entries(f.params || {}).map(([k, v]) => [`　${k}`, v]);
-    return [[`decided by the ${f.variant} form`,
-             f.version != null ? `version ${f.version}` : "yes"], ...shown];
+  // Every place a field's value might have been filed. Searched in order; the first hit
+  // wins, which is well defined because field names are unique across the form.
+  const SOURCES = [c, c.select || {}, c.exit || {}, c.sizing || {}];
+  const valueOf = name => {
+    for(const where of SOURCES)
+      if(where && Object.prototype.hasOwnProperty.call(where, name) && where[name] != null
+         && where[name] !== "")
+        return where[name];
+    return null;
   };
 
-  const groups = [
-    ["(1) setup / regime", [
-      ["", null, "No regime condition was applied: every signal was taken."],
-    ]],
-    ["(2) entry", [
-      ["condition", typeof c.entry === "string" ? c.entry : "(a function)", "mono"],
-      ["custom signals", (c.signals || []).join(", ") || null],
-    ]],
-    ["(2b) contract selection", [
-      ["type", sel.right],
-      ["days to expiry", band(sel.dte_lo, sel.dte_hi, " calendar days")],
-      ["delta band", band(sel.delta_lo, sel.delta_hi)],
-      ["target delta", sel.delta, "", "the contract in the band closest to this"],
-      ["max bid/ask spread", sel.max_spread, "", "as a fraction of the mid"],
-      ["min open interest", sel.min_open_interest],
-      ["IV band", band(sel.iv_lo, sel.iv_hi)],
-    ]],
-    ["(3) take profit", [
-      ...form("take_profit"),
-      ["take profit", ex.take_profit, "", "times the premium paid"],
-    ]],
-    ["(4) stop loss", [
-      ...form("stop_loss"),
-      ["stop loss", ex.stop_loss, "", "times the premium paid"],
-      ["max holding period", ex.hold_days != null ? `${ex.hold_days} trading days` : null],
-      ["min days to expiry", ex.dte_floor != null ? `${ex.dte_floor} days` : null,
-       "", "forces an exit rather than being dragged into expiry"],
-    ]],
-    ["(5) headwind", [
-      ...form("headwind"),
-      ["daily review", c.review_code ? "a review function" : null],
-    ]],
-    ["(6) positioning", [
-      ["how size is set", sizing.method],
-      ["risk per trade", sizing.risk_pct, "", "fraction of equity lost if the stop is hit"],
-      ["contracts", sizing.method === "fixed" ? c.quantity : null],
-      ["amount per trade", sizing.notional],
-      ["reference volatility", sizing.target_vol],
-    ]],
-    ["(7) hedge", [
-      ["", null, "No hedge was configured: exposure limits and multi-leg are not wired "
-                 + "to the interface yet."],
-    ]],
-    ["how it was run", [
-      ["symbol", c.symbol],
-      ["period", `${c.start} → ${c.end}`],
-      ["engine", c.engine === "event_driven" ? "event driven" : "trade table"],
-      ["max concurrent", c.max_concurrent],
-      ["slots filled by a registered form",
-       Object.entries(c.components || {}).map(([slot, one]) =>
-         `${slot} = ${one.variant}`).join(", ") || null],
-    ]],
-  ];
+  // A slot filled by a registered form, keyed by slot. Which `run()` argument it arrived
+  // through is the backend's business; both are shown at the slot they decide.
+  const byForm = {...(c.components || {})};
+  if(c.risk?.variant) byForm.headwind = c.risk;
+
+  const groups = form.flatMap(layer => layer.components.map(comp => {
+    const chosen = byForm[comp.key];
+    const rows = [];
+    if(chosen)
+      rows.push([`decided by the ${chosen.variant} form`,
+                 chosen.version != null ? `version ${chosen.version}` : "yes",
+                 "a registered form decides this slot in place of the setting below"],
+                ...Object.entries(chosen.params || {}).map(([k, v]) => [`　${k}`, v, ""]));
+    for(const field of comp.inputs || []){
+      // The field a chosen form replaced is not missing, it is superseded, and the row
+      // above already says so.
+      if(chosen && field.name === comp.key) continue;
+      const v = valueOf(field.name);
+      if(v == null) continue;
+      rows.push([field.label, field.unit ? `${v} ${field.unit}` : v, field.help || ""]);
+    }
+    return {name: comp.name, rows, gap: comp.gap, status: comp.status,
+            inputs: (comp.inputs || []).length};
+  }));
 
   return `<div class="pad">
-    <p class="hint">Everything this run was given. A blank means it was left alone, which
-      is a different statement from a slot that does not exist yet — those say so.</p>
-    <div class="settings">${groups.map(([name, fields]) => {
-      const shown = fields.filter(([, v]) => v != null && v !== "");
-      const notes = fields.filter(([k, v, , ]) => v == null && !k);
-      return `<section class="setting-group">
-        <h4>${esc(name)}</h4>
-        ${shown.length ? `<dl>${shown.map(([k, v, cls, why]) => `
+    <p class="hint">Everything this run was given, laid out as the seven components that
+      asked for it. A component with nothing shown was left alone — which is a different
+      statement from one that cannot be configured yet, and those say so.</p>
+    <div class="settings">${groups.map(g => `
+      <section class="setting-group">
+        <h4>${esc(g.name)}</h4>
+        ${g.rows.length ? `<dl>${g.rows.map(([k, v, why]) => `
           <dt${why ? ` data-tip="${esc(why)}"` : ""}>${esc(k)}</dt>
-          <dd${cls === "mono" ? ' class="mono"' : ""}>${esc(String(v))}</dd>`).join("")}</dl>`
-          : ""}
-        ${notes.map(n => `<p class="setting-none">${esc(n[2])}</p>`).join("")}
-        ${!shown.length && !notes.length
-          ? `<p class="setting-none">Not set.</p>` : ""}
-      </section>`;
-    }).join("")}</div>
+          <dd>${esc(String(v))}</dd>`).join("")}</dl>` : ""}
+        ${!g.rows.length ? `<p class="setting-none">${
+          g.inputs ? "Left alone." : esc(shortGap(g))}</p>` : ""}
+      </section>`).join("")}
+      <section class="setting-group"><h4>how it was run</h4><dl>
+        <dt>symbol</dt><dd>${esc(c.symbol ?? "—")}</dd>
+        <dt>period</dt><dd>${esc(`${c.start} → ${c.end}`)}</dd>
+        <dt>engine</dt><dd>${esc(c.engine === "event_driven" ? "event driven" : "trade table")}</dd>
+        ${c.max_concurrent != null
+          ? `<dt>max concurrent</dt><dd>${esc(String(c.max_concurrent))}</dd>` : ""}
+      </dl></section>
+    </div>
     ${c.entry_code || c.plan_code || c.signals_code ? `
       <h4 class="code-head">the code this run carried</h4>
       ${[["entry", c.entry_code], ["plan", c.plan_code], ["signals", c.signals_code]]
@@ -775,6 +755,13 @@ function settingsTab(){
         .map(([what, code]) => `<details class="code-block"><summary>${esc(what)}</summary>
           <pre>${esc(code)}</pre></details>`).join("")}` : ""}
   </div>`;
+}
+
+/** Why a component shows nothing: its own words, trimmed to a line. */
+function shortGap(g){
+  const text = (g.gap || "").replace(/\*\*/g, "");
+  const first = text.split(/[;.]/)[0] || "nothing to configure yet";
+  return first.length > 90 ? first.slice(0, 90) + "…" : first;
 }
 
 function attributionTab(){

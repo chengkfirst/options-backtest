@@ -109,6 +109,19 @@ def _template(src: str, start: int) -> tuple[str, int]:
         if src[i:i + 2] == "${":
             depth, j = 1, i + 2
             while j < n and depth:
+                # **Comments first.** A hole holds real code, and real code holds comments,
+                # and a comment holds prose — prose with apostrophes in it. Skipping
+                # strings but not comments meant that `// the parameter's kind` opened a
+                # quote that ran to the next apostrophe in the file, swallowing 21,000
+                # characters of code and reporting three imports as unused.
+                if src[j:j + 2] == "//":
+                    k = src.find("\n", j)
+                    j = n if k < 0 else k
+                    continue
+                if src[j:j + 2] == "/*":
+                    k = src.find("*/", j + 2)
+                    j = n if k < 0 else k + 2
+                    continue
                 if src[j] == "{":
                     depth += 1
                 elif src[j] == "}":
@@ -197,7 +210,60 @@ def defined(src: str) -> set[str]:
     return names
 
 
+#: Shapes that have each broken the scanner once, with what must survive them.
+#:
+#: The scanner is the whole guard: if it loses its place, everything after the construct
+#: that lost it is blanked, and the check then reports imports as unused and calls as
+#: missing with complete confidence. That has happened three times — `\b` never matching
+#: before `$`, template holes blanked along with their text, and an apostrophe in a comment
+#: **inside** a hole opening a string that ran for 21,000 characters. Each one looked like
+#: a finding about the code rather than a bug in the reader.
+#:
+#: So the reader is checked before it is believed.
+PARSER_CASES: tuple[tuple[str, str, bool], ...] = (
+    # The real shape: an apostrophe in a comment inside a hole, and **another apostrophe
+    # further down the file**. The first opens a bogus string, the second closes it, and
+    # everything between — including the end of the template — is swallowed, so the code
+    # after the template is read as template text and blanked. A case with only one
+    # apostrophe does not reproduce it: the runaway string reaches the end of the input and
+    # the recursive pass over the hole still sees the code.
+    ("an apostrophe in a comment inside a hole",
+     "const a = `x${ fn(() => {\n  // the parameter's kind\n  return 1;\n}) }`;\n"
+     "// it's later\nconst b = SURVIVES(1);",
+     True),
+    ("a block comment inside a hole",
+     "const a = `x${ fn(() => { /* it's fine */ return SURVIVES(2); }) }`;", True),
+    ("code inside a hole is kept", "const a = `x${ SURVIVES(3) }y`;", True),
+    ("a nested template inside a hole",
+     "const a = `x${ c ? `y${ SURVIVES(4) }z` : '' }w`;", True),
+    ("text inside a template is dropped", "const a = `SURVIVES is only text here`;", False),
+    ("a line comment is dropped", "// SURVIVES\nconst a = 1;", False),
+    ("a plain string is dropped", 'const a = "SURVIVES";', False),
+)
+
+
+def check_parser() -> list[str]:
+    """Verify the scanner on the shapes that have broken it, before trusting its output."""
+    wrong = []
+    for name, source, should_survive in PARSER_CASES:
+        survived = "SURVIVES" in strip_noise(source)
+        if survived is not should_survive:
+            wrong.append(
+                f"the source reader is broken: with {name}, code that should "
+                f"{'survive' if should_survive else 'be blanked'} was "
+                f"{'blanked' if should_survive else 'kept'}. Every finding below would be "
+                f"unreliable, so none is reported"
+            )
+    return wrong
+
+
 def main() -> int:
+    broken = check_parser()
+    if broken:
+        print("the module check could not run:")
+        for line in broken:
+            print(f"  - {line}")
+        return 1
     if not JS.exists():
         print(f"there is no module directory at {JS.relative_to(ROOT)}")
         return 1

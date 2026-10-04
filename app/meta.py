@@ -206,14 +206,26 @@ def _components() -> dict[str, Any]:
     """
     from backtest.core.component import SLOTS, variants
 
+    #: How a form for this slot reaches the engine. Declared here, in the layer that
+    #: already translates a filled-in form into ``run()`` arguments, rather than guessed in
+    #: the browser — the interface should carry whatever the registry holds without
+    #: knowing anything about what a slot *means*.
+    #:
+    #: ``risk`` is the book-wide rule: it acts on the whole book rather than on one trade,
+    #: so the engine takes it by its own argument. Everything else is a component of a
+    #: trade and goes through ``components``.
+    sends_to = {slot: ("risk" if slot == "headwind" else "components") for slot in SLOTS}
+
     by_slot: dict[str, list[dict[str, Any]]] = {slot: [] for slot in SLOTS}
     for v in variants():
         by_slot.setdefault(v.slot, []).append({
+            "slot": v.slot,
             "name": v.name,
             "version": v.version,
             "ref": v.ref,
             "describes": v.describes,
             "stateful": v.stateful,
+            "sends_to": sends_to.get(v.slot, "components"),
             "params": [{
                 "name": p.name, "kind": p.kind, "means": p.means,
                 "lo": p.lo, "hi": p.hi, "required": p.required,

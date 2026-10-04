@@ -236,14 +236,29 @@ function variantParams(slot, form){
   return `<p class="variant-why">${esc(form.describes)}</p>
     <div class="fields">${form.params.map(p => {
       const id = `v_${slot}_${p.name}`;
-      const step = p.hi != null && p.hi <= 2 ? 0.05 : 1;
-      return `<div class="field">
-        <label for="${id}" data-tip="${esc(p.means)}${p.required ? "" : ". Optional — leave it blank and this form does without it."}">${esc(p.name)}${
-          p.required ? "" : ` <span class="unit">optional</span>`}</label>
-        <input type="number" id="${id}" data-param="${slot}:${p.name}"
-          value="${PARAMS[`${slot}:${p.name}`] ?? ""}" step="${step}"
+      const key = `${slot}:${p.name}`;
+      const held = PARAMS[key];
+      const label = `<label for="${id}" data-tip="${esc(p.means)}${
+        p.required ? "" : ". Optional — left blank, this form does without it."}">${
+        esc(p.name)}${p.required ? "" : ` <span class="unit">optional</span>`}</label>`;
+      // The control follows the parameter's **kind**, which the schema states. An earlier
+      // version rendered everything as a number box and guessed the step from the range —
+      // two things the interface was inventing about parameters it does not own, and the
+      // first boolean parameter registered would have had no way to be set at all.
+      if(p.kind === "bool")
+        return `<div class="field">${label}
+          <select id="${id}" data-param="${key}">
+            <option value=""${held == null || held === "" ? " selected" : ""}>${
+              p.required ? "choose" : "leave unset"}</option>
+            <option value="true"${held === "true" ? " selected" : ""}>true</option>
+            <option value="false"${held === "false" ? " selected" : ""}>false</option>
+          </select></div>`;
+      return `<div class="field">${label}
+        <input type="number" id="${id}" data-param="${key}"
+          value="${held ?? ""}" step="${p.kind === "int" ? "1" : "any"}"
           ${p.lo != null ? `min="${p.lo}"` : ""} ${p.hi != null ? `max="${p.hi}"` : ""}
-          placeholder="${p.required ? "required" : "optional"}">
+          placeholder="${p.required ? "required" : "optional"}${
+            p.lo != null && p.hi != null ? ` · ${p.lo} to ${p.hi}` : ""}">
       </div>`;
     }).join("")}</div>`;
 }
@@ -303,10 +318,12 @@ function bindFields(){
       else delete PICKED[slot];
       renderComponents();
     }));
-  $("comps").querySelectorAll("[data-param]").forEach(input =>
-    input.addEventListener("input", () => {
-      PARAMS[input.dataset.param] = input.value;
-    }));
+  // `change` as well as `input`, because a select fires only the former.
+  $("comps").querySelectorAll("[data-param]").forEach(el => {
+    const keep = () => { PARAMS[el.dataset.param] = el.value; };
+    el.addEventListener("input", keep);
+    el.addEventListener("change", keep);
+  });
   apply();
 }
 
@@ -401,10 +418,15 @@ function formPayload(){
       // Blank means "not given". It is never filled in here: a component parameter is a
       // strategy choice, and the backend refuses a missing required one by name rather
       // than running on a number nobody chose.
-      if(raw !== "") params[p.name] = Number(raw);
+      if(raw === "") continue;
+      params[p.name] = p.kind === "bool" ? raw === "true" : Number(raw);
     }
     const spec = {variant, version: form.version, params};
-    if(slot === "headwind") o.risk = spec;
+    // Where a form goes is the backend's to say, not this file's. It used to read
+    // `if (slot === "headwind")`, which is a fact about what that slot means — exactly the
+    // kind of thing the interface must not know, because the day a slot's meaning is
+    // settled on professional grounds the interface should not need editing.
+    if(form.sends_to === "risk") o.risk = spec;
     else components[slot] = spec;
   }
   if(Object.keys(components).length) o.components = components;
@@ -445,10 +467,22 @@ async function runBacktest(){
   btn.disabled = true; btn.classList.add("busy"); btn.textContent = "running…";
   const note = document.createElement("div");
   note.className = "busy-note";
-  note.innerHTML = `<span class="spin"></span><span>Running. The first fetch is slower; after that it is cached.</span>`;
   $("issues").after(note);
 
   const t0 = performance.now();
+  // **A counter, not just a spinner.** A backtest can take well over a minute — the
+  // engine values American early exercise on a tree, day by day, for every open position
+  // — and a spinner that only spins cannot be told apart from a page that has hung. The
+  // elapsed time rising is the difference between waiting and worrying.
+  const tick = () => {
+    const secs = (performance.now() - t0) / 1000;
+    note.innerHTML = `<span class="spin"></span><span>Running — <b>${secs.toFixed(0)}s
+      </b> so far.${secs > 20 ? " A long range, or an American contract whose early "
+      + "exercise is valued on a tree each day, takes minutes rather than seconds." : ""}
+      </span>`;
+  };
+  tick();
+  const ticking = setInterval(tick, 1000);
   try{
     const data = await postJSON(API.run, formPayload());
     checkContract(data);
@@ -473,6 +507,7 @@ async function runBacktest(){
     // the browser without knowing where is worse than a crash.
     notice(e.detail ? `${e.message}\n\n${e.detail}` : e.message);
   }finally{
+    clearInterval(ticking);
     note.remove();
     btn.disabled = false; btn.classList.remove("busy"); btn.textContent = "run";
     $("runHint").textContent = `last run took ${((performance.now()-t0)/1000).toFixed(1)} seconds.`;
