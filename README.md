@@ -259,6 +259,33 @@ found. A run where no fill can be explained produces the same trade table as one
 every fill can. Pass a `trade_id` for one trade instead of all of them.
 
 
+## Stopping and continuing a run
+
+```python
+# skip (two runs plus a continuation)
+first = run(**config, until="2022-12-30")     # stops there, with a checkpoint
+whole = run(**config, resume_from=first.checkpoint)
+```
+
+A resumed run is **row-identical** to a continuous one — that is the correctness
+criterion and the test that holds it. The useful case is not an interrupted run: it is
+taking the book as it stood at a date and continuing it under a different rule, which
+otherwise needs two full runs that differ in every trade before the change as well as
+after it.
+
+```python
+# skip (one backtest per configuration)
+from backtest import run_batch
+
+batch = run_batch({"wide": {**config, "exit": {"stop_loss": 0.6}},
+                   "tight": {**config, "exit": {"stop_loss": 0.3}}})
+print(batch.describe())
+```
+
+`batch.trials` counts the configurations that **failed** as well as the ones that ran. A
+batch of forty is forty trials whether or not thirty-nine are mentioned again, and that
+is the number the deflated Sharpe needs.
+
 ## How much of this is the cost assumption
 
 ```python
@@ -398,8 +425,9 @@ backtest/
   execution/    costs.py
                                         [absent: orders.py market_rules/ fill_models/
                                                  slippage/ exercise.py sim_broker.py]
-  engine/       loop.py vectorized.py strategy.py
-                                        [absent: scheduler.py runner.py batch.py]
+  engine/       loop.py vectorized.py strategy.py runner.py
+                                        [absent: scheduler.py — batch.py is
+                                                 run_batch() in runner.py]
   accounting/   ledger.py tradebook.py attribution.py
                                         [absent: positions.py cash.py valuation.py
                                                  corp_actions.py expiry.py pnl.py

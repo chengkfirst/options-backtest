@@ -8,7 +8,7 @@
 import {$} from "../dom.js";
 import {money, num, pct, sgn} from "../fmt.js";
 
-import {blankChart, txt} from "./svg.js";
+import {blankChart, fit, txt} from "./svg.js";
 
 
 /* ── the cumulative P&L curve ── */
@@ -17,7 +17,8 @@ export function renderCurve(rows, hasEquity){
   if(!rows.length){blankChart(svg,"no trades under the current filter, so no curve");return;}
   const seq=[...rows].sort((a,b)=>a.exit_date<b.exit_date?-1:1);
   let cum=0, pts=seq.map(r=>{cum+=r.net_pnl;return{d:r.exit_date,v:cum};});
-  const W=1080,H=260,PL=62,PR=16,PT=18,PB=30;
+  const {W, H} = fit(svg, {height: 260});
+  const PL=62,PR=16,PT=18,PB=30;
   const lo=Math.min(0,...pts.map(p=>p.v)), hi=Math.max(0,...pts.map(p=>p.v));
   const x=i=>PL+i/(pts.length-1||1)*(W-PL-PR);
   const y=v=>H-PB-(v-lo)/((hi-lo)||1)*(H-PT-PB);
@@ -33,13 +34,13 @@ export function renderCurve(rows, hasEquity){
   if(dd<-1){
     s+=`<line x1="${x(ddAt).toFixed(1)}" x2="${x(ddAt).toFixed(1)}" y1="${PT}" y2="${H-PB}"
         stroke="var(--loss)" stroke-width="1" stroke-dasharray="2 4" opacity=".55"/>`;
-    s+=txt(x(ddAt)+5,PT+11,`largest fall ${money(dd)}`,{fill:"var(--loss)",size:10.5,mono:false});
+    s+=txt(x(ddAt)+5,PT+11,`largest fall ${money(dd)}`,{fill:"var(--loss)",size:11,mono:false});
   }
   for(const v of [hi,0,lo]) if(Math.abs(v)>1e-9||v===0)
     s+=txt(PL-7,y(v)+3.5,money(v),{anchor:"end"});
   const yrs=[...new Set(seq.map(r=>r.exit_date.slice(0,4)))];
   yrs.forEach(yr=>{const i=seq.findIndex(r=>r.exit_date.slice(0,4)===yr);
-    if(i>=0)s+=txt(x(i),H-PB+15,yr,{anchor:"middle",size:9.5});});
+    if(i>=0)s+=txt(x(i),H-PB+15,yr,{anchor:"middle",size:11});});
   s+=txt(W-PR,PT+4,`final ${money(end)}`,{fill:col,size:12,anchor:"end",mono:false,weight:600});
   svg.innerHTML=s;
   // This curve is per-trade P&L accumulated by exit date, which is not account equity.
@@ -60,7 +61,8 @@ export function renderCurve(rows, hasEquity){
 export function renderEquity(rows){
   const svg = $("equity");
   if(!rows || !rows.length){ blankChart(svg, "the trade-table engine has no equity curve"); return; }
-  const W=1080,H=280,PL=70,PR=16,PT=18,PB=32;
+  const {W, H} = fit(svg, {height: 280});
+  const PL=70,PR=16,PT=18,PB=32;
   const mid = rows.map(r=>r.equity_mid), liq = rows.map(r=>r.equity_liq);
   const lo = Math.min(...liq), hi = Math.max(...mid);
   const x = i => PL + i/(rows.length-1||1)*(W-PL-PR);
@@ -82,15 +84,15 @@ export function renderEquity(rows){
     s += `<line x1="${x(worstAt).toFixed(1)}" x2="${x(worstAt).toFixed(1)}" y1="${PT}" y2="${H-PB}"
             stroke="var(--loss)" stroke-width="1" stroke-dasharray="2 4" opacity=".5"/>`;
     s += txt(x(worstAt)+5, PT+11, `max drawdown ${(worst/peak*100).toFixed(1)}%`,
-             {fill:"var(--loss)", size:10.5, mono:false});
+             {fill:"var(--loss)", size:11, mono:false});
   }
   for(const v of [hi, start, lo]) s += txt(PL-7, y(v)+3.5, money(v), {anchor:"end"});
   const years = [...new Set(rows.map(r=>String(r.date).slice(0,4)))];
   years.forEach(yr=>{ const i = rows.findIndex(r=>String(r.date).slice(0,4)===yr);
-    if(i>=0) s += txt(x(i), H-PB+15, yr, {anchor:"middle", size:9.5}); });
+    if(i>=0) s += txt(x(i), H-PB+15, yr, {anchor:"middle", size:11}); });
   s += txt(W-PR, PT+4, `final ${money(end)}`, {fill:col, size:12, anchor:"end", mono:false, weight:600});
   s += txt(W-PR, PT+20, "the thin line is liquidation value (marked at the bid, what could be sold)",
-           {fill:"var(--ink-3)", size:10.5, anchor:"end", mono:false});
+           {fill:"var(--ink-3)", size:11, anchor:"end", mono:false});
   svg.innerHTML = s;
 }
 

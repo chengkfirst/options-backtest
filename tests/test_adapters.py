@@ -101,6 +101,76 @@ class TestNormalise:
 
 
 class TestChecker:
+    """## Two checks that had no test at all
+
+    ``check_frame`` flags a price offered **below intrinsic value** (arbitrage, so bad
+    data -- a backtest buying there books a profit nobody could have taken) and a
+    **locked market** (bid equal to ask, which the crossed-quote check misses and the
+    fill model would happily price at zero cost).
+
+    Both were written with a mutation entry naming ``TestBadDataIsFound``, a class that
+    does not exist in this file. ``pytest`` exits non-zero for an id it cannot collect,
+    and the mutation runner read that as "the mutation was caught" -- so both reported
+    OK for months while nothing tested either. The runner now refuses an entry whose
+    tests cannot be collected, which is how these two were found.
+    """
+
+    def test_a_price_below_intrinsic_value_is_flagged(self):
+        """Against the **ask**: a price you could have paid below intrinsic is the
+        arbitrage. A bid below it is ordinary -- nobody is obliged to bid fair value, so
+        a check on the bid would flag healthy data all day."""
+        frame = make_vendor()
+        # A 380 call with the underlying at 400 is 20 intrinsic. Offered at 4.2.
+        offered = check_frame(frame)
+        assert any("below their intrinsic" in w for w in offered.warnings), (
+            "a 380-strike call offered at 4.20 with the underlying at 400 is 15.80 of "
+            "free money and nothing said so"
+        )
+
+    def test_a_bid_below_intrinsic_is_not_flagged(self):
+        """The half that would make the check useless. A deep in-the-money contract with
+        a wide spread has a bid below intrinsic most days."""
+        import numpy as np
+
+        frame = make_vendor()
+        spot, strike = frame["underlying_price"], frame["strike"]
+        intrinsic = np.where(frame["right"] == "C",
+                             np.maximum(spot - strike, 0.0),
+                             np.maximum(strike - spot, 0.0))
+        # The ask sits above intrinsic for every row, which is what healthy data looks
+        # like; the bid sits 1.50 **below** it, which is what a wide spread on a deep
+        # in-the-money contract looks like and must not be flagged.
+        frame.loc[:, "ask"] = intrinsic + 0.50
+        frame.loc[:, "bid"] = intrinsic - 1.50
+        frame.loc[frame["bid"] < 0, "bid"] = 0.05
+        result = check_frame(frame)
+        assert not any("below their intrinsic" in w for w in result.warnings), (
+            "the check is reading the bid, so it flags every wide spread on a deep "
+            "in-the-money contract"
+        )
+
+    def test_a_locked_market_is_flagged(self):
+        """Bid equal to ask. Not crossed, so the crossed check misses it, and not
+        tradable either -- a real quote has a spread, and a zero-width one is a feed
+        artefact or a halt. The fill model would use the mid and report no cost."""
+        frame = make_vendor()
+        frame.loc[frame.index[:4], "ask"] = frame.loc[frame.index[:4], "bid"]
+        result = check_frame(frame)
+        assert any("locked market" in w for w in result.warnings)
+        assert any("no cost" in w for w in result.warnings), (
+            "the warning does not say what a locked quote costs a backtest, which is "
+            "the only reason a reader would act on it"
+        )
+
+    def test_a_zero_zero_quote_is_not_called_a_locked_market(self):
+        """A contract with no quote at all is a different thing, already flagged as a
+        zero bid. Calling it locked would put the same row under two headings and
+        overstate both counts."""
+        frame = make_vendor()
+        frame.loc[frame.index[:4], ["bid", "ask"]] = [0.0, 0.0]
+        result = check_frame(frame)
+        assert not any("locked market" in w for w in result.warnings)
+
     def test_clean_data_passes(self):
         assert check_frame(make_vendor()).ok
 

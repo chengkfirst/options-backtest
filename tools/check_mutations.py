@@ -106,7 +106,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "            if day < self.first or day > self.last:",
         "            if False:",
         ("tests/test_engine.py::"
-         "TestNoTradeOutlivesTheRange::"
+         "TestAPositionOpenAtTheEnd::"
          "test_a_date_beyond_the_calendar_raises_rather_than_clamping",),
     ),
     Mutation(
@@ -115,7 +115,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "CALENDAR_MARGIN_DAYS = 830",
         "CALENDAR_MARGIN_DAYS = 0",
         ("tests/test_engine.py::"
-         "TestNoTradeOutlivesTheRange::"
+         "TestAPositionOpenAtTheEnd::"
          "test_an_expiry_past_the_range_is_counted_over_the_real_calendar",),
     ),
     Mutation(
@@ -267,14 +267,14 @@ MUTATIONS: tuple[Mutation, ...] = (
         "backtest/data/options/adapters.py",
         '        below = frame["ask"].astype(float) < intrinsic - 0.005',
         '        below = frame["ask"].astype(float) < -1e9',
-        ("tests/test_adapters.py::TestBadDataIsFound",),
+        ("tests/test_adapters.py::TestChecker",),
     ),
     Mutation(
         "a locked market is flagged",
         "backtest/data/options/adapters.py",
         "    if locked.any():",
         "    if False:",
-        ("tests/test_adapters.py::TestBadDataIsFound",),
+        ("tests/test_adapters.py::TestChecker",),
     ),
     Mutation(
         # The omission the equality test found: an order in flight names the ORDER event
@@ -293,7 +293,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        self._peak_equity = start_equity",
         ("tests/test_runner.py::"
          "TestAResumedRunIsTheSameRun::"
-         "test_the_equity_curve_is_continuous_across_the_cut",),
+         "test_the_equity_counters_are_restored_and_not_restarted",),
     ),
     Mutation(
         "a resumed run restores every stateful component",
@@ -425,6 +425,23 @@ def run_one(mutation: Mutation) -> tuple[bool, str]:
         return False, "the anchor is not in the file; this mechanism is unchecked"
     if original.count(mutation.anchor) > 1:
         return False, f"the anchor appears {original.count(mutation.anchor)} times"
+
+    # **The named tests have to exist and pass first.**
+    #
+    # A renamed test leaves the entry pointing at an id pytest cannot collect, and pytest
+    # exits non-zero for that -- which this read as "the mutation was caught". So a
+    # mechanism whose test had been renamed reported OK for ever, which is the exact
+    # failure this whole file exists to prevent, one level up. Found when a test renamed
+    # minutes earlier still reported its mutation as caught.
+    for target in mutation.tests:
+        if target.endswith(".py"):
+            continue
+        probe = subprocess.run(
+            [sys.executable, "-m", "pytest", target, "-q", "--no-header",
+             "--collect-only"],
+            cwd=ROOT, capture_output=True)
+        if probe.returncode != 0:
+            return False, f"{target} cannot be collected; the entry names no such test"
 
     path.write_text(original.replace(mutation.anchor, mutation.replacement, 1),
                     encoding="utf-8")

@@ -7,7 +7,7 @@
 
 import {$} from "../dom.js";
 import {money} from "../fmt.js";
-import {blankChart, txt} from "./svg.js";
+import {blankChart, fit, txt} from "./svg.js";
 
 
 /* ── P&L attribution (horizontal bars, positive and negative apart) ── */
@@ -19,7 +19,8 @@ export function renderAttribution(attr){
                  vega:"vega · implied vol", theta:"theta · time", residual:"residual"};
   const vals = names.map(n=>attr.totals[n] || 0);
   const lim = Math.max(...vals.map(Math.abs), 1);
-  const W=520,H=200,PL=118,PR=54,PT=14,PB=26;
+  const {W, H} = fit(svg, {height: 200});
+  const PL=118,PR=54,PT=14,PB=26;
   const mid = PL + (W-PL-PR)/2;
   const half = (W-PL-PR)/2;
   const rowH = (H-PT-PB)/names.length;
@@ -36,6 +37,6 @@ export function renderAttribution(attr){
   });
   if(attr.high_residual)
     s += txt(mid, H-PB+16, `${attr.high_residual} trades have too large a residual to trust`,
-             {anchor:"middle", size:10.5, fill:"var(--warn)", mono:false});
+             {anchor:"middle", size:11, fill:"var(--warn)", mono:false});
   svg.innerHTML = s;
 }

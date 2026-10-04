@@ -4,7 +4,7 @@ For usage see :func:`run`. The architecture is ``Plan/backtest-system-architectu
 what is built against it, and the boundaries that follow, are in ``requirements.md``.
 """
 
-from backtest.api.sdk import Result, run
+from backtest.api.sdk import Result, run, run_batch
 from backtest.core.config import BacktestConfig, CostConfig, SyntheticChainConfig
 from backtest.research.sweep import SweepResult
 from backtest.signals.strategy import ExitRule, all_of, crossover, threshold

@@ -49,6 +49,7 @@ from backtest.signals.review import Add, Close, PositionView, Reduce
 from backtest.signals.exit_context import exit_context
 from backtest.signals.lifecycle import Candidate, State
 from backtest.signals.strategy import ExitRule
+from backtest.engine.runner import Checkpoint
 from backtest.engine.strategy import Strategy
 from backtest.core.errors import InvariantError, StartupError
 from backtest.core.events import Event, EventBus, EventType
@@ -325,45 +326,103 @@ class EventDrivenEngine:
             )
 
     # ── the main loop ─────────────────────────────────────
-    def run(self, strategy: Strategy) -> EventDrivenResult:
+    def run(self, strategy: Strategy, *, until: "date | None" = None,
+            resume_from: "Checkpoint | None" = None) -> EventDrivenResult:
+        """Run the strategy over the configured range.
+
+        ``until`` stops after that session and puts a :class:`Checkpoint` on the result,
+        so the run can be continued. ``resume_from`` continues one.
+
+        Both are optional and absent by default, which is the whole run in one piece --
+        the shape every caller had before resume existed, and the shape the equality test
+        compares against.
+        """
         self._guard(strategy)
+        if resume_from is not None:
+            if resume_from.strategy_name != strategy.name:
+                raise StartupError(
+                    f"this checkpoint was taken from {resume_from.strategy_name!r} and "
+                    f"is being resumed under {strategy.name!r}. Continuing one "
+                    f"strategy's book under another builds a book nobody ran"
+                )
+            if until is not None and until <= resume_from.through:
+                raise StartupError(
+                    f"this checkpoint already covers through {resume_from.through} and "
+                    f"the run is asked to stop at {until}, so there is nothing to do. "
+                    f"A no-op resume returning a result would read as a run"
+                )
         #: Held so the state protocol can reach the bound components. The engine is given
         #: the strategy per run rather than per construction, so this is where it lands.
         self._strategy = strategy
         cal = self.market.calendar
-        ledger = Ledger(self.config.notional_capital, self.config.contract)
-        queue: list[Intent] = []
-        open_trades: dict[int, OpenTrade] = {}
-        records: list[TradeRecord] = []
-        snapshots: list[Snapshot] = []
-        greeks_daily: list = []
-        next_trade_id = 1
-        self._last_equity = float(self.config.notional_capital)
-        self._peak_equity = float(self.config.notional_capital)
-        self._drawdown = 0.0
-        paths: list[dict] = []
-        shadow: list[dict] = []
-        actions: list[TradeAction] = []
+        held = resume_from
+        ledger = (held.ledger if held is not None
+                  else Ledger(self.config.notional_capital, self.config.contract))
+        queue: list[Intent] = list(held.queue) if held is not None else []
+        open_trades: dict[int, OpenTrade] = (dict(held.open_trades) if held is not None
+                                             else {})
+        records: list[TradeRecord] = list(held.records) if held is not None else []
+        snapshots: list[Snapshot] = list(held.snapshots) if held is not None else []
+        greeks_daily: list = list(held.greeks) if held is not None else []
+        next_trade_id = held.next_trade_id if held is not None else 1
+        counters = dict(held.counters) if held is not None else {}
+        start_equity = float(self.config.notional_capital)
+        self._last_equity = counters.get("last_equity", start_equity)
+        # **Restored, not restarted.** A resumed run whose peak equity began again at the
+        # initial capital reports no drawdown until it exceeds the old peak -- so a
+        # drawdown brake would be released by the act of resuming, which is the kind of
+        # difference nothing else in a result would show.
+        self._peak_equity = counters.get("peak_equity", start_equity)
+        self._drawdown = counters.get("drawdown", 0.0)
+        paths: list[dict] = list(held.paths) if held is not None else []
+        shadow: list[dict] = list(held.shadow) if held is not None else []
+        actions: list[TradeAction] = list(held.actions) if held is not None else []
         #: trade_id -> what is needed to keep quoting a contract after its trade closed.
-        shadowing: dict[int, dict] = {}
+        shadowing: dict[int, dict] = dict(held.shadowing) if held is not None else {}
         #: symbol -> the day its shares were delivered, so they can be sold on the next
         #: session. Delivery is overnight, so selling on the delivery day itself would be
         #: a fill before the shares existed.
-        deliveries: dict[str, date] = {}
+        deliveries: dict[str, date] = (dict(held.deliveries) if held is not None
+                                       else {})
         #: symbol -> its candidate. One per underlying, which is the scope the document
         #: gives the Idle and Armed states; Open and Closed belong to a trade_id. Without
         #: the separation, "may this underlying trade again yet" has nowhere to live and
         #: ends up decided by accident in the engine.
-        candidates: dict[str, Candidate] = {
-            self.config.symbol: Candidate(symbol=self.config.symbol)}
-        self._brake_state = "none"
+        candidates: dict[str, Candidate] = (
+            dict(held.candidates) if held is not None
+            else {self.config.symbol: Candidate(symbol=self.config.symbol)})
+        self._brake_state = counters.get("brake_state", "none")
         self._risk = NOTHING
-        self._daily_return = 0.0
-        self._prev_equity = 0.0
+        self._daily_return = counters.get("daily_return", 0.0)
+        self._prev_equity = counters.get("prev_equity", 0.0)
         self._last_greeks = None
         self._closed_pnl = records          # the same list, referenced not copied
+        if held is not None:
+            for slot, state in held.component_state.items():
+                component = strategy.components.get(slot)
+                if component is None:
+                    raise StartupError(
+                        f"the checkpoint holds state for the {slot!r} slot and this run "
+                        f"has no component there. Resuming would discard it, and a "
+                        f"trailing stop that resumed from its entry is a fixed stop for "
+                        f"the rest of the trade"
+                    )
+                component.set_state(state)
+        if held is not None and held.events:
+            # The stream follows on, so an order in flight still names a real event.
+            self.bus.resume(held.events, held.next_event_id)
 
-        for day in self.market.sessions():
+        sessions = [d for d in self.market.sessions()
+                    if (held is None or d > held.through)
+                    and (until is None or d <= until)]
+        if not sessions:
+            raise StartupError(
+                f"there are no sessions left to run"
+                + (f" after {held.through}" if held is not None else "")
+                + (f" up to {until}" if until is not None else "")
+                + ". A run over no sessions returns a result that looks like a backtest"
+            )
+        for day in sessions:
             # The day's events, published as they happen and delivered at the end of it
             # in the document's order. Published rather than delivered inline: delivering
             # on publish would run observers in the order the loop happens to emit, which
@@ -799,6 +858,53 @@ class EventDrivenEngine:
                 # choice, and it is in the fingerprint because a run without it cannot
                 # answer a counterfactual question a run with it can.
                 "shadow_days": self.shadow_days,
+            },
+            checkpoint=(self._checkpoint(
+                strategy, sessions[-1], ledger=ledger, queue=queue,
+                open_trades=open_trades, records=records, snapshots=snapshots,
+                greeks=greeks_daily, paths=paths, shadow=shadow, actions=actions,
+                shadowing=shadowing, deliveries=deliveries, candidates=candidates,
+                next_trade_id=next_trade_id)
+                if until is not None else None),
+        )
+
+    def _checkpoint(self, strategy, through: date, **state) -> "Checkpoint":
+        """The run's state at the end of ``through``.
+
+        Built in one place from named arguments rather than read off the instance,
+        because the failure mode here is **omission** -- a field the loop keeps and this
+        does not, producing a resumed run that is plausible and different. A keyword here
+        is a field someone had to name; an attribute scan would silently cover whatever
+        happened to be set.
+        """
+        return Checkpoint(
+            through=through,
+            strategy_name=strategy.name,
+            run_id="",                  # filled by the API layer, which owns the hash
+            ledger=state["ledger"],
+            queue=tuple(state["queue"]),
+            open_trades=dict(state["open_trades"]),
+            records=tuple(state["records"]),
+            snapshots=tuple(state["snapshots"]),
+            greeks=tuple(state["greeks"]),
+            paths=tuple(state["paths"]),
+            shadow=tuple(state["shadow"]),
+            actions=tuple(state["actions"]),
+            shadowing=dict(state["shadowing"]),
+            deliveries=dict(state["deliveries"]),
+            candidates=dict(state["candidates"]),
+            next_trade_id=state["next_trade_id"],
+            component_state={slot: c.get_state()
+                             for slot, c in self._stateful_components().items()},
+            events=self.bus.history,
+            next_event_id=len(self.bus.history) + len(self.bus.pending()) + 1,
+            counters={
+                "last_equity": self._last_equity,
+                "peak_equity": self._peak_equity,
+                "drawdown": self._drawdown,
+                "daily_return": self._daily_return,
+                "prev_equity": self._prev_equity,
+                "brake_state": self._brake_state,
             },
         )
 

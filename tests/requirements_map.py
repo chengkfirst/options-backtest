@@ -301,8 +301,8 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "the two engines producing different trades on one configuration"),
     Requirement("5.1.resume", "5.1",
                 "A runner with state snapshots for resume, and a batch runner",
-                "a run that cannot be continued",
-                not_built="no component state, so nothing to snapshot"),
+                "a resumed run differing from a continuous one, or a batch whose trial "
+                "count omits the configurations that failed"),
     Requirement("5.2.tradebook", "5.2",
                 "One record per trade with every action and the component that issued "
                 "it, MFE and MAE in premium **and underlying** terms",

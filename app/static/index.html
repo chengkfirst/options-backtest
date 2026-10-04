@@ -116,137 +116,24 @@
 <!-- ══ right: results ══ -->
 <main class="stage">
 
-  <!-- Run history: comparison is the substance of research, so it comes first -->
+  <!-- The bench composes a run and lists what has been run. **Reading a result happens on
+       the analysis surface**, not here: the design plan separates composing (section 4)
+       from analysing (section 6), and one page doing both was a single endless scroll of
+       every chart at once, with no way to tell which question each answered. -->
   <section class="runs" id="runsSec" hidden>
     <div class="runs-head">
-      <h2>run history</h2>
-      <p>Click a row to view it. Pin one as the baseline and the other rows show their change against it.</p>
+      <h2>runs in this session</h2>
+      <p>Click a run's number to open it on the analysis page. Pin one as the baseline and
+         the others show their change against it.</p>
     </div>
     <div class="scroll"><table id="runs"></table></div>
   </section>
 
   <div class="placeholder" id="placeholder">
     <h2>nothing run yet</h2>
-    <p>Write the plan on the left, then press run.</p>
+    <p>Fill in the components on the left, then press run.<br>
+       The result opens on its own page, where it can be read, brushed and linked to.</p>
     <p class="hint" id="gapList" hidden></p>
-  </div>
-
-  <div id="result" hidden>
-    <div class="banner" id="banner" hidden></div>
-    <section id="anomSec" hidden>
-      <h3 class="sec-h">worth a look<span class="sec-why">found by rules; nothing found, nothing shown</span></h3>
-      <div id="anomBody" class="anom-body"></div>
-    </section>
-
-    <section id="diagSec" hidden>
-      <h3 class="sec-h">what happened during this run<span class="sec-why">expand for the reasons</span></h3>
-      <div id="diagBody" class="diag-body"></div>
-    </section>
-    <dl class="strip" id="strip"></dl>
-
-    <div class="ai">
-      <div class="ai-head">
-        <h2>have the AI read it</h2>
-        <p>Hand this run's statistics to Claude, for the leads worth following and what cannot be trusted.</p>
-        <button class="btn" id="ask">ask Claude</button>
-        <button class="btn ghost" id="stop" hidden>stop</button>
-      </div>
-      <div class="ai-body" id="aiOut"></div>
-    </div>
-
-    <section id="validSec" hidden>
-      <div class="sec-head"><h2>validate this run</h2>
-        <p>Run on demand, because each one re-runs the strategy. Every report states
-           first what its numbers can and cannot be used for &mdash; on the synthetic
-           chain an option-side conclusion describes Black-Scholes, not the market.</p></div>
-      <div id="validTools" class="valid-tools"></div>
-      <pre id="validOut" class="valid-out" hidden></pre>
-    </section>
-
-    <section id="equitySec" hidden>
-      <div class="sec-head"><h2>equity curve</h2><p id="equityNote"></p></div>
-      <div class="chart"><svg id="equity" viewBox="0 0 1080 280" role="img" aria-label="equity curve"></svg></div>
-      <dl class="strip" id="equityStrip"></dl>
-    </section>
-
-    <section id="attrSec" hidden>
-      <div class="sec-head"><h2>P&amp;L attribution</h2>
-        <p>Where the money came from: direction (delta), movement (gamma), implied
-           volatility (vega), time (theta). A large residual means the approximation
-           failed and those trades' attribution cannot be trusted.</p></div>
-      <div class="chart"><svg id="attr" viewBox="0 0 520 200" role="img" aria-label="P&amp;L attribution"></svg></div>
-    </section>
-
-    <section id="scenSec" hidden>
-      <div class="sec-head"><h2>historical scenarios</h2>
-        <p>Performance over real historical windows. No approximation, so more
-           trustworthy than a stress test.</p></div>
-      <div class="scroll"><table id="scen"></table></div>
-    </section>
-
-    <section>
-      <div class="sec-head"><h2>cumulative P&amp;L</h2><p id="curveNote"></p></div>
-      <div class="chart"><svg id="curve" viewBox="0 0 1080 260" role="img" aria-label="cumulative P&amp;L"></svg></div>
-    </section>
-
-    <div class="two">
-      <section>
-        <div class="sec-head"><h2>per-trade P&amp;L distribution</h2></div>
-        <div class="chart"><svg id="hist" viewBox="0 0 520 250" role="img" aria-label="per-trade P&amp;L distribution"></svg></div>
-      </section>
-      <section>
-        <div class="sec-head"><h2>by year</h2></div>
-        <div class="chart"><svg id="years" viewBox="0 0 520 220" role="img" aria-label="P&amp;L by year"></svg></div>
-      </section>
-    </div>
-
-    <section>
-      <div class="sec-head"><h2>robustness</h2>
-        <p>Does it hold without the best few trades? A sign flip means the conclusion
-           rests on extremes.</p></div>
-      <div class="scroll"><table id="robust"></table></div>
-    </section>
-
-    <details class="more">
-      <summary>cut it by a condition</summary>
-      <div class="more-body">
-        <div class="controls">
-          <div class="field"><label for="dim">group by</label><select id="dim"></select></div>
-          <div class="field"><label for="bins">buckets</label>
-            <select id="bins"><option>3</option><option selected>4</option><option>5</option><option>6</option></select></div>
-          <div class="field"><label for="dim2">cross with</label><select id="dim2"></select></div>
-          <div class="field"><label for="reason">exit reason</label><select id="reason"></select></div>
-        </div>
-        <section>
-          <div class="sec-head"><h2>by bucket</h2><p id="dimNote"></p></div>
-          <div class="scroll"><table id="buckets"></table></div>
-        </section>
-        <div class="two">
-          <section>
-            <div class="sec-head"><h2>this dimension against P&amp;L</h2><p id="scatNote"></p></div>
-            <div class="chart"><svg id="scatter" viewBox="0 0 520 250" role="img" aria-label="dimension against P&amp;L"></svg></div>
-          </section>
-          <section>
-            <div class="sec-head"><h2>the two halves</h2><p>Split at the median.</p></div>
-            <div class="ab" id="ab"></div>
-          </section>
-        </div>
-        <section id="crossSec" hidden>
-          <div class="sec-head"><h2>crossed buckets</h2>
-            <p>Each cell is the mean per trade. Cells with fewer than 15 trades are
-               dimmed — extremes there are usually noise.</p></div>
-          <div class="scroll"><table class="grid-tab" id="cross"></table></div>
-        </section>
-      </div>
-    </details>
-
-    <details class="more">
-      <summary>trade by trade</summary>
-      <div class="more-body">
-        <p class="hint" id="detailNote"></p>
-        <div class="scroll" style="max-height:440px;overflow-y:auto"><table id="detail"></table></div>
-      </div>
-    </details>
   </div>
 </main>
   </section>

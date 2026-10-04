@@ -210,6 +210,18 @@ def _exit_from(spec: Mapping[str, Any] | ExitRule) -> ExitRule:
     )
 
 
+def run_batch(configs, *, runner=None):
+    """Run a batch of configurations. See ``backtest.engine.runner.run_batch``.
+
+    The default runner lives here rather than there because that module is Layer 5 and
+    this is Layer 7: a default of :func:`run` inside it was a reverse import, which
+    ``tools/check_deps.py`` refused.
+    """
+    from backtest.engine.runner import run_batch as _run_batch
+
+    return _run_batch(configs, runner=runner if runner is not None else run)
+
+
 def _lifecycle_from(given) -> "Lifecycle":
     """The lifecycle settings from a mapping, with the unknown key refused.
 
@@ -277,6 +289,12 @@ def run(
     #: ``cooldown_sessions``, ``max_concurrent_trades``. Every default reproduces the
     #: engine's old behaviour, so naming them changes no result.
     lifecycle: "Mapping[str, Any] | None" = None,
+    #: Stop after this session and put a checkpoint on the result, so the run can be
+    #: continued. The event-driven engine only: the trade table evaluates each trade
+    #: independently and has no state between sessions to snapshot.
+    until: "str | date | None" = None,
+    #: Continue a run from a checkpoint. See ``backtest.engine.runner``.
+    resume_from: "Any | None" = None,
 ) -> "Result":
     """Run one backtest.
 
@@ -393,8 +411,16 @@ def run(
         outcome = EventDrivenEngine(
             market, chain_source, signal_set, config, max_concurrent=max_concurrent,
             shadow_days=shadow_days, brake=_brake_from(risk),
-        ).run(strategy)
+        ).run(strategy, until=_as_date(until) if until else None,
+              resume_from=resume_from)
     else:
+        if until is not None or resume_from is not None:
+            raise StartupError(
+                "the trade-table engine cannot be stopped at a session or resumed. It "
+                "evaluates each trade independently over the whole range rather than "
+                "stepping day by day, so there is no state between sessions to "
+                "snapshot. Use engine='event_driven'"
+            )
         if risk:
             raise StartupError(
                 "a book-wide risk rule needs the event-driven engine: scaling the book "

@@ -148,6 +148,10 @@ class EventDrivenResult:
     #: ``result.bus.trace(fill_id)`` is how a fill is followed back to the component that
     #: decided it.
     bus: Any = None
+    #: The run's state at its last session, when the run was asked to stop there.
+    #: None for a whole run: a checkpoint of a finished run is a thing nobody can
+    #: continue, and offering one would invite the attempt.
+    checkpoint: Any = None
 
     @property
     def actions_frame(self):

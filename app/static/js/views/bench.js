@@ -1,39 +1,37 @@
-/* views/bench.js — the bench: compose a configuration, run it, read the result.
+/* views/bench.js — the composer: write a configuration and run it.
  *
- * Its job: collect the form, send the request, keep the run records, and hand results to
- * the chart modules. It holds no statistical formula (those are in stats.js, under
- * notice) and no drawing code (that is in charts/).
+ * Its job ends at the moment a run is submitted. Reading the result happens on the
+ * analysis surface (`views/run.js`), which is the design plan's separation of composing
+ * (section 4) from analysing (section 6).
  *
- * One rule runs through the whole file: **no silent failure**. Every error and every
- * skipped thing goes through notice() into the problem strip at the top of the page —
- * seeing a blank in the browser without knowing why is worse than a crash. So there is
- * no empty catch here, and no quiet early return.
+ * They were one page, and it was the wrong shape: a form on the left and, on the right,
+ * every chart the system can draw in one endless scroll — history, banner, anomalies,
+ * diagnostics, metrics, attribution, scenarios, distribution, buckets, the trade log — with
+ * nothing saying which question each answered. It also meant two surfaces claiming the
+ * same element ids, so a chart rendered from here landed in the other page's markup.
  *
- * This is the surface the design plan splits into a composer and a run-analysis page.
- * Until those exist it is one view, moved into the module tree unchanged so that the
- * move and the redesign are separate changes.
+ * What is left: the form generated from the component definitions, the contract-selection
+ * reference, and the list of runs made in this session, each linking to its own page.
+ *
+ * One rule runs through the file: **no silent failure**. Every error and every skipped
+ * thing goes through notice() into the problem strip at the top of the page — seeing a
+ * blank in the browser without knowing why is worse than a crash. So there is no empty
+ * catch here, and no quiet early return.
  */
 "use strict";
 
-import {$, esc, mark} from "./../dom.js";
+import {$, esc} from "./../dom.js";
 import {API, clearIssues, getJSON, notice, postJSON} from "./../net.js";
 import {CONTRACT, checkContract, checkMeta} from "./../contract.js";
-import {EXCLUDE, REASON, fmtVal, label, money, num, pct, sgn} from "./../fmt.js";
-import {bucketize, stats} from "./../stats.js";
-import {blankChart} from "./../charts/svg.js";
-import {renderCurve, renderEquity, renderEquityStrip} from "./../charts/equity.js";
-import {renderAB, renderHist, renderScatter, renderYears} from "./../charts/distribution.js";
-import {renderBuckets, renderCross, renderDetail, renderRobust, renderScenarios,
-        renderStrip} from "./../charts/tables.js";
-import {renderAttribution} from "./../charts/attribution.js";
+import {money, num, pct, sgn} from "./../fmt.js";
+import {stats} from "./../stats.js";
+import {go} from "./../router.js";
 
 let META = null;          // the contents of /api/meta
 let LIVE = false;         // is the service up
-let RUNS = [];            // every run so far
-let CURRENT = null;       // which one is being viewed
+let RUNS = [];            // the runs submitted in this session
+let CURRENT = null;       // the most recent, highlighted in the list
 let BASE = null;          // the pinned baseline run id (the server's `id` field)
-let RAW = [], VIEW = [];  // this run's trade rows (charts.js reads these two)
-let ask = null, ctl = null;
 
 
 /* ── startup: probe the service ── */
@@ -328,9 +326,20 @@ async function runBacktest(){
     checkContract(data);
     RUNS.push(data);
     BASE = BASE ?? data.id;
-    showRun(data.id);
-    if(!data.rows.length)
-      notice("this run produced no trades. The entry condition may be too strict, or nothing in the range could be selected.");
+    CURRENT = data.id;
+    paintRuns();
+    if(!data.rows.length){
+      // No trades is a fact about the configuration, read here where the configuration
+      // is. Sending the reader to an analysis page with nothing on it would be a worse
+      // way to say the same thing.
+      notice("this run produced no trades. The entry condition may be too strict, or "
+        + "nothing in the range could be selected.");
+      return;
+    }
+    // The result opens on its own surface. The composer stays as it is behind it, so the
+    // next variation is one click back — the design plan's "the composer stays open after
+    // submitting".
+    go(`/runs/${data.id}`);
   }catch(e){
     // The whole error chain goes back to the interface on purpose: seeing "it failed" in
     // the browser without knowing where is worse than a crash.
@@ -403,159 +412,17 @@ $("tradeoffRef").addEventListener("toggle", e => {
   if(e.target.open && !$("toWhen").textContent) loadTradeoff();
 });
 
-/* ── the anomaly scan ─────────────────────────────────────
-   Found by rules, not by asking a model to look. Nothing triggered hides the whole
-   block — an insight forced out of nothing is noise, and noise makes real warnings get
-   skipped. */
-/* `null` and `[]` are different answers and are shown differently.
-   `[]` means the scan ran and nothing fired, so the section is hidden — an insight forced
-   out of nothing is noise. `null` means **this run never recorded one**, which is true of
-   every run stored before the column existed, and hiding that would let an unexamined run
-   pass for a clean one. */
-const NOT_RECORDED = `<p class="hint">This run did not record it. Runs stored before the
-  interface kept this have nothing to show here — which is not the same as having found
-  nothing. Run the configuration again to get one.</p>`;
-
-function renderAnomalies(found){
-  $("anomSec").hidden = Array.isArray(found) && !found.length;
-  if(Array.isArray(found) && !found.length) return;
-  $("anomBody").innerHTML = found == null ? NOT_RECORDED : found.map(f => `
-    <div class="anom ${f.severity}">
-      <div class="anom-h">${esc(f.headline)}</div>
-      <div class="anom-d">${esc(f.detail)}</div>
-    </div>`).join("");
-}
-
-/* ── this run's diagnostics ───────────────────────────────
-   Unlike the component gaps, these differ every run and can be inspected. A count alone
-   is useless — "45 candidates dropped" does not say whether to care; the distribution of
-   reasons is what distinguishes a signal that is too strict from a chain that holds
-   nothing qualifying. */
-const DIAG_LABEL = {
-  candidate_dropped: "candidate dropped",
-  selection_failed:  "nothing selectable",
-  not_tradable:      "untradable",
-  quote_missing:     "no quote to mark against",
-  range_truncated:   "range truncated",
-  fill_deferred:     "fill deferred",
-};
-function renderDiagnostics(diags){
-  const box = $("diagSec");
-  if(!box) return;
-  box.hidden = Array.isArray(diags) && !diags.length;
-  if(Array.isArray(diags) && !diags.length) return;
-  if(diags == null){ $("diagBody").innerHTML = NOT_RECORDED; return; }
-  $("diagBody").innerHTML = diags.map(d => `
-    <details class="diag">
-      <summary><span class="diag-n">${d.count.toLocaleString()}</span>
-        ${DIAG_LABEL[d.kind] || d.kind}
-        <span class="diag-span">${d.first} → ${d.last}</span></summary>
-      <ul>${d.reasons.map(r =>
-        `<li><span class="diag-n">${r.n}</span>${String(r.why).replace(/</g,"&lt;")}</li>`).join("")}</ul>
-    </details>`).join("");
-}
-
-
-/* ── validate this run ────────────────────────────────────
-   The four tools from the research layer, run on demand. On demand because each one
-   re-runs the strategy — ablation once per slot, baselines once per draw — so running
-   them with every backtest would make the run button slow for something not always
-   wanted.
-
-   The buttons are rendered from META.validations, which the backend builds from the
-   runner's own declaration. A tool added there appears here with no edit on this side;
-   that is the only arrangement in which the two cannot drift apart.
-
-   The output is shown as text, deliberately. Every one of these reports leads with the
-   boundary on its own conclusions — on the synthetic chain an exit level describes
-   Black-Scholes, not the market. Splitting the report into fields for this side to
-   re-assemble is exactly how that line gets dropped. */
-const VALID_INPUTS = {
-  baselines: [{key:"draws", label:"random draws", value:50, hint:"at least 10"}],
-  counterfactual: [
-    {key:"take_profits", label:"take profits", value:"0.5, 1.0, 1.5", text:true},
-    {key:"stop_losses",  label:"stop losses",  value:"0.3, 0.5, 0.7", text:true},
-  ],
-  trials: [{key:"years", label:"years covered", value:"", hint:"the stored Sharpe is annualised"}],
-  ablation: [],
-};
-
-function renderValidations(run){
-  const box = $("validSec");
-  if(!box) return;
-  // META is null when /api/meta could not be fetched; that failure is already in the
-  // problem strip, so this hides the section rather than reporting it twice.
-  const tools = (META && META.validations) || [];
-  const offered = new Set(run.validations || []);
-  box.hidden = !tools.length;
-  $("validOut").hidden = true;
-  $("validTools").innerHTML = tools.map(t => {
-    const can = offered.has(t.kind);
-    const inputs = (VALID_INPUTS[t.kind] || []).map(i =>
-      `<label for="v_${t.kind}_${i.key}">${esc(i.label)}</label>
-       <input id="v_${t.kind}_${i.key}" value="${esc(i.value)}"
-              ${i.hint ? `title="${esc(i.hint)}"` : ""}>`).join("");
-    const action = can
-      ? `<div class="vrow">${inputs}
-           <button class="btn ghost" data-valid="${t.kind}">run</button></div>`
-      : `<div class="unavail">needs the ${(t.engines || []).join(" or ")} engine;
-           this run used ${esc(run.engine)}</div>`;
-    return `<div class="valid-tool">
-      <h4>${esc(t.label)}</h4><p>${esc(t.why)}</p>${action}</div>`;
-  }).join("");
-  $("validTools").querySelectorAll("[data-valid]").forEach(b =>
-    b.addEventListener("click", () => runValidation(b.dataset.valid, b)));
-}
-
-function validParams(kind){
-  const out = {};
-  for(const i of (VALID_INPUTS[kind] || [])){
-    const el = $(`v_${kind}_${i.key}`);
-    if(!el) continue;
-    const raw = el.value.trim();
-    if(!raw) continue;
-    out[i.key] = i.text
-      ? raw.split(",").map(x => x.trim()).filter(Boolean).map(Number)
-      : Number(raw);
-  }
-  return out;
-}
-
-async function runValidation(kind, btn){
-  const out = $("validOut");
-  btn.disabled = true;
-  const was = btn.textContent;
-  btn.textContent = "running…";
-  out.hidden = false;
-  out.textContent = "Running. This re-runs the strategy, so it takes about as long as the backtest did.";
-  try{
-    const data = await postJSON(API.validate, {
-      id: CURRENT, kind, params: validParams(kind),
-    });
-    out.innerHTML = mark(data.text);
-  }catch(e){
-    // Both a refusal and a dropped connection land here, and both belong in the report's
-    // own box rather than the problem strip: "the counterfactual needs its levels" is an
-    // instruction, not a fault, and net.js already writes the transport failures as a
-    // sentence that says what to check.
-    out.textContent = e.message;
-  }finally{
-    btn.disabled = false; btn.textContent = was;
-  }
-}
-
-
 /* ── describing a configuration ───────────────────────────
    **One reading of the stored config, used by every place that describes a run.**
 
-   There were two, and both had gone stale: each read `select.dte` and
-   `select.moneyness`, neither of which the backend writes — selection has been a
-   feasible region (`dte_lo`/`dte_hi`, a delta band, a ranking target) for some time. The
-   run history printed "undefinedDTE" and the same string was handed to Claude as the
-   strategy's description. Nothing raised, because reading an absent field is not an
-   error in JS; it just renders.
+   There were two, and both had gone stale: each read `select.dte` and `select.moneyness`,
+   neither of which the backend writes — selection has been a feasible region
+   (`dte_lo`/`dte_hi`, a delta band, a ranking target) for some time. The run history
+   printed "undefinedDTE" and the same string was handed to Claude as the strategy's
+   description. Nothing raised, because reading an absent field is not an error in JS; it
+   just renders.
 
-   Absence is shown as "—" and never as `undefined`, and the field names are declared in
+   Absence shows as "—" and never as `undefined`, and the field names are declared in
    CONTRACT so that check_wiring fails on the next rename instead of the screen. */
 function describeConfig(c){
   const s = c.select || {}, x = c.exit || {};
@@ -636,177 +503,3 @@ function paintRuns(){
   $("runs").querySelectorAll(".pin").forEach(b =>
     b.addEventListener("click", e => { e.stopPropagation(); BASE = +b.dataset.pin; paintRuns(); }));
 }
-
-/* ── show one run ── */
-function showRun(runId){
-  const run = RUNS.find(r => r.id === runId);
-  if(!run){ notice(`no result found for run ${runId}.`); return; }
-  CURRENT = runId;
-  RAW = run.rows;
-  $("placeholder").hidden = true;
-  $("result").hidden = false;
-  paintRuns();
-
-  const b = $("banner");
-  // The hard boundary: one line, above the numbers. It decides whether they can be used.
-  b.hidden = !run.boundary;
-  if(run.boundary)
-    b.innerHTML = `<b>the boundary on these numbers</b><span>${run.boundary.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")}</span>`;
-  // Only real problems go into the notice strip. Component gaps do not — they are static,
-  // and they sit beside each layer in the left panel.
-  for(const m of (run.problems || [])) notice(m);
-  renderAnomalies(run.anomalies);
-  renderDiagnostics(run.diagnostics);
-  renderValidations(run);
-  // Run events are not repeated into the notice strip. They are already in the
-  // diagnostics panel, with the distribution of reasons and the date range — a
-  // "candidate_dropped: 45" line in the strip is a worse version of the same thing. The
-  // strip is for what has to be known at once: errors, and a run with no trades.
-
-  fillDimSelects();
-  apply();
-}
-
-function numericCols(rows){
-  if(!rows.length) return [];
-  return Object.keys(rows[0]).filter(c =>
-    !EXCLUDE.has(c) && typeof rows[0][c] === "number" && Number.isFinite(rows[0][c]));
-}
-function fillDimSelects(){
-  const cols = numericCols(RAW);
-  if(!cols.length){ notice("this run's trade log has no numeric column to group by."); return; }
-  const keep = [$("dim").value, $("dim2").value];
-  const opts = cols.map(c => `<option value="${c}">${label(c)}</option>`).join("");
-  $("dim").innerHTML = opts;
-  $("dim2").innerHTML = `<option value="">(no cross)</option>` + opts;
-  $("dim").value  = cols.includes(keep[0]) ? keep[0] : (cols.includes("entry_iv") ? "entry_iv" : cols[0]);
-  $("dim2").value = cols.includes(keep[1]) ? keep[1] : "";
-  const rs = [...new Set(RAW.map(r => r.exit_reason).filter(Boolean))].sort();
-  $("reason").innerHTML = `<option value="">all</option>` +
-    rs.map(r => `<option value="${r}">${REASON[r] || r}</option>`).join("");
-}
-
-function apply(){
-  const reason = $("reason").value;
-  VIEW = reason ? RAW.filter(r => r.exit_reason === reason) : RAW;
-  const col = $("dim").value, col2 = $("dim2").value, k = +$("bins").value;
-  renderStrip(VIEW);
-  if(!VIEW.length){
-    for(const id of ["buckets","cross","robust","detail"]) $(id).innerHTML = "";
-    for(const id of ["curve","hist","years","scatter"]) blankChart($(id), "no trades under the current filter");
-    $("ab").innerHTML = `<div class="empty" style="grid-column:1/-1">no trades under the current filter</div>`;
-    $("crossSec").hidden = true;
-    notice(`no trades left after filtering on "${REASON[reason] || reason}".`);
-    return;
-  }
-  const run = RUNS.find(r => r.id === CURRENT);
-  // The three event-driven-only sections. Absent under the trade table they are hidden,
-  // rather than shown as a row of zeros.
-  const hasEquity = !!(run && run.equity && run.equity.length);
-  $("equitySec").hidden = !hasEquity;
-  $("scenSec").hidden = !(run && run.scenarios && run.scenarios.length);
-  if(hasEquity){ renderEquity(run.equity); renderEquityStrip(run.equity_metrics); }
-  if(run && run.scenarios) renderScenarios(run.scenarios);
-  $("attrSec").hidden = !(run && run.attribution);
-  if(run && run.attribution) renderAttribution(run.attribution);
-
-  renderCurve(VIEW, hasEquity); renderHist(VIEW); renderYears(VIEW); renderRobust(VIEW); renderDetail(VIEW);
-  renderBuckets(VIEW, col, k); renderScatter(VIEW, col); renderAB(VIEW, col);
-  renderCross(VIEW, col, col2, k);
-  $("aiOut").textContent = "";
-}
-["dim","dim2","bins","reason"].forEach(id => $(id).addEventListener("change", apply));
-
-/* ── have the AI read it ── */
-function digest(rows, col, k){
-  const run = RUNS.find(r => r.id === CURRENT);
-  const s = stats(rows), B = bucketize(rows, col, k) || [];
-  const by = {}; for(const r of rows){ const y = r.entry_date.slice(0,4); by[y] = (by[y]||0) + r.net_pnl; }
-  const top5 = [...rows].sort((a,b)=>b.net_pnl-a.net_pnl).slice(0,5).reduce((a,r)=>a+r.net_pnl,0);
-  const reasons = {};
-  for(const r of rows){ const k2 = r.exit_reason || "?";
-    (reasons[k2] = reasons[k2] || {n:0, sum:0}).n++; reasons[k2].sum += r.net_pnl; }
-  const hold = rows.reduce((a,r)=>a+r.holding_days,0)/rows.length;
-  const c = run.config, d = describeConfig(c);
-  // The same reading as the run history's. Claude is told what actually ran, including
-  // which form filled a slot — a premium stop and an underlying stop are different
-  // strategies, and a summary that omitted it would invite a conclusion about the wrong one.
-  const num = v => v == null ? "not set" : v;
-  return [
-    `Strategy: entry ${d.entry} · ${d.right} · ${d.dte} · ${d.strike}`
-      + ` · take profit ${num(d.takeProfit)}, stop loss ${num(d.stopLoss)}, `
-      + `hold at most ${num(d.holdDays)} trading days`
-      + (d.components.length ? ` · slots filled by: ${d.components.join(", ")}` : "")
-      + (d.risk ? ` · book-wide ${d.risk}` : ""),
-    `Underlying and range: ${c.symbol} ${c.start} ~ ${c.end}`,
-    `Data: ${(run.boundary||"").includes("ynthetic") ? "a synthetic option chain (the underlying's prices are real; the option prices come from Black-Scholes)" : "real data"}`,
-    ``,
-    `Overall: ${s.n} trades, win rate ${pct(s.win)}, net ${money(s.sum)}, mean per trade ${money(s.mean)}, `
-      + `median ${money(s.median)}, mean holding ${hold.toFixed(1)} trading days`,
-    `Best trade ${money(s.max)}, worst ${money(s.min)}, the best 5 together ${money(top5)}`,
-    ``,
-    `By exit reason:`,
-    ...Object.entries(reasons).map(([k2,v]) =>
-      `  ${REASON[k2]||k2}: ${v.n} trades, total ${money(v.sum)}, mean ${money(v.sum/v.n)}`),
-    ``,
-    `By ${label(col)}, ${B.length} equal-frequency buckets:`,
-    ...B.map(b => { const t = stats(b.rows);
-      return `  ${fmtVal(col,b.lo)} – ${fmtVal(col,b.hi)}: ${t.n} trades, win rate ${pct(t.win)}, `
-           + `mean ${money(t.mean)}, median ${money(t.median)}`; }),
-    ``,
-    `Net P&L by year:`,
-    ...Object.keys(by).sort().map(y => `  ${y}: ${money(by[y])}`),
-  ].join("\n");
-}
-const PROMPT_RULES = `You are reading a statistical summary of an options strategy backtest. The reader is the strategy's author, using the backtest to settle its parameters.
-
-Answer in under 180 words, in three sections, each beginning with "— " and a short heading:
-
-— What is visible
-The one or two most notable facts. Specific numbers, not a restatement of every statistic.
-
-— Worth following up
-Which direction deserves further checking, and why. If the buckets are monotonic, say so; if a single bucket stands out, say that is more likely noise.
-
-— What cannot be trusted
-The limits imposed by sample size, concentration and provenance. If the data is a synthetic option chain, you must say that conclusions about the option itself (which delta, where to take profit) cannot be trusted, and only conclusions about the underlying's price (when to enter) can.
-
-No pleasantries, and no empty suggestions to "study it further" — state the judgement.`;
-
-$("ask").addEventListener("click", async () => {
-  if(!ask){ notice("the AI summary is unavailable, so no request can be made."); return; }
-  if(!VIEW.length){ notice("no trades under the current filter, so there is nothing for Claude to read."); return; }
-  const out = $("aiOut"), btn = $("ask"), stop = $("stop");
-  ctl = new AbortController();
-  btn.disabled = true; stop.hidden = false;
-  out.innerHTML = `<em>Claude is reading… (the first response usually takes ten or twenty seconds)</em>`;
-  try{
-    await ask(PROMPT_RULES + "\n\n===== the summary =====\n" + digest(VIEW, $("dim").value, +$("bins").value),
-      { signal: ctl.signal, modelTier:"default", onText: ({text}) => { out.textContent = text; } });
-  }catch(e){
-    const msg = {cancelled:"stopped.", not_granted:"you declined this call.",
-      rate_limited:"too many calls; try again shortly.", prompt_too_large:"too much data; narrow the filter first.",
-      refused:"this request was refused.", session_expired:"the session expired; reload the page."}[e.code];
-    if(e.code === "not_granted"){
-      out.textContent = "";
-      document.querySelector(".ai").hidden = true;
-      notice("you declined the AI summary, so it is hidden for this session.");
-      return;
-    }
-    const shown = msg || `it failed (${e.code}): ${e.message}`;
-    out.textContent = e.text || "";
-    out.innerHTML += (e.text ? "\n\n" : "") + `<em>${shown}</em>`;
-    if(e.code !== "cancelled") notice(`the AI summary failed: ${shown}`);
-  }finally{ btn.disabled = false; stop.hidden = true; ctl = null; }
-});
-$("stop").addEventListener("click", () => ctl?.abort());
-
-(async () => {
-  if(!window.claude?.use){
-    document.querySelector(".ai").hidden = true;
-    return;   // Opened locally there is no Claude runtime; that is expected, not a problem
-  }
-  try{ ask = await window.claude.use("sample"); }
-  catch(e){ ask = null; notice(`probing for the AI summary failed: ${e?.message || e}`); }
-  if(!ask) document.querySelector(".ai").hidden = true;
-})();

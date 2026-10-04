@@ -22,10 +22,12 @@
 "use strict";
 
 import {$, esc, mark} from "../dom.js";
-import {API, getJSON} from "../net.js";
+import {API, getJSON, postJSON} from "../net.js";
 import {checkContract} from "../contract.js";
-import {REASON, absent, fmtVal, label, money, num, pct} from "../fmt.js";
+import {EXCLUDE, REASON, absent, fmtVal, label, money, num, pct} from "../fmt.js";
 import {areaLayer, chartStack, lineLayer, underwaterLayer} from "../charts/axis.js";
+import {renderAB, renderHist, renderScatter, renderYears} from "../charts/distribution.js";
+import {renderBuckets, renderCross, renderRobust} from "../charts/tables.js";
 import {replace} from "../router.js";
 
 let RUN = null;        // the record being viewed
@@ -33,10 +35,13 @@ let META = null;       // /api/meta, for the thresholds
 let STACK = null;      // the chart group, so it can be told the brush
 let VIEW = [];         // the trades inside the brush — what the detail tier shows
 let MARK = "mid";      // which mark the curve is drawn on (display only)
+let TAB = "overview";  // which tab is open, so a brush can repaint it
 
 /** The tabs of section 6, and what each one is waiting on where it cannot be built. */
 const TABS = [
   {key: "overview", name: "the curve"},
+  {key: "spread", name: "how the trades are spread"},
+  {key: "slice", name: "cut by a condition"},
   {key: "attribution", name: "where the money came from"},
   // Not "trades": the table at the bottom of the page is the trades, and one word for two
   // different things is how a reader stops trusting the labels.
@@ -371,6 +376,9 @@ function applyBrush(range){
     ? (RUN.rows || []).filter(r => r.entry_date >= range.from && r.entry_date <= range.to)
     : (RUN.rows || []);
   paintDetail();
+  // "Brushing filters every chart and the trade table" — so the open tab is repainted
+  // too, unless it is the stack itself, which drew the brush in the first place.
+  if(TAB && TAB !== "overview") renderTab(TAB, {});
 }
 
 /* ── the detail tier ────────────────────────────────────────────────────────── */
@@ -505,6 +513,7 @@ function watchScroll(){
 }
 
 function renderTab(tab, query){
+  TAB = tab;
   const host = $("tierMid");
   const spec = TABS.find(t => t.key === tab);
   if(spec && spec.pending){
@@ -534,10 +543,102 @@ function renderTab(tab, query){
     }
     return;
   }
+  if(tab === "spread"){ spreadTab(host); return; }
+  if(tab === "slice"){ sliceTab(host); return; }
   if(tab === "attribution"){ host.innerHTML = attributionTab(); return; }
   if(tab === "trades"){ host.innerHTML = exitReasonTab(); return; }
   if(tab === "execution"){ host.innerHTML = costsTab(); return; }
-  if(tab === "robustness"){ host.innerHTML = robustnessTab(); return; }
+  if(tab === "robustness"){
+    host.innerHTML = robustnessTab();
+    for(const b of host.querySelectorAll("[data-valid]"))
+      b.addEventListener("click", () => runValidation(b.dataset.valid, b));
+    return;
+  }
+}
+
+/* The two exploratory tabs. Both read `VIEW`, which is the brushed set, so selecting a
+   period on the curve narrows every chart here as well as the trade table — the design
+   plan's "brushing filters every chart and the trade table". */
+
+function spreadTab(host){
+  host.innerHTML = `<div class="pad">
+    <p class="hint">Where the outcomes sit, and whether a few of them carry the result.
+      ${VIEW.length === (RUN.rows || []).length ? ""
+        : `<b>Showing the ${VIEW.length} trades in the brushed period.</b>`}</p>
+    <div class="two-up">
+      <section><h4>per-trade P&amp;L</h4>
+        <div class="chart"><svg id="hist" role="img"
+          aria-label="per-trade P&amp;L distribution"></svg></div></section>
+      <section><h4>by year</h4>
+        <div class="chart"><svg id="years" role="img" aria-label="P&amp;L by year"></svg></div>
+      </section>
+    </div>
+    <h4>does it hold without the best few trades</h4>
+    <p class="hint">A sign flip means the result rests on a handful of outcomes rather
+      than on the rule.</p>
+    <table class="plain" id="robust"></table></div>`;
+  renderHist(VIEW);
+  renderYears(VIEW);
+  renderRobust(VIEW);
+}
+
+function sliceTab(host){
+  const cols = numericCols(RUN.rows || []);
+  if(!cols.length){
+    host.innerHTML = `<p class="hint">This run's trade log has no numeric column to cut
+      by.</p>`;
+    return;
+  }
+  const options = cols.map(c => `<option value="${esc(c)}">${esc(label(c))}</option>`).join("");
+  host.innerHTML = `<div class="pad">
+    <p class="hint">Split the trades into equal-sized groups by one measurement taken at
+      entry, and see whether the outcome moves with it. A single group standing out is
+      more likely noise than a signal; a run of groups moving one way is the thing worth
+      following.</p>
+    <div class="slice-controls">
+      <label>group by <select id="sliceDim">${options}</select></label>
+      <label>groups <select id="sliceBins">
+        <option>3</option><option selected>4</option><option>5</option><option>6</option>
+      </select></label>
+      <label>cross with <select id="sliceDim2">
+        <option value="">(nothing)</option>${options}</select></label>
+    </div>
+    <table class="plain" id="buckets"></table>
+    <div class="two-up">
+      <section><h4>this measurement against P&amp;L</h4>
+        <p class="hint" id="scatNote"></p>
+        <div class="chart"><svg id="scatter" role="img"
+          aria-label="dimension against P&amp;L"></svg></div></section>
+      <section><h4>the two halves</h4>
+        <p class="hint">Split at the median of the chosen measurement.</p>
+        <div class="ab" id="ab"></div></section>
+    </div>
+    <section id="crossWrap" hidden><h4>crossed groups</h4>
+      <p class="hint">Each cell is the mean per trade. Cells with few trades are dimmed —
+        extremes there are usually noise.</p>
+      <table class="grid-tab" id="cross"></table></section>
+    <p class="hint" id="dimNote"></p></div>`;
+
+  const paint = () => {
+    const col = $("sliceDim").value, k = +$("sliceBins").value, col2 = $("sliceDim2").value;
+    renderBuckets(VIEW, col, k);
+    renderScatter(VIEW, col);
+    renderAB(VIEW, col);
+    $("crossWrap").hidden = !col2;
+    if(col2) renderCross(VIEW, col, col2, k);
+  };
+  for(const id of ["sliceDim", "sliceBins", "sliceDim2"])
+    $(id).addEventListener("change", paint);
+  $("sliceDim").value = cols.includes("entry_iv") ? "entry_iv" : cols[0];
+  paint();
+}
+
+/** Which trade columns can be grouped by: numeric, and not an outcome.
+ *  Grouping the result by the result is the one cut that always "works". */
+function numericCols(rows){
+  if(!rows.length) return [];
+  return Object.keys(rows[0]).filter(c =>
+    !EXCLUDE.has(c) && typeof rows[0][c] === "number" && Number.isFinite(rows[0][c]));
 }
 
 function attributionTab(){
@@ -594,18 +695,92 @@ function costsTab(){
       ${pct(t.value)} of gross are flagged — ${esc(t.because || "")}</p>` : ""}</div>`;
 }
 
+/* The research tools, run on demand.
+ *
+ * On demand because each re-runs the strategy — ablation once per slot, baselines once
+ * per draw — so running them with every backtest would make the run button slow for
+ * something not always wanted.
+ *
+ * The buttons are rendered from `META.validations`, which the backend builds from the
+ * runner's own declaration: a tool added there appears here with no edit on this side,
+ * which is the only arrangement in which the two cannot drift apart.
+ *
+ * The output is text, deliberately. Every one of these reports **leads with the boundary
+ * on its own conclusions** — on the synthetic chain an exit level describes Black-Scholes,
+ * not the market. Splitting the report into fields for this side to re-assemble is exactly
+ * how that line gets dropped. */
+const VALID_INPUTS = {
+  baselines: [{key: "draws", label: "random draws", value: 50, hint: "at least 10"}],
+  counterfactual: [
+    {key: "take_profits", label: "take profits", value: "0.5, 1.0, 1.5", text: true},
+    {key: "stop_losses", label: "stop losses", value: "0.3, 0.5, 0.7", text: true},
+  ],
+  trials: [{key: "years", label: "years covered", value: "",
+            hint: "the stored Sharpe is annualised, so the period count must be in years"}],
+  ablation: [],
+};
+
+function validParams(kind){
+  const out = {};
+  for(const i of (VALID_INPUTS[kind] || [])){
+    const el = $(`v_${kind}_${i.key}`);
+    if(!el) continue;
+    const raw = el.value.trim();
+    if(!raw) continue;
+    out[i.key] = i.text
+      ? raw.split(",").map(x => x.trim()).filter(Boolean).map(Number)
+      : Number(raw);
+  }
+  return out;
+}
+
+async function runValidation(kind, btn){
+  const out = $("validOut");
+  btn.disabled = true;
+  const was = btn.textContent;
+  btn.textContent = "running…";
+  out.hidden = false;
+  out.textContent = "Running. This re-runs the strategy, so it takes about as long as "
+    + "the backtest did.";
+  try{
+    const data = await postJSON(API.validate, {
+      id: RUN.id, kind, params: validParams(kind),
+    });
+    out.innerHTML = mark(data.text);
+  }catch(e){
+    // Both a refusal and a dropped connection land here, and both belong in the report's
+    // own box rather than the problem strip: "the counterfactual needs its levels" is an
+    // instruction, not a fault.
+    out.textContent = e.message;
+  }finally{
+    btn.disabled = false;
+    btn.textContent = was;
+  }
+}
+
 function robustnessTab(){
   const scenarios = RUN.scenarios || RUN.analysis?.scenarios;
   const offered = new Set(RUN.validations || []);
   return `<div class="pad">
-    <p class="hint">The standard set from the architecture's research register. Each item
-      is launched from the bench today; this tab reports what this run can answer.</p>
-    <ul class="checks">${(META?.validations || []).map(v => `
-      <li class="${offered.has(v.kind) ? "can" : "cannot"}">
+    <p class="hint">The research tools from the architecture's register, run against this
+      run. Each re-runs the strategy, so none of them runs until asked. Every report says
+      first what its numbers can and cannot be used for.</p>
+    <ul class="checks">${(META?.validations || []).map(v => {
+      const can = offered.has(v.kind);
+      const inputs = (VALID_INPUTS[v.kind] || []).map(i =>
+        `<label for="v_${v.kind}_${i.key}">${esc(i.label)}</label>
+         <input id="v_${v.kind}_${i.key}" value="${esc(i.value)}"
+                ${i.hint ? `title="${esc(i.hint)}"` : ""}>`).join("");
+      return `<li class="${can ? "can" : "cannot"}">
         <b>${esc(v.label)}</b><span>${esc(v.why)}</span>
-        ${offered.has(v.kind) ? "" : `<em>needs the ${
-          (v.engines || []).join(" or ")} engine; this run used ${esc(RUN.engine)}</em>`}
-      </li>`).join("")}</ul>
+        ${can ? `<div class="vrow">${inputs}
+            <button type="button" class="btn ghost" data-valid="${v.kind}">run it</button>
+          </div>`
+          : `<em>needs the ${(v.engines || []).join(" or ")} engine; this run used ${
+              esc(RUN.engine)}</em>`}
+      </li>`;
+    }).join("")}</ul>
+    <pre id="validOut" class="valid-out" hidden></pre>
     ${scenarios && scenarios.length ? `
       <h4>historical scenarios</h4>
       <p class="hint">Real windows, so no approximation — more trustworthy than a stress

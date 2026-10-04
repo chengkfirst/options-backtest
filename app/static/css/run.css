@@ -547,3 +547,90 @@ td.bar span {
 
 .stack-lead { margin: 0 0 var(--space-3); max-width: 78ch; }
 .tier-count { margin-left: auto; }
+
+/* ── the exploratory tabs ──
+   Two charts side by side where the width allows, stacked where it does not. The charts
+   take their coordinate space from the element, so the layout decides their size and the
+   labels stay the size the stylesheet says. */
+.two-up {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-5);
+  margin: var(--space-3) 0 var(--space-5);
+}
+
+.two-up section { min-width: 0; }
+
+.two-up h4 {
+  font-family: var(--display);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  margin: 0 0 var(--space-1);
+}
+
+.chart svg { display: block; width: 100%; }
+
+.slice-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: var(--space-3) 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.slice-controls select {
+  margin-left: var(--space-2);
+  background: var(--surface-2);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
+.grid-tab { width: 100%; border-collapse: collapse; font-size: var(--font-sm); }
+.grid-tab th, .grid-tab td {
+  border: 1px solid var(--border);
+  padding: var(--space-1) var(--space-2);
+  text-align: center;
+}
+
+.ab { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+
+/* The research tools' inputs and their report. The report is a block of text on purpose:
+   every one of them leads with the boundary on its own conclusions, and that boundary is
+   a sentence, not a field. */
+.vrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.vrow label { color: var(--text-muted); font-size: var(--font-xs); }
+
+.vrow input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  padding: var(--space-1) var(--space-2);
+  width: 11ch;
+}
+
+.valid-out {
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3);
+  background: var(--surface-sunk);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}

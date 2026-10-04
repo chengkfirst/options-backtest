@@ -8,14 +8,15 @@
 import {$} from "../dom.js";
 import {fmtVal, label, money, pct, sgn} from "../fmt.js";
 import {bucketize, quantile, stats} from "../stats.js";
-import {blankChart, txt} from "./svg.js";
+import {blankChart, fit, txt} from "./svg.js";
 
 
 /* ── the histogram ── */
 export function renderHist(rows){
   const svg=$("hist"), vals=rows.map(r=>r.net_pnl);
   if(!vals.length){blankChart(svg,"no trades under the current filter");return;}
-  const W=520,H=250,PL=44,PR=14,PT=16,PB=34,k=28;
+  const {W, H} = fit(svg, {height: 250});
+  const PL=44,PR=14,PT=16,PB=34,k=28;
   const lo=Math.min(...vals),hi=Math.max(...vals),step=(hi-lo)/k||1;
   const bins=Array.from({length:k},(_,i)=>({lo:lo+i*step,c:0}));
   for(const v of vals){let i=Math.floor((v-lo)/step);if(i>=k)i=k-1;if(i<0)i=0;bins[i].c++;}
@@ -45,7 +46,8 @@ export function renderYears(rows){
   for(const r of rows){const y=r.entry_date.slice(0,4);by[y]=(by[y]||0)+r.net_pnl;}
   const yrs=Object.keys(by).sort();
   if(!yrs.length){blankChart(svg,"no trades under the current filter");return;}
-  const W=520,H=220,PL=52,PR=14,PT=18,PB=28;
+  const {W, H} = fit(svg, {height: 220});
+  const PL=52,PR=14,PT=18,PB=28;
   const vals=yrs.map(y=>by[y]), lim=Math.max(...vals.map(Math.abs),1);
   const bw=(W-PL-PR)/yrs.length, y0=PT+(H-PT-PB)/2, h=v=>Math.abs(v)/lim*((H-PT-PB)/2);
   let s=`<line x1="${PL}" x2="${W-PR}" y1="${y0}" y2="${y0}" stroke="var(--line)"/>`;
@@ -53,7 +55,7 @@ export function renderYears(rows){
     s+=`<rect x="${(PL+i*bw+bw*.18).toFixed(1)}" y="${(v>=0?y0-bh:y0).toFixed(1)}"
       width="${(bw*.64).toFixed(1)}" height="${Math.max(bh,1).toFixed(1)}"
       fill="${v>=0?'var(--gain)':'var(--loss)'}" opacity=".7"/>`;
-    s+=txt(PL+i*bw+bw/2,H-PB+14,yr.slice(2),{anchor:"middle",size:9.5});});
+    s+=txt(PL+i*bw+bw/2,H-PB+14,yr.slice(2),{anchor:"middle",size:11});});
   s+=txt(PL-6,y0-((H-PT-PB)/2)+4,money(lim),{anchor:"end"})+txt(PL-6,y0+4,"0",{anchor:"end"});
   s+=txt(W-PR,PT-2,`${vals.filter(v=>v>0).length} of ${yrs.length} years positive`,
     {fill:"var(--ink-2)",size:11,anchor:"end",mono:false});
@@ -67,7 +69,8 @@ export function renderScatter(rows,col){
   if(pts.length<5){
     blankChart(svg,`fewer than 5 values of ${label(col)}, so no scatter`);
     $("scatNote").textContent="";return;}
-  const W=520,H=250,PL=52,PR=14,PT=14,PB=34;
+  const {W, H} = fit(svg, {height: 250});
+  const PL=52,PR=14,PT=14,PB=34;
   const xs=pts.map(p=>p[col]), ys=pts.map(p=>p.net_pnl);
   const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
   const X=v=>PL+(v-x0)/((x1-x0)||1)*(W-PL-PR);
@@ -90,7 +93,7 @@ export function renderScatter(rows,col){
   s+=txt(PL,H-PB+15,fmtVal(col,x0))+txt(W-PR,H-PB+15,fmtVal(col,x1),{anchor:"end"});
   s+=txt(PL-6,Y(y1)+4,money(y1),{anchor:"end"})+txt(PL-6,Y(0)+4,"0",{anchor:"end"})
     +txt(PL-6,Y(y0)+4,money(y0),{anchor:"end"});
-  s+=txt(W-PR,PT+6,"the line is the bucket mean",{fill:"var(--accent)",size:10.5,anchor:"end",mono:false});
+  s+=txt(W-PR,PT+6,"the line is the bucket mean",{fill:"var(--accent)",size:11,anchor:"end",mono:false});
   svg.innerHTML=s;
   $("scatNote").textContent=`${label(col)} against per-trade P&L, ${pts.length.toLocaleString()} trades.`;
 }

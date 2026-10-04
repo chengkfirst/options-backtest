@@ -378,6 +378,33 @@ class EventBus:
     def of_type(self, type_: EventType) -> tuple[Event, ...]:
         return tuple(e for e in self._history if e.type is type_)
 
+    # ── carrying a stream across a checkpoint ─────────────
+    def resume(self, history: Sequence[Event], next_id: int) -> None:
+        """Restore a stream so a continued run's ids follow on from the first part's.
+
+        An order still in flight across a checkpoint carries the id of the ORDER event it
+        was published as. A resumed run with a fresh bus hands out ids from 1, so the
+        carried order points at an event that has not happened -- which this refuses, and
+        the refusal is why the gap was found rather than producing a trace that reads
+        backwards.
+
+        Only into an empty bus: merging two streams would put two runs' causal chains in
+        one history with nothing in a trace saying which run a link came from.
+        """
+        if self._history or self._pending:
+            raise InvariantError(
+                f"this bus already holds {len(self._history)} event(s), and a resumed "
+                f"stream is being loaded into it. Two runs' chains in one history cannot "
+                f"be told apart by a trace"
+            )
+        if next_id <= len(history):
+            raise StartupError(
+                f"the next id is {next_id} and {len(history)} events are being restored, "
+                f"so the next event would reuse an id that is already in the stream"
+            )
+        self._history = list(history)
+        self._next_id = next_id
+
     #: The chain requirement 0.6 asks for, in the order a reader follows it: a fill back
     #: through the order, the target, the signal, to the component that decided.
     CHAIN = (EventType.FILL, EventType.ORDER, EventType.TARGET_PORTFOLIO,
