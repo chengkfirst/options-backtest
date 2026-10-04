@@ -254,8 +254,9 @@ body.rail-open .rail-name {
   .tip { animation: none; }
 }
 
-/* **The cursor is not set here.** A blanket `[data-tip] { cursor: help }` turned the
-   pointer into a question mark over whole metric cards, rail links and table rows — a
-   large target carrying an explanation is still a card, and a link that explains itself
-   is still a link. Each place that wants the help cursor asks for it on the small thing
-   that carries the explanation, usually a label. */
+/* **No cursor change anywhere.** A help cursor was tried and is gone: a question mark
+   under the pointer tells the reader something they are about to find out by pointing
+   anyway, and it changed the feel of the page everywhere an explanation existed — which,
+   on a page built to explain itself, is nearly everywhere. The explanation appearing is
+   the affordance. Where a hint that one exists is still wanted, it is a dotted underline
+   on the label, which marks the word without touching the pointer. */

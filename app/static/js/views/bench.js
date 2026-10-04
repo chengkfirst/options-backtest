@@ -33,6 +33,12 @@ let RUNS = [];            // the runs submitted in this session
 let CURRENT = null;       // the most recent, highlighted in the list
 let BASE = null;          // the pinned baseline run id (the server's `id` field)
 
+/* Which registered form fills each slot, and the parameters typed into it. Held here
+   rather than read back off the DOM, because the component forms are regenerated whenever
+   the strategy mode changes and a value only in the markup would vanish with it. */
+const PICKED = {};        // slot -> variant name
+const PARAMS = {};        // "slot:param" -> value as typed
+
 
 /* ── startup: probe the service ── */
 export async function init(){
@@ -166,17 +172,80 @@ function compBlock(c, planMode){
   // the code comments — repeated on every open it gets skipped after twice, and it
   // squeezes out the numbers that matter. Hover for the title when needed.
   const taken = planMode && c.in_plan;
+  // A slot decided by a registered form does not also take its plain setting: the engine
+  // refuses the pair, because a configuration where both are present cannot be resolved by
+  // reading it. So picking a form replaces the field rather than sitting above it, and
+  // says which field it replaced.
+  const byForm = !taken && PICKED[c.key];
+  // Only the field the form actually decides is replaced — the one named after the slot.
+  // The others in the same component stay: slot 4's holding cap and days-to-expiry floor
+  // are a safety net that applies whichever way the stop is expressed, and a rule written
+  // wrong must not be able to drag a position into expiry.
+  const replaced = byForm ? c.inputs.filter(i => i.name === c.key) : [];
+  const kept = byForm ? c.inputs.filter(i => i.name !== c.key) : c.inputs;
   const body = taken
     ? `<p class="comp-note">→ <code>${c.in_plan}</code></p>`
-    : c.inputs.length
-      ? `<div class="fields">${c.inputs.map(fieldHtml).join("")}</div>`
-      : `<p class="comp-note">${esc(shortGap(c))}</p>`;
+    : !c.inputs.length && !byForm
+      ? `<p class="comp-note">${esc(shortGap(c))}</p>`
+      : `${byForm ? `<p class="comp-note">the <b>${esc(PICKED[c.key])}</b> form decides this${
+            replaced.length ? `, in place of ${replaced.map(i => esc(i.label)).join(" and ")}`
+                            : ""}</p>` : ""}
+         ${kept.length ? `<div class="fields">${kept.map(fieldHtml).join("")}</div>` : ""}`;
   const badge = STATUS_MARK[c.status]
     ? `<span class="comp-badge ${c.status}">${STATUS_MARK[c.status]}</span>` : "";
   return `<article class="comp ${taken ? "by-plan" : ""}" data-comp="${c.key}">
       <h4 class="comp-h" data-tip="${esc(c.role)}">${c.name}${badge}</h4>
+      ${taken ? "" : variantPicker(c.key)}
       ${body}
     </article>`;
+}
+
+/* ── the forms a slot can take ────────────────────────────────────────────────
+   A slot has candidate **forms**, not only parameters: a stop measured on the premium
+   against one measured on the underlying is the choice the architecture names as research,
+   and a sweep over one of them can only ever answer "which premium stop".
+
+   The picker is generated from `META.components`, which the backend reads out of the
+   registry — so a form registered in Python is offered here with its own description,
+   its own parameters and their own ranges, with no edit on this side. **Nothing is
+   selected by default**: the platform does not choose a strategy, and "the one I wrote
+   first" is a choice.
+
+   The slot's own fields stay below. They are what runs when no form is picked, which is
+   the behaviour every run before this had. */
+function variantPicker(slot){
+  const forms = (META.components || {})[slot] || [];
+  if(!forms.length) return "";
+  const chosen = PICKED[slot];
+  return `<div class="variant" data-slot="${slot}">
+    <label class="variant-lead" data-tip="A registered form decides this slot instead of
+      the field below. Which form is the research question; the platform offers them and
+      picks none.">form</label>
+    <select class="variant-pick" data-pick="${slot}">
+      <option value="">use the setting below</option>
+      ${forms.map(f => `<option value="${esc(f.name)}"${
+        f.name === chosen ? " selected" : ""}>${esc(f.name)}${
+        f.stateful ? " (keeps state)" : ""}</option>`).join("")}
+    </select>
+    ${chosen ? variantParams(slot, forms.find(f => f.name === chosen)) : ""}
+  </div>`;
+}
+
+function variantParams(slot, form){
+  if(!form) return "";
+  return `<p class="variant-why">${esc(form.describes)}</p>
+    <div class="fields">${form.params.map(p => {
+      const id = `v_${slot}_${p.name}`;
+      const step = p.hi != null && p.hi <= 2 ? 0.05 : 1;
+      return `<div class="field">
+        <label for="${id}" data-tip="${esc(p.means)}${p.required ? "" : ". Optional — leave it blank and this form does without it."}">${esc(p.name)}${
+          p.required ? "" : ` <span class="unit">optional</span>`}</label>
+        <input type="number" id="${id}" data-param="${slot}:${p.name}"
+          value="${PARAMS[`${slot}:${p.name}`] ?? ""}" step="${step}"
+          ${p.lo != null ? `min="${p.lo}"` : ""} ${p.hi != null ? `max="${p.hi}"` : ""}
+          placeholder="${p.required ? "required" : "optional"}">
+      </div>`;
+    }).join("")}</div>`;
 }
 
 /* A component with no controls says one line about why — one line, not a paragraph.
@@ -224,6 +293,20 @@ function bindFields(){
   };
   $("comps").querySelectorAll("select").forEach(sel =>
     sel.addEventListener("change", apply));
+
+  // Choosing a form rebuilds that slot so its parameters appear. Only the components are
+  // redrawn, so nothing typed elsewhere in the form is lost.
+  $("comps").querySelectorAll("[data-pick]").forEach(sel =>
+    sel.addEventListener("change", () => {
+      const slot = sel.dataset.pick;
+      if(sel.value) PICKED[slot] = sel.value;
+      else delete PICKED[slot];
+      renderComponents();
+    }));
+  $("comps").querySelectorAll("[data-param]").forEach(input =>
+    input.addEventListener("input", () => {
+      PARAMS[input.dataset.param] = input.value;
+    }));
   apply();
 }
 
@@ -304,7 +387,48 @@ function formPayload(){
     m === "fixed"          ? { contracts: +o.quantity } :
     m === "fixed_notional" ? { notional: +o.notional } :
                              { target_vol: +o.target_vol, risk_pct: +o.risk_pct }) };
+
+  // The slots filled by a registered form. `headwind` is the book-wide risk rule and
+  // reaches `run()` by its own argument, so it travels separately — the engine applies it
+  // to the book rather than to one trade.
+  const components = {};
+  for(const [slot, variant] of Object.entries(PICKED)){
+    const form = ((META.components || {})[slot] || []).find(f => f.name === variant);
+    if(!form) continue;
+    const params = {};
+    for(const p of form.params){
+      const raw = (PARAMS[`${slot}:${p.name}`] ?? "").toString().trim();
+      // Blank means "not given". It is never filled in here: a component parameter is a
+      // strategy choice, and the backend refuses a missing required one by name rather
+      // than running on a number nobody chose.
+      if(raw !== "") params[p.name] = Number(raw);
+    }
+    const spec = {variant, version: form.version, params};
+    if(slot === "headwind") o.risk = spec;
+    else components[slot] = spec;
+  }
+  if(Object.keys(components).length) o.components = components;
   return o;
+}
+
+/** What is missing before this can run, in the reader's words.
+ *
+ * Checked here as well as in the backend so the answer arrives on the control rather than
+ * after a round trip — but the backend still refuses, because this check can only see the
+ * form and the backend sees the run. */
+function blockingReason(){
+  for(const [slot, variant] of Object.entries(PICKED)){
+    const form = ((META.components || {})[slot] || []).find(f => f.name === variant);
+    if(!form) continue;
+    for(const p of form.params){
+      if(!p.required) continue;
+      const raw = (PARAMS[`${slot}:${p.name}`] ?? "").toString().trim();
+      if(raw === "")
+        return `${slot} is set to the ${variant} form, which needs ${p.name}: ${p.means}. `
+             + `It is a strategy choice, so the platform does not pick one.`;
+    }
+  }
+  return "";
 }
 
 
@@ -313,6 +437,10 @@ $("run").addEventListener("click", runBacktest);
 async function runBacktest(){
   if(!LIVE){ notice("no local service, so nothing can be run."); return; }
   clearIssues();
+  // The run button is never disabled — the design plan's state table forbids it, because a
+  // dead control explains nothing. It says what is blocking instead.
+  const blocked = blockingReason();
+  if(blocked){ notice(blocked); return; }
   const btn = $("run");
   btn.disabled = true; btn.classList.add("busy"); btn.textContent = "running…";
   const note = document.createElement("div");

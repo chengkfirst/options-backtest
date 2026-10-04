@@ -1,0 +1,42 @@
+
+/* ── the forms a slot can take ──
+   A slot has candidate forms, not only parameters: a stop on the premium against one on
+   the underlying is the choice the architecture names as research. The picker is generated
+   from the registry, and nothing is selected by default — the platform does not choose a
+   strategy, and "the one written first" is a choice. */
+.variant {
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
+.variant-lead {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-1);
+}
+
+.variant-pick {
+  width: 100%;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-sm);
+}
+
+/* What this form decides, and how it differs from the others in its slot. Without it the
+   picker offers two names and no way to choose between them. */
+.variant-why {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.variant .fields { margin-top: var(--space-2); }

@@ -107,6 +107,28 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
         kwargs["signals"] = compile_signals(payload["signals_code"])
     if isinstance(payload.get("sizing"), dict):
         kwargs["sizing"] = payload["sizing"]
+
+    # A slot filled by a registered form. This is the first of the platform's two uses —
+    # settling a component means comparing its candidate forms on equal footing, and a
+    # parameter sweep over one form can never answer "should the stop be on the premium at
+    # all". The interface offers the forms; it picks none, and a slot nobody chose for is
+    # simply absent here rather than silently given the one written first.
+    components = {
+        slot: spec for slot, spec in (payload.get("components") or {}).items()
+        if isinstance(spec, dict) and spec.get("variant")
+    }
+    if components:
+        kwargs["components"] = components
+        # A slot decided by a form does not also take its plain setting. The engine refuses
+        # the pair outright — "the component would decide and the rule would look as though
+        # it did" — and it is right to: a configuration a reader cannot resolve by looking
+        # at it is worse than one that will not start.
+        for slot in components:
+            kwargs["exit"].pop(slot, None)
+    risk = payload.get("risk")
+    if isinstance(risk, dict) and risk.get("variant"):
+        kwargs["risk"] = risk
+
     kwargs["engine"] = payload.get("engine", "trade_table")
     if kwargs["engine"] == "event_driven":
         mc = payload.get("max_concurrent")
@@ -161,6 +183,12 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
         "exit": config["exit"],
         "quantity": config["quantity"],
         "sizing": config.get("sizing"),
+        # Which form fills which slot is part of what the strategy **is**, so two versions
+        # differing only in it are two versions. Left out, swapping a premium stop for an
+        # underlying one would reuse the previous version and the run history could no
+        # longer tell the comparison apart.
+        "components": config.get("components"),
+        "risk": config.get("risk"),
     }
     strategy = STORE.save_strategy(
         payload.get("strategy_name") or "untitled", spec, payload.get("strategy_note", "")

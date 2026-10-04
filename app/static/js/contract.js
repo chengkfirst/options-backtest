@@ -87,6 +87,11 @@ export const CONTRACT = {
                  "scenarios.*.max drawdown", "scenarios.*.note"],
   meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps",
          "validations",
+         // Every registered form of every slot. The composer's variant pickers and their
+         // parameter forms are generated from it, so a slot losing its forms here would
+         // silently remove the choice rather than report it.
+         "components", "components.stop_loss", "components.take_profit",
+         "components.headwind",
          // Every cut a verdict on the analysis page names. Declared so that a renamed or
          // retired threshold fails here rather than leaving a flag that silently stops
          // firing — which is the worst way for a guardrail to end.

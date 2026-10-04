@@ -684,6 +684,19 @@ function settingsTab(){
     lo != null && hi != null ? `${lo}–${hi}${unit}`
       : lo != null ? `at least ${lo}${unit}` : hi != null ? `at most ${hi}${unit}` : null;
 
+  // A slot decided by a registered form says so **where that slot is**, not only in a
+  // summary line at the bottom. Reading "(4) stop loss" and seeing only a holding cap
+  // would say no stop was set, which is the opposite of true.
+  const byForm = {...(c.components || {})};
+  if(c.risk?.variant) byForm.headwind = c.risk;
+  const form = slot => {
+    const f = byForm[slot];
+    if(!f) return [];
+    const shown = Object.entries(f.params || {}).map(([k, v]) => [`　${k}`, v]);
+    return [[`decided by the ${f.variant} form`,
+             f.version != null ? `version ${f.version}` : "yes"], ...shown];
+  };
+
   const groups = [
     ["(1) setup / regime", [
       ["", null, "No regime condition was applied: every signal was taken."],
@@ -702,17 +715,19 @@ function settingsTab(){
       ["IV band", band(sel.iv_lo, sel.iv_hi)],
     ]],
     ["(3) take profit", [
+      ...form("take_profit"),
       ["take profit", ex.take_profit, "", "times the premium paid"],
     ]],
     ["(4) stop loss", [
+      ...form("stop_loss"),
       ["stop loss", ex.stop_loss, "", "times the premium paid"],
       ["max holding period", ex.hold_days != null ? `${ex.hold_days} trading days` : null],
       ["min days to expiry", ex.dte_floor != null ? `${ex.dte_floor} days` : null,
        "", "forces an exit rather than being dragged into expiry"],
     ]],
     ["(5) headwind", [
+      ...form("headwind"),
       ["daily review", c.review_code ? "a review function" : null],
-      ["book-wide risk rule", c.risk?.variant || null],
     ]],
     ["(6) positioning", [
       ["how size is set", sizing.method],

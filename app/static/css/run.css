@@ -119,7 +119,7 @@
 
 /* Only the label explains itself, so only the label takes the help cursor. The whole
    block carrying it made the pointer a question mark across half the page. */
-.assume dt[data-tip] { cursor: help; border-bottom: 1px dotted var(--border-strong); }
+.assume dt[data-tip] { border-bottom: 1px dotted var(--border-strong); }
 
 .assume dd {
   margin: 0;
@@ -203,7 +203,6 @@
 }
 
 .setting-group dt { color: var(--text-muted); }
-.setting-group dt[data-tip] { cursor: help; }
 .setting-group dd {
   margin: 0;
   font-family: var(--mono);
@@ -270,7 +269,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: help;
 }
 
 .card dd {

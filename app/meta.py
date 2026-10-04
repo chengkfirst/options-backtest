@@ -95,6 +95,10 @@ def _meta_payload() -> dict[str, Any]:
             {"a": a, "b": b, "why": why} for a, b, why in COUPLINGS
         ],
         "gaps": _describe_gaps(),
+        # The registered forms of each slot. The composer builds its variant pickers and
+        # their parameter forms from this, so a form added in the backend is offered in
+        # the interface with no edit on this side.
+        "components": _components(),
         # Every cut the interface shows a verdict against, from the one registry that
         # holds them. **No threshold may be a literal in the JS**: a cut written into the
         # interface turns a judgement ("the profit is concentrated") into something that
@@ -186,6 +190,39 @@ def _meta_payload() -> dict[str, Any]:
         "code_help": USER_CODE_HELP,
         "plan_help": PLAN_HELP,
     }
+
+
+def _components() -> dict[str, Any]:
+    """Every registered form of every slot, with the parameters each one takes.
+
+    **Read from the registry, never written out here.** This is what lets the composer
+    offer a form it has never seen: a variant registered in the backend appears in the
+    interface with its own schema, its own ranges and its own one-line description, and a
+    slot the researcher must choose for cannot be silently filled in by the platform.
+
+    The description matters as much as the schema. "stop_loss/underlying@1" tells a reader
+    nothing; what they need is that it fires on a move in the thing the thesis was about
+    and leaves the premium to volatility, which is the sentence the variant carries.
+    """
+    from backtest.core.component import SLOTS, variants
+
+    by_slot: dict[str, list[dict[str, Any]]] = {slot: [] for slot in SLOTS}
+    for v in variants():
+        by_slot.setdefault(v.slot, []).append({
+            "name": v.name,
+            "version": v.version,
+            "ref": v.ref,
+            "describes": v.describes,
+            "stateful": v.stateful,
+            "params": [{
+                "name": p.name, "kind": p.kind, "means": p.means,
+                "lo": p.lo, "hi": p.hi, "required": p.required,
+            } for p in v.params],
+        })
+    # Slots with no registered form are reported as empty rather than left out: "this slot
+    # has one shape and it is not swappable yet" is a fact the composer should be able to
+    # state, and a missing key would make it indistinguishable from a typo.
+    return by_slot
 
 
 def _thresholds():
