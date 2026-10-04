@@ -222,3 +222,35 @@ body.rail-open .rail-name {
   font-size: var(--font-sm);
   color: var(--text-muted);
 }
+
+/* ── the tooltip ──
+   The page explains itself by hovering, so this is a main surface rather than a detail.
+   Replaces the browser's `title`: about a second of delay, an operating-system font, no
+   wrapping control. Explanations that are unpleasant to reach do not get read. */
+.tip {
+  position: fixed;
+  z-index: 50;
+  max-width: 44ch;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  line-height: 1.45;
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.28);
+  animation: tip-in var(--motion-fast) var(--ease);
+}
+
+@keyframes tip-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tip { animation: none; }
+}
+
+/* Anything that explains itself says so by the cursor. */
+[data-tip] { cursor: help; }

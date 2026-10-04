@@ -114,7 +114,7 @@ function renderSignalRef(){
       <div class="sig-fam">${fam}</div>
       ${list.map(d => `
         <button type="button" class="sig" data-name="${d["signal"]}"
-                title="${d["caveat"] || ""}">
+                ${d["caveat"] ? `data-tip="${esc(d["caveat"])}"` : ""}>
           <code>${d["signal"]}</code>
           <span class="sig-what">${d["measures"]}</span>
           <span class="sig-unit">${d["unit"]}</span>
@@ -153,7 +153,7 @@ function renderComponents(){
   $("comps").innerHTML = (META.form || []).map(L => `
     <section class="layer">
       <header class="layer-head">
-        <span class="layer-n" title="${esc(L.what)}">${L.layer}</span>
+        <span class="layer-n" data-tip="${esc(L.what)}">${L.layer}</span>
       </header>
       ${L.components.map(c => compBlock(c, planMode)).join("")}
     </section>`).join("");
@@ -174,7 +174,7 @@ function compBlock(c, planMode){
   const badge = STATUS_MARK[c.status]
     ? `<span class="comp-badge ${c.status}">${STATUS_MARK[c.status]}</span>` : "";
   return `<article class="comp ${taken ? "by-plan" : ""}" data-comp="${c.key}">
-      <h4 class="comp-h" title="${esc(c.role)}">${c.name}${badge}</h4>
+      <h4 class="comp-h" data-tip="${esc(c.role)}">${c.name}${badge}</h4>
       ${body}
     </article>`;
 }
@@ -189,7 +189,7 @@ function shortGap(c){
 
 function fieldHtml(f){
   const id = "f_" + f.name;
-  const common = `id="${id}" name="${f.name}"` + (f.help ? ` title="${esc(f.help)}"` : "");
+  const common = `id="${id}" name="${f.name}"` + (f.help ? ` data-tip="${esc(f.help)}"` : "");
   let ctl;
   if(f.kind === "select"){
     ctl = `<select ${common}>${f.options.map(([v, t]) =>
@@ -205,7 +205,7 @@ function fieldHtml(f){
   }
   const wide = f.kind === "code" || f.kind === "text";
   return `<div class="field${wide ? " wide" : ""}"${f.depends ? ` data-depends="${f.depends}"` : ""}>
-      <label for="${id}"${f.help ? ` title="${esc(f.help)}"` : ""}>${f.label}${
+      <label for="${id}"${f.help ? ` data-tip="${esc(f.help)}"` : ""}>${f.label}${
         f.unit ? ` <span class="unit">${esc(f.unit)}</span>` : ""}</label>
       ${ctl}
     </div>`;
@@ -482,8 +482,8 @@ function paintRuns(){
       const d = (baseSum !== null && r.id !== BASE) ? s.sum - baseSum : null;
       return `<tr data-run="${r.id}" class="${r.id === CURRENT ? "on" : ""}">
         <td class="n"><a class="run-link" href="#/runs/${r.id}"
-          title="open run ${r.id} on the analysis page">${r.id}</a></td>
-        <td><span class="cfg" title="${cfgLine(r.config)}">${cfgLine(r.config)}</span></td>
+          data-tip="Open run ${r.id} on the analysis page.">${r.id}</a></td>
+        <td><span class="cfg" data-tip="${esc(cfgLine(r.config))}">${cfgLine(r.config)}</span></td>
         <td class="n">${s.n}</td>
         <td class="n">${s.n ? pct(s.win) : "—"}</td>
         <td class="n ${sgn(s.sum)}">${s.n ? money(s.sum) : "—"}

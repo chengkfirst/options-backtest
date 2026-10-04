@@ -121,11 +121,9 @@ function realismStrip(){
      + "runs sharing it are the same run; two differing in any input cannot share it"],
   ];
   return `<div class="realism">
-    <span class="realism-lead" title="These describe what produced the result. They are
-      facts about this run, not controls: a realism assumption is changed by launching
-      another run, never by editing it here.">what produced this result</span>
+    <span class="realism-lead" data-tip="These describe what produced the result. They are facts about this run, not controls: a realism assumption is changed by launching another run, never by editing it here.">what produced this result</span>
     ${chips.map(([k, v, why]) =>
-      `<span class="realism-chip" title="${esc(why)}"><b>${esc(k)}</b>${esc(v)}</span>`
+      `<span class="realism-chip" data-tip="${esc(why)}"><b>${esc(k)}</b>${esc(v)}</span>`
     ).join("")}</div>`;
 }
 
@@ -268,7 +266,7 @@ function metricCards(){
                  thin ? `Fewer than ${floor} trades, so this number is shown but cannot `
                       + `carry weight.` : ""].filter(Boolean).join(" ");
     return `<div class="card${thin ? " thin" : ""}${absentCard ? " empty" : ""}"
-       title="${esc(tip)}">
+       data-tip="${esc(tip)}">
       <dt>${esc(c.name)}${c.better
         ? `<span class="card-dir" aria-hidden="true">${
             c.better === "higher" ? "↑" : c.better === "lower" ? "↓" : "→0"}</span>` : ""}</dt>
@@ -293,7 +291,7 @@ function intervalBar(interval){
   const why = `What a different sample of the same trades would plausibly have given. `
     + `${crosses ? "It contains zero, so the sign of this result is not established. " : ""}`
     + `${(interval.caveat || "").replace(/\*\*/g, "")}`;
-  return `<div class="interval${crosses ? " crosses" : ""}" title="${esc(why)}">
+  return `<div class="interval${crosses ? " crosses" : ""}" data-tip="${esc(why)}">
     <span class="interval-bar">${crosses
       ? `<i class="interval-zero" style="left:${zeroAt.toFixed(1)}%"></i>` : ""}</span>
     <span class="interval-text">${level} ${moneyShort(interval.low)} … ${
@@ -439,18 +437,18 @@ function render(query){
     <section class="tier-top">
       <header class="run-head">
         <h2>run ${RUN.id}<span class="run-idea"
-          title="the strategy this run belongs to, and which version of it. Editing the strategy makes a new version; running it again makes a new run."
+          data-tip="The strategy this run belongs to, and which version of it. Editing the strategy makes a new version; running it again makes a new run."
           >${esc(RUN.strategy_name || "untitled")} · version ${
           RUN.strategy_ver ?? "?"}</span></h2>
-        <p class="run-cfg" title="the entry condition this run used">enters when ${
+        <p class="run-cfg" data-tip="The entry condition this run used.">enters when ${
           esc(typeof RUN.config?.entry === "string"
             ? RUN.config.entry : "a plan function decides")}</p>
         <div class="run-actions">
           <button type="button" class="chip" id="markToggle"
-            title="Display only. An option can be marked at the mid price or at the bid — what it could actually be sold for. Switching this redraws the curve; it does not recompute the metrics, which were worked out on the mark the run was configured with."
+            data-tip="Display only. An option can be marked at the mid price or at the bid — what it could actually be sold for. Switching this redraws the curve; it does not recompute the metrics, which were worked out on the mark the run was configured with."
             >showing the ${MARK === "liq" ? "bid" : "mid"} mark</button>
           <a class="chip" href="#/bench"
-             title="the bench is where a configuration is written and run">compose a run</a>
+             data-tip="The bench is where a configuration is written and run.">compose a run</a>
         </div>
       </header>
       <p class="run-lead">What this run did, and whether its numbers can be trusted.
@@ -775,7 +773,7 @@ function robustnessTab(){
       const inputs = (VALID_INPUTS[v.kind] || []).map(i =>
         `<label for="v_${v.kind}_${i.key}">${esc(i.label)}</label>
          <input id="v_${v.kind}_${i.key}" value="${esc(i.value)}"
-                ${i.hint ? `title="${esc(i.hint)}"` : ""}>`).join("");
+                ${i.hint ? `data-tip="${esc(i.hint)}"` : ""}>`).join("");
       return `<li class="${can ? "can" : "cannot"}">
         <b>${esc(v.label)}</b><span>${esc(v.why)}</span>
         ${can ? `<div class="vrow">${inputs}

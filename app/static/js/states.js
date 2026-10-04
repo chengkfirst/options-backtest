@@ -14,6 +14,7 @@ import {$} from "./dom.js";
 import {money, num, pct} from "./fmt.js";
 import {notice, paintIssues} from "./net.js";
 import {blankChart} from "./charts/svg.js";
+import {startTips} from "./ui/tip.js";
 import {renderEquity, renderEquityStrip} from "./charts/equity.js";
 import {renderHist, renderScatter, renderYears} from "./charts/distribution.js";
 import {renderDetail, renderRobust, renderStrip} from "./charts/tables.js";
@@ -152,6 +153,12 @@ section("tokens", "Every value the interface draws with. The contrast of each te
 section("controls", "Three button levels, one primary per page. Disabled is not used — a "
   + "control stays clickable and explains what is blocking (section 11).",
   [
+    one("an explanation, on hover", `<div class="g-frame"><div class="g-row">
+      <span class="chip" data-tip="The page explains itself by pointing at things, so this
+        is a main surface rather than a detail. It replaces the browser's own tooltip,
+        which arrives after about a second in a font nobody chose.">point at me</span>
+      <span class="chip" data-tip="Short one.">and me</span>
+    </div></div>`),
     one("buttons and chips", `<div class="g-frame"><div class="g-row">
       <button class="run" style="width:auto">run</button>
       <button class="btn">ask Claude</button>
@@ -304,6 +311,7 @@ function applyTheme(name){
 }
 
 applyTheme("dark");
+startTips();
 $("theme").addEventListener("click", () => {
   const now = document.documentElement.dataset.theme || "dark";
   applyTheme(THEMES[(THEMES.indexOf(now) + 1) % THEMES.length]);

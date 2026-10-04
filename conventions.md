@@ -205,14 +205,44 @@ them and **says they are hand-written**, rather than pretending they were comput
 
 ---
 
-## Before committing
+## More than one session at a time
+
+**Commit what you changed. Nothing else. Ever.**
+
+More than one session works in this repository at once — one on the engine, one on the
+interface, sometimes a third on the tests. They share a working tree, so every file either
+of them has touched is visible to both, and `git add -A` does not know which is whose.
+
+It has gone wrong in both directions, within one afternoon:
+
+- a session finishing engine work ran `git add -A && git commit` and swept a half-finished
+  interface rebuild into a commit whose message was about component state
+- the session doing the interface ran `git add tools/` and committed the other's
+  469-line mutation-testing guard under a message about CSS tokens
+
+Nothing was lost either time — it is all in git — but the history now says things that are
+not true, and the history is the only account of why anything was done. A commit message
+that describes a third of its own diff is worse than no message: the next person reads it,
+believes it, and stops looking.
+
+So:
 
 ```bash
-python -m tools.check      # the guards
-python -m tools.status     # a look at the project's state (computed, so it cannot go stale)
-git add -A && git commit
+python -m tools.check          # the guards
+python -m tools.status         # a look at the project's state (computed, so it cannot go stale)
+
+git add path/to/each/file      # explicit paths, never -A and never a bare directory
+git diff --cached --name-only  # read it. Is every one of these yours?
+git commit
 git push
 ```
+
+`git add -A` and `git add <directory>` are the two that cause this, and a directory is the
+sneakier of them: `tools/` looks specific and is not. If a file you did not write is already
+staged, `git restore --staged <path>` puts it back; leave it for whoever wrote it.
+
+**No tool checks this.** A guard cannot know which session wrote which line — it rests on
+reading the staged list before committing, which costs one command.
 
 Write **why** in the commit message, not only what changed. What you will want to know in
 six months is why it was decided this way, not what the diff already shows.

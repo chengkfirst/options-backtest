@@ -3,8 +3,8 @@
  * The one entry point. `index.html` loads this and nothing else, so the order the modules
  * come up in is written here rather than spread across script tags.
  *
- * The design plan's eight surfaces arrive one at a time. Today there is one — the bench —
- * and the others are registered as routes that say what they will be and what they are
+ * The design plan's eight surfaces arrive one at a time. Built: the composer and the run
+ * analysis. The rest are registered as routes that say what they will be and what they are
  * waiting on, because a navigation item that silently does nothing is worse than one that
  * explains itself.
  */
@@ -13,6 +13,7 @@
 import {$, onClick, show} from "./dom.js";
 import {catchPageErrors, notice} from "./net.js";
 import {go, location_, route, start} from "./router.js";
+import {startTips} from "./ui/tip.js";
 import * as bench from "./views/bench.js";
 import * as runView from "./views/run.js";
 
@@ -21,7 +22,7 @@ import * as runView from "./views/run.js";
  * ones not built yet. Order is the order in the rail. */
 const SURFACES = [
   {path: "/bench", icon: "▦", name: "bench", view: "view-bench",
-   what: "compose a configuration, run it, read the result"},
+   what: "write a configuration and run it. The result opens on its own page"},
   {path: "/log", icon: "▤", name: "experiment log", view: "view-pending",
    what: "every run grouped by idea, with its trial count and verdict",
    pending: "the stored runs, notes and verdicts exist in the backend; this surface is "
@@ -43,7 +44,7 @@ function renderRail(){
   const {path} = location_();
   $("rail").innerHTML = SURFACES.map(s => `
     <a class="rail-item${path === s.path ? " on" : ""}" href="#${s.path}"
-       title="${s.name} — ${s.what}">
+       data-tip="${s.what}${s.pending ? ". Not built yet: " + s.pending : ""}">
       <span class="rail-icon" aria-hidden="true">${s.icon}</span>
       <span class="rail-name">${s.name}</span>
     </a>`).join("");
@@ -84,7 +85,7 @@ function applyTheme(name){
   }
   const next = THEMES[(THEMES.indexOf(name) + 1) % THEMES.length];
   $("theme").textContent = next === "dark" ? "dark" : "light";
-  $("theme").title = `switch to the ${next} theme`;
+  $("theme").dataset.tip = `Switch to the ${next} theme. Dark is the default.`;
 }
 
 function initTheme(){
@@ -104,6 +105,9 @@ function initTheme(){
 /* ── boot ── */
 catchPageErrors();
 initTheme();
+// The page explains itself by hovering, so the explanation is a real component rather
+// than the browser's `title`.
+startTips();
 
 $("railToggle").addEventListener("click", () => {
   document.body.classList.toggle("rail-open");
