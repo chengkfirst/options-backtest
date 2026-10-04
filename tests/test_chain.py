@@ -44,6 +44,7 @@ def result():
 
 class TestEveryFillIsExplainable:
     @pytest.mark.req("0.6.chain")
+    @pytest.mark.req("0.1.bus")
     def test_every_fill_in_a_real_run_reaches_the_component_that_decided_it(self, result):
         """The whole requirement, asserted over the run rather than over an example.
 
@@ -253,3 +254,75 @@ class TestTheStreamIsComplete:
         assert "cannot be traced" not in text
         trade = result.raw.bus.of_type(EventType.FILL)[0].trade_id
         assert f"trade {trade}" in result.why(trade)
+
+
+@kind("guard")
+class TestEachSlotsRecordIsItsOwn:
+    """Requirement S.namespaces, over a real run rather than a constructed context.
+
+    The unit tests in ``test_trade_context.py`` prove the structure cannot be made to
+    cross namespaces. This proves the engine uses it — which is the half that rots, since
+    a slot recording into the wrong namespace, or into none, breaks nothing else.
+    """
+
+    @pytest.mark.req("S.namespaces")
+    def test_the_exit_reason_agrees_with_the_slot_that_recorded_firing(self, result):
+        """The failure this requirement exists for, asserted over every trade.
+
+        Time exits were once credited to the stop-loss slot. Nothing structural tied a
+        recorded fact to the slot that produced it, so the two could disagree and only a
+        person reading both would notice.
+        """
+        from backtest.core.types import ExitReason
+
+        owner = {
+            ExitReason.TAKE_PROFIT: "take_profit",
+            ExitReason.STOP_LOSS: "stop_loss",
+            ExitReason.DTE_FLOOR: "time_exit",
+            ExitReason.TIME_EXIT: "time_exit",
+        }
+        checked = 0
+        for record in result.raw.records:
+            slot = owner.get(record.exit_reason)
+            if slot is None:
+                continue          # expiry and risk-forced exits are not these slots'
+            fired = record.slot_record.get(f"{slot}.fired")
+            assert fired, (
+                f"trade {record.trade_id} closed on {record.exit_reason.value} and the "
+                f"{slot} slot's own record says it did not fire: {fired!r}. The exit "
+                f"reason and the slot that produced it disagree"
+            )
+            checked += 1
+        assert checked >= 5, "too few trades with a slot-owned exit for this to mean much"
+
+    def test_every_slot_that_ran_recorded_something(self, result):
+        """A slot that ran and recorded nothing is indistinguishable from one that did
+        not run, and "did not run" is a legitimate state — so the two must not look
+        alike."""
+        for record in result.raw.records:
+            for slot in ("take_profit", "stop_loss", "time_exit"):
+                assert f"{slot}.fired" in record.slot_record, (
+                    f"trade {record.trade_id} has no record from {slot}, which runs on "
+                    f"every open day"
+                )
+
+    def test_the_two_exit_slots_record_the_same_ratio_under_their_own_names(self, result):
+        """Both slots turn on the premium ratio and both record it. Under a flat dict
+        one would have overwritten the other; here both are present and each is
+        attributable."""
+        for record in result.raw.records[:10]:
+            take = record.slot_record.get("take_profit.premium_ratio")
+            stop = record.slot_record.get("stop_loss.premium_ratio")
+            assert take is not None and stop is not None
+            assert take == stop, "the two slots saw one ratio and recorded two"
+
+    def test_the_trade_table_says_which_slot_each_column_came_from(self, result):
+        """The prefix, over a real record. A column a reader cannot attribute is the
+        second of the two failures, and it is the one a prefix convention leaves open."""
+        record = result.raw.records[0]
+        assert record.slot_record, "no slot recorded anything"
+        for key in record.slot_record:
+            slot = key.split(".")[0]
+            assert slot in ("take_profit", "stop_loss", "time_exit", "candidate"), (
+                f"{key!r} is not attributable to a slot"
+            )

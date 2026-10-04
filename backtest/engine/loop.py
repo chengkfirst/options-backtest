@@ -32,7 +32,7 @@ The main loop's order within a day is fixed, and every step's position has a rea
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 import pandas as pd
@@ -47,10 +47,12 @@ from backtest.data.market import MarketData
 from backtest.signals.plan import Context, Plan
 from backtest.signals.review import Add, Close, PositionView, Reduce
 from backtest.signals.exit_context import exit_context
+from backtest.signals.lifecycle import Candidate, State
 from backtest.signals.strategy import ExitRule
 from backtest.engine.strategy import Strategy
 from backtest.core.errors import InvariantError, StartupError
 from backtest.core.events import Event, EventBus, EventType
+from backtest.core.trade_context import TradeContext, market_only
 from backtest.core.invariants import check_all as check_invariants
 from backtest.core.run_log import EventKind, EventLog
 from backtest.accounting.tradebook import (
@@ -183,6 +185,13 @@ class OpenTrade:
     fees: float
     entry_quote: dict
     entry_signals: dict
+    #: What each slot recorded while this trade was open, partitioned by slot.
+    #:
+    #: One structure for the whole life of the trade rather than one per day: the
+    #: question a reader asks is "what did the stop think on the day it fired", and the
+    #: last value before the exit is that. A per-day history is a different and larger
+    #: thing -- it is what ``paths`` already carries.
+    slot_record: "TradeContext" = field(default_factory=lambda: market_only({}))
     #: The entry fees **broken out**. The total alone was carried, and the record then
     #: reported all of it as commission -- so a report whose whole purpose is showing what
     #: ate the money attributed 8.00 of slippage to commission. The total was right, which
@@ -337,6 +346,12 @@ class EventDrivenEngine:
         #: session. Delivery is overnight, so selling on the delivery day itself would be
         #: a fill before the shares existed.
         deliveries: dict[str, date] = {}
+        #: symbol -> its candidate. One per underlying, which is the scope the document
+        #: gives the Idle and Armed states; Open and Closed belong to a trade_id. Without
+        #: the separation, "may this underlying trade again yet" has nowhere to live and
+        #: ends up decided by accident in the engine.
+        candidates: dict[str, Candidate] = {
+            self.config.symbol: Candidate(symbol=self.config.symbol)}
         self._brake_state = "none"
         self._risk = NOTHING
         self._daily_return = 0.0
@@ -396,6 +411,7 @@ class EventDrivenEngine:
                 closed = self._execute(intent, ledger, open_trades, day, actions)
                 if closed is not None:
                     records.append(closed)
+                    candidates[closed.contract.symbol].closed_trade(day)
                     self._start_shadow(closed, shadowing)
 
             # 3b  dispose of shares delivered at a physical settlement
@@ -426,6 +442,7 @@ class EventDrivenEngine:
                             deliveries[p.symbol] = day
                     if rec is not None:
                         records.append(rec)
+                        candidates[rec.contract.symbol].closed_trade(day)
                         # An expiry leaves nothing to shadow: the contract is gone, and
                         # there is no later price for it to have. Recording an empty
                         # shadow would make "no data" indistinguishable from "it never
@@ -581,7 +598,40 @@ class EventDrivenEngine:
                         component_id="review",
                     ))
 
-            if strategy.entry.condition(view):
+            # Setup, then entry. **Two steps, not one.** Slot 1 decides whether this is
+            # an environment to trade in and *arms* the candidate; slot 2 looks for
+            # timing inside the armed window. The engine used to collapse them -- the
+            # entry condition becoming true produced an order in the same step -- so no
+            # ablation could say what a regime filter was worth, because removing it also
+            # removed the timing.
+            candidate = candidates[self.config.symbol]
+            if strategy.setup is None:
+                # No setup slot: always armed, which is exactly what the engine did
+                # before the state existed. This is why the state changes no result.
+                candidate.arm("no setup slot, so every session is armed")
+            else:
+                note = candidate.state
+                armed = bool(strategy.setup(self._market_ctx(day, ledger)))
+                if armed:
+                    candidate.arm("the setup slot armed this session")
+                else:
+                    candidate.disarm("the setup slot did not arm this session")
+                if candidate.state is not note:
+                    self.bus.emit(
+                        EventType.SIGNAL, day, "signals",
+                        component_id="setup",
+                        reason=f"the candidate moved to {candidate.state.value}: "
+                               f"{candidate.reason}",
+                        data={"state": candidate.state.value})
+
+            refusal = candidate.may_enter(day, strategy.lifecycle, calendar=cal)
+            if refusal:
+                if strategy.entry.condition(view):
+                    # Recorded only when the entry condition *was* true: a refusal on a
+                    # day nothing wanted to trade is not information, and logging it
+                    # every session would bury the days it mattered.
+                    self.events.record(EventKind.CANDIDATE_DROPPED, day, refusal)
+            elif strategy.entry.condition(view):
                 intent = self._entry_intent(day, strategy, ledger, queue, next_trade_id)
                 if intent is not None:
                     intents.append(intent)
@@ -636,6 +686,13 @@ class EventDrivenEngine:
                           "quantity": intent.quantity,
                           "execute_on": intent.execute_on.isoformat()})
                 queue.append(replace(intent, order_event=order.id))
+                if intent.kind is Action.OPEN:
+                    # **At the order, not at the fill.** They are a day apart under the
+                    # execution lag, and this gate is asked at the decision -- so
+                    # counting at the fill let `reentry_policy='once'` queue eleven
+                    # entries before the first one landed, each passing a check against
+                    # a candidate that had opened nothing yet.
+                    candidates[intent.contract.symbol].opened_trade()
 
             # The day is over: deliver what it published, in the phase order. Nothing is
             # published during the drain -- the loop has finished the day -- so no event
@@ -905,22 +962,61 @@ class EventDrivenEngine:
                 view=DataView.at(day, market=self.market, signals=self.signals,
                                  chain=self.chain),
             )
+            # **Each slot writes only into its own namespace.** The writer is bound to
+            # the slot name and has nowhere else to put anything, so two slots both
+            # recording `level` -- which they naturally do -- keep two values instead of
+            # the second overwriting the first in silence.
+            #
+            # The engine records the verdict and the figure it turned on, always, so a
+            # slot that ran is never indistinguishable from a slot that did not. A form
+            # that wants to add its own reasoning takes `ctx["write"]`, which is the same
+            # bound writer: the component writes, and it cannot write elsewhere.
             take = strategy.components.get("take_profit")
             stop = strategy.components.get("stop_loss")
+
+            tp_note = trade.slot_record.writer("take_profit")
+            tp_note.update({"premium_ratio": ratio,
+                            "level": rule.take_profit,
+                            "form": "component" if take is not None else "rule"})
             if take is not None:
-                if take(ctx):
-                    reasons.append(ExitReason.TAKE_PROFIT)
-            elif rule.take_profit is not None and ratio >= rule.take_profit:
+                fired = bool(take({**ctx, "write": tp_note}))
+            else:
+                fired = rule.take_profit is not None and ratio >= rule.take_profit
+            tp_note.write("fired", fired)
+            if fired:
                 reasons.append(ExitReason.TAKE_PROFIT)
+
+            sl_note = trade.slot_record.writer("stop_loss")
+            sl_note.update({"premium_ratio": ratio,
+                            "level": rule.stop_loss,
+                            "form": "component" if stop is not None else "rule"})
             if stop is not None:
-                if stop(ctx):
-                    reasons.append(ExitReason.STOP_LOSS)
-            elif rule.stop_loss is not None and ratio <= -rule.stop_loss:
+                fired = bool(stop({**ctx, "write": sl_note}))
+            else:
+                fired = rule.stop_loss is not None and ratio <= -rule.stop_loss
+            sl_note.write("fired", fired)
+            if fired:
                 reasons.append(ExitReason.STOP_LOSS)
-        if rule.dte_floor is not None and cal.sessions_between(day, pos.contract.expiry) <= rule.dte_floor:
+        # `time_exit` is the holding cap and the days-to-expiry floor. It records in its
+        # own namespace for the reason the whole partition exists: its exits were once
+        # credited to the stop-loss slot, and nothing structural tied the recorded fact to
+        # the slot that produced it.
+        dte = cal.sessions_between(day, pos.contract.expiry)
+        held = cal.sessions_between(trade.entry_date, day)
+        time_note = trade.slot_record.writer("time_exit")
+        time_note.update({"days_to_expiry": dte, "days_held": held,
+                          "dte_floor": rule.dte_floor, "hold_days": rule.hold_days})
+        # Two independent conditions, not a chain. Both can be true on one day, and
+        # `suppressed_reasons` records the one that did not win -- an `elif` here would
+        # have dropped it and made the precedence invisible.
+        fired: list[str] = []
+        if rule.dte_floor is not None and dte <= rule.dte_floor:
             reasons.append(ExitReason.DTE_FLOOR)
-        if rule.hold_days is not None and cal.sessions_between(trade.entry_date, day) >= rule.hold_days:
+            fired.append("dte_floor")
+        if rule.hold_days is not None and held >= rule.hold_days:
             reasons.append(ExitReason.TIME_EXIT)
+            fired.append("hold_days")
+        time_note.write("fired", ", ".join(fired) if fired else False)
         return reasons
 
     def _entry_intent(self, day, strategy, ledger, queue, trade_id) -> Intent | None:
@@ -1475,6 +1571,7 @@ class EventDrivenEngine:
             source=QuoteSource.SYNTHETIC
             if trade.entry_quote.get("source") == QuoteSource.SYNTHETIC.value else QuoteSource.VENDOR,
             entry_context=ctx_in, exit_context=ctx_out,
+            slot_record=trade.slot_record.flat(),
             mfe=trade.mfe, mae=trade.mae,
             mfe_underlying=trade.mfe_underlying, mae_underlying=trade.mae_underlying,
             deferred_days=trade.entry_deferred + exit_deferred,

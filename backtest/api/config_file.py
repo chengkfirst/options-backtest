@@ -172,7 +172,9 @@ def to_mapping(result) -> dict[str, Any]:
         # differs from what the system enforces -- see `_check_fixed`. A file carrying
         # settings that can be edited to no effect is the silent failure this format is
         # supposed to prevent, so they are either honoured or refused.
-        "lifecycle": _lifecycle(execution),
+        # From the manifest's own strategy block, which is where the fingerprint reads
+        # it. A second route to the same value is a second thing to keep in step.
+        "lifecycle": _lifecycle(execution, strategy.get("lifecycle")),
         "timing": {"execution_lag_days": config["execution_lag_days"],
                    "signal_snapshot": "close",
                    "fill_latency": f"{config['execution_lag_days']} trading day(s)"},
@@ -191,26 +193,44 @@ def to_mapping(result) -> dict[str, Any]:
     return _plain(out)
 
 
-def _lifecycle(execution: Mapping[str, Any]) -> dict[str, Any]:
+#: The lifecycle settings that are **real values** a run honours, and so must round-trip.
+#: The rest are descriptions of what the engine fixes -- see :func:`_lifecycle`.
+SETTABLE_LIFECYCLE: tuple[str, ...] = (
+    "reentry_policy", "cooldown_sessions", "max_concurrent_trades",
+)
+
+
+def _lifecycle(execution: Mapping[str, Any], lifecycle: Any = None) -> dict[str, Any]:
     """The document's five lifecycle settings, as this run actually resolved them.
 
-    Four of the five are **not configurable yet**; what they are here is what the engine
-    fixes. Written out anyway, because the alternative is a file that silently omits the
-    settings the document says decide how a trade is managed, and a reader who assumes
-    they were considered.
+    Two kinds of entry in one block, which is the thing to be careful about:
 
-    The values come from ``signals.lifecycle.SETTINGS``, which already records what
+    - **three are values this run honoured** -- ``reentry_policy``,
+      ``cooldown_sessions``, ``max_concurrent_trades``. They are written as values and
+      read back as values, so the file reproduces the run.
+    - **the other two are descriptions** of what the engine fixes. Written out anyway,
+      because the alternative is a file silently omitting settings the document says
+      decide how a trade is managed, and a reader who assumes they were considered.
+
+    The descriptions come from ``signals.lifecycle.SETTINGS``, which already records what
     enforces each one, so this cannot drift from the system's own account of itself.
+
+    Mixing the two in one block is a hazard and is the reason :func:`_check_fixed` exists:
+    an edited description is refused, because changing the record does not change the run.
     """
     from backtest.signals.lifecycle import SETTINGS
 
-    fixed = {s.name: s.enforced_by or "nothing enforces it" for s in SETTINGS}
-    fixed["max_concurrent_trades"] = (
-        f"{execution['max_concurrent']} book-wide"
-        if execution.get("max_concurrent") is not None
-        else "unlimited book-wide, one per contract"
-    )
-    return fixed
+    out = {s.name: s.enforced_by or "nothing enforces it" for s in SETTINGS}
+    held = (lifecycle if isinstance(lifecycle, Mapping)
+            else {n: getattr(lifecycle, n, None) for n in SETTABLE_LIFECYCLE})
+    for name in SETTABLE_LIFECYCLE:
+        out[name] = held.get(name)
+    if out.get("max_concurrent_trades") is None:
+        # Per candidate it is unlimited, and the book-wide limit is a different setting
+        # in `run`. Saying which is which here: the two were one line, and a reader
+        # comparing two files could not tell a per-candidate limit from a book-wide one.
+        out["max_concurrent_trades"] = None
+    return out
 
 
 def _check_fixed(data: Mapping[str, Any]) -> None:
@@ -226,8 +246,12 @@ def _check_fixed(data: Mapping[str, Any]) -> None:
     from backtest.signals.lifecycle import SETTINGS
 
     expected = {s.name: s.enforced_by or "nothing enforces it" for s in SETTINGS}
+    # The settable ones are excluded: they are values the loader honours, so editing one
+    # changes the run rather than only the record. That is the whole point of their being
+    # settings, and refusing an edit to them would make the file unusable for the thing a
+    # config file is for.
     edited = [k for k, v in block.items()
-              if k in expected and k != "max_concurrent_trades" and v != expected[k]]
+              if k in expected and k not in SETTABLE_LIFECYCLE and v != expected[k]]
     if edited:
         raise StartupError(
             f"the lifecycle block was edited ({', '.join(edited)}), and these are fixed "
@@ -345,14 +369,24 @@ def flatten(data: Mapping[str, Any]) -> dict[str, Any]:
     its arguments. Translating between them here keeps the file in the document's shape
     without that shape leaking into every call site.
 
-    ``lifecycle`` and ``timing`` are not passed on. Four of the five lifecycle settings
-    are fixed in the engine and ``load`` has already refused an edited one; ``timing``
-    carries ``execution_lag_days``, which **is** honoured and is lifted out.
+    Three of the five lifecycle settings are **values the run honours** and are lifted
+    out; the other two are descriptions of what the engine fixes and ``load`` has already
+    refused an edit to them. ``timing`` carries ``execution_lag_days``, which is honoured
+    and is lifted out the same way.
+
+    The whole lifecycle block used to be dropped, which was right while nothing in it was
+    settable and became wrong the moment ``reentry_policy`` was: a file recording a
+    cooldown would have replayed without one, reproducing a different run while looking
+    like the same one. ``check_round_trip`` compares fingerprints for exactly that.
     """
     out: dict[str, Any] = {}
     out.update(dict(data.get("strategy") or {}))
     out.update(dict(data.get("data") or {}))
     out.update(dict(data.get("run") or {}))
+    lifecycle = {k: v for k, v in (data.get("lifecycle") or {}).items()
+                 if k in SETTABLE_LIFECYCLE and v is not None}
+    if lifecycle:
+        out["lifecycle"] = lifecycle
     timing = data.get("timing") or {}
     if "execution_lag_days" in timing:
         out["execution_lag_days"] = timing["execution_lag_days"]

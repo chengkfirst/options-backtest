@@ -25,6 +25,7 @@ from backtest.portfolio.positioning import Sizing
 from backtest.signals.contracts import ContractChooser, SelectionRule
 from backtest.signals.plan import Planner
 from backtest.signals.review import Reviewer
+from backtest.signals.lifecycle import Lifecycle
 from backtest.signals.strategy import EntryRule, ExitRule
 
 
@@ -53,6 +54,22 @@ class Strategy:
     #: allows it naturally, while the event-driven engine holds one position per
     #: contract and naturally does not.
     allow_stacking: bool = False
+    #: **Slot 1 · setup / regime.** ``f(ctx) -> bool``: is this an environment to trade
+    #: in at all. Returning True *arms* the candidate; it opens nothing by itself.
+    #:
+    #: ``None`` means always armed, which is what the engine did before the Armed state
+    #: existed -- the entry condition becoming true produced an order in the same step,
+    #: so Idle and Armed were one. Keeping None as the default is why adding the state
+    #: changes no result.
+    #:
+    #: Separating the two is what makes either measurable. While they were one test, no
+    #: ablation could say what the regime filter was worth, because removing it also
+    #: removed the timing.
+    setup: "Any | None" = None
+    #: The lifecycle settings: how many trades one candidate may hold, and when it may
+    #: arm again after one closes. Per strategy rather than per engine, so two strategies
+    #: being compared can differ on them and so they can be swept.
+    lifecycle: "Lifecycle" = field(default_factory=lambda: Lifecycle())
     #: **A plan-based strategy**: one function decides what to buy, how much, and how
     #: to get out. Giving it bypasses entry / select / sizing, because those three
     #: cannot express the coupling between them. Only the event-driven engine supports

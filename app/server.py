@@ -34,8 +34,10 @@ sys.path.insert(0, str(ROOT.parent))
 sys.path.insert(0, str(ROOT))
 warnings.filterwarnings("ignore")
 
-from meta import _meta_payload, _tradeoff  # noqa: E402
-from runner import STORE, VALIDATIONS, _finite, run_backtest, validate  # noqa: E402
+from meta import _describe_gaps, _meta_payload, _tradeoff  # noqa: E402
+from runner import (  # noqa: E402
+    STORE, SYNTHETIC_WARNING, VALIDATIONS, _finite, run_backtest, validate,
+)
 from store import VERDICTS  # noqa: E402
 
 PORT = 8765

@@ -277,6 +277,51 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_adapters.py::TestBadDataIsFound",),
     ),
     Mutation(
+        "a slot writes only into its own namespace",
+        "backtest/core/trade_context.py",
+        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(slot, {}))",
+        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(\"shared\", {}))",
+        ("tests/test_trade_context.py::TestTwoSlotsCanHoldTheSameKey",),
+    ),
+    Mutation(
+        "the exit reason agrees with the slot that says it fired",
+        "backtest/engine/loop.py",
+        '        time_note.write("fired", ", ".join(fired) if fired else False)',
+        '        time_note.write("fired", False)',
+        ("tests/test_chain.py::TestEachSlotsRecordIsItsOwn",),
+    ),
+    Mutation(
+        "entry is asked nothing while the candidate is idle",
+        "backtest/engine/loop.py",
+        "            refusal = candidate.may_enter(day, strategy.lifecycle, calendar=cal)",
+        '            refusal = ""',
+        ("tests/test_lifecycle.py::TestItChangesARealRun",),
+    ),
+    Mutation(
+        "a reentry policy that waits actually waits",
+        "backtest/signals/lifecycle.py",
+        "        if policy == \"once\" and self.opened >= 1:",
+        "        if False:",
+        ("tests/test_lifecycle.py::TestEachPolicyRefusesSomething",
+         "tests/test_lifecycle.py::TestItChangesARealRun"),
+    ),
+    Mutation(
+        "the lifecycle reaches the run fingerprint",
+        "backtest/api/sdk.py",
+        '            "lifecycle": dataclasses.asdict(self.raw.strategy.lifecycle),',
+        '            "lifecycle": None,',
+        ("tests/test_lifecycle.py::"
+         "TestItChangesARealRun::test_two_lifecycle_settings_do_not_share_a_run_id",),
+    ),
+    Mutation(
+        "the config file carries the lifecycle as a value",
+        "backtest/api/config_file.py",
+        "    if lifecycle:\n        out[\"lifecycle\"] = lifecycle",
+        "    if False:\n        out[\"lifecycle\"] = lifecycle",
+        ("tests/test_lifecycle.py::"
+         "TestItChangesARealRun::test_the_config_file_reproduces_a_run_with_a_policy",),
+    ),
+    Mutation(
         "the platform refuses to default a strategy choice",
         "backtest/signals/strategy.py",
         "    stop_loss: float | None = None",

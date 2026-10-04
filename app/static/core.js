@@ -25,9 +25,20 @@ const REASON={take_profit:"take profit",stop_loss:"stop loss",time_exit:"holding
 const EXCLUDE=new Set(["trade_id","gross_pnl","fees","net_pnl","entry_sig_close",
  "entry_sig_sma_20","entry_sig_sma_50","entry_sig_sma_200"]);
 
-const money=v=>(v>=0?"+":"−")+Math.abs(v).toLocaleString("en-US",{maximumFractionDigits:0});
-const pct=v=>(v*100).toFixed(1)+"%";
-const sgn=v=>v>0?"pos":v<0?"neg":"";
+/* Absence prints as "—", never as a number.
+ *
+ * The backend sends `null` for "this cannot be computed" (a Sharpe on one return, a
+ * drawdown with no equity curve) — `_finite` in runner.py converts every NaN and
+ * infinity to null for exactly that reason, and its comment promises that this side
+ * shows "—" for null and keeps 0 for a real zero. It did not: `pct(null)` multiplied
+ * null by 100 and printed **0.0%**, inventing the figure the conversion existed to
+ * avoid, and `money(null)` printed "+0". A number that was never computed must not
+ * appear as one. */
+const absent=v=>v==null||(typeof v==="number"&&!Number.isFinite(v));
+const money=v=>absent(v)?"—":(v>=0?"+":"−")+Math.abs(v).toLocaleString("en-US",{maximumFractionDigits:0});
+const pct=v=>absent(v)?"—":(v*100).toFixed(1)+"%";
+const num=(v,digits=2)=>absent(v)?"—":v.toFixed(digits);
+const sgn=v=>absent(v)?"":v>0?"pos":v<0?"neg":"";
 const label=c=>LABEL[c]||c;
 function fmtVal(col,v){
   if(v==null||Number.isNaN(v))return"—";

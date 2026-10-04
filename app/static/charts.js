@@ -382,7 +382,10 @@ function renderEquityStrip(m){
     ["total return", pct(m["total_return"]), sgn(m["total_return"])],
     ["annualised", pct(m["annualised"]), sgn(m["annualised"])],
     ["max drawdown", pct(m["max_drawdown"]), "neg"],
-    ["Sharpe", m["sharpe"].toFixed(2), ""],
+    // `num` rather than .toFixed: the Sharpe is null when it cannot be computed (one
+    // return, or zero volatility), and calling .toFixed on that threw a TypeError that
+    // took the whole strip down with it.
+    ["Sharpe", num(m["sharpe"]), ""],
     ["annualised vol", pct(m["annualised_vol"]), ""],
     ["mean capital used", pct(m["mean_capital_used"]), ""],
   ];

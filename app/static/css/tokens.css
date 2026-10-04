@@ -1,0 +1,203 @@
+/* tokens.css — every spacing, type, colour and motion value in the interface.
+ *
+ * From the design plan's token table (section 18), which also says: "Color values are a
+ * starting proposal; verify each against the contrast, saturation and colour-blind rules
+ * in section 12 before finalizing." So they are verified rather than pasted —
+ * `tools/check_contrast.py` parses this file and asserts the text-on-surface pairs reach
+ * 4.5:1, which is one of the design plan's own acceptance criteria (section 16).
+ *
+ * Three rules for using this file:
+ *
+ * 1. **No hex outside it.** A colour written inline is a colour no theme can switch and
+ *    no checker can see.
+ * 2. **Dark is the default** (section 12). Light is an override, not the base.
+ * 3. **Roles, not appearances.** `--text-muted`, not `--grey`; `--slot-4`, not `--pink`.
+ *    A name that describes the colour stops being true the moment the colour changes.
+ *
+ * The `*-soft` tints and `--surface-sunk` are not in the design plan's table: the
+ * existing stylesheet needs them, and they are derived with `color-mix` from the tokens
+ * above rather than invented as ten more hex values that would then drift.
+ */
+
+:root {
+  /* ── spacing: the 8 px grid (8, 12, 16 inside components, 24 between blocks,
+     32 between page sections) ── */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
+  --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px;
+
+  /* ── type: 13 px base, two weights only ── */
+  --font-xs: 11px; --font-sm: 12px; --font-base: 13px;
+  --font-md: 14px; --font-lg: 16px; --font-xl: 20px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --line-body: 1.5;
+  --row-compact: 28px;
+  --row-comfortable: 36px;
+
+  --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px;
+
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --sans: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+  --display: "Archivo", "IBM Plex Sans", "PingFang SC", system-ui, sans-serif;
+
+  /* ── layout ── */
+  --nav-collapsed: 56px;
+  --nav-expanded: 240px;
+  --drawer-width: 400px;
+  --drawer-max: 560px;
+  --min-content-width: 1100px;
+  --topbar-height: 48px;
+
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --ease: ease-out;
+
+  /* ── data colours: one fixed value per meaning, in both themes ──
+     These do not change between light and dark. A slot's colour is an identity used on
+     action markers, attribution bars, slot filters and slot cards at once; if it shifted
+     with the theme, two screenshots of the same trade would not be comparable. Section 12
+     also requires every slot marker to carry its number, so colour is never the only
+     carrier of which slot is which. */
+  --data-strategy: #378add;
+  --data-benchmark: #888780;
+
+  --slot-1: #7f77dd;  /* setup / regime     */
+  --slot-2: #1d9e75;  /* entry              */
+  --slot-3: #d85a30;  /* take profit        */
+  --slot-4: #d4537e;  /* stop loss          */
+  --slot-5: #ba7517;  /* headwind           */
+  /* The design plan proposes #185fa5 here. On the default dark ground that navy reaches
+     only 2.72:1 — below the 3:1 a marker needs to be seen at all — so it is lifted to the
+     nearest tone of the same hue that clears it (3.06:1 on dark, 4.95:1 on white) and
+     stays one fixed value, as a slot's identity must. */
+  --slot-6: #1a67b2;  /* positioning        */
+  --slot-7: #5f8f3a;  /* hedge / protection */
+
+  --greek-delta: #378add;
+  --greek-gamma: #7f77dd;
+  --greek-vega: #1d9e75;
+  --greek-theta: #d85a30;
+  --greek-residual: #888780;
+
+  --leg-main: #378add;
+  --leg-hedge: #ba7517;
+
+  --data-1: #378add; --data-2: #d85a30; --data-3: #1d9e75; --data-4: #7f77dd;
+
+  /* ── dark, the default ── */
+  --surface-0: #111111;
+  --surface-1: #181818;
+  --surface-2: #1f1f1f;
+  --text-primary: #e8e8e6;
+  --text-secondary: #a0a09c;
+  /* The design plan proposes #6b6b68. It reaches only 3.08:1 on `--surface-2`, and a hint
+     is text, so it is lifted to the lightest-but-one step that clears 4.5:1 everywhere it
+     can land. The three text levels sit closer together than the proposal intended; that
+     is the price of the rule, and the rule is the one the plan states twice. */
+  --text-muted: #878784;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  /* ── interface semantics, per theme ──
+     Separate from the data colours above, which is the design plan's own division:
+     "Interface colors and data colors are separate systems." These four are also used as
+     **text** — a link, a pass or fail label, a badge — and the plan's single proposal was
+     chosen against a dark ground, where it reads well and on white does not (`--warning`
+     on white is 2.58:1). So each theme carries the tone of the same hue that clears
+     4.5:1 on its own surfaces. `--data-strategy` keeps the proposed blue unchanged,
+     because an equity line is not text and must not shift between themes. */
+  --accent: #378add;
+  --success: #3b9f5a;
+  --warning: #d9931e;
+  --danger: #e24b4a;
+
+  /* A recessed area (a code box, a table head). Darker than the page in dark mode and
+     lighter-but-tinted in light mode, so "sunk" reads as sunk in both. */
+  --surface-sunk: #0b0b0b;
+
+  /* Tints for banners, badges and selected rows: a share of the colour over the panel it
+     sits on, so a palette change carries into every tint by itself. The share is 10%
+     rather than the 15% the plan suggests for fills, because these tints carry text of
+     their own colour (a `.comp-badge` is warning-on-warning-soft) and a heavier tint puts
+     that pair under 4.5:1. */
+  --accent-soft: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
+  --success-soft: color-mix(in srgb, var(--success) 10%, var(--surface-1));
+  --warning-soft: color-mix(in srgb, var(--warning) 10%, var(--surface-1));
+  --danger-soft: color-mix(in srgb, var(--danger) 10%, var(--surface-1));
+
+  /* The locked hold-out: a 45° hatch at 12% of the muted text colour (section 18). It is
+     hatched rather than filled because the period is not merely shaded, it is **empty** —
+     no line is drawn across it until the hold-out is revealed. */
+  --holdout-fill: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--text-muted) 12%, transparent) 0 6px,
+    transparent 6px 12px
+  );
+
+  color-scheme: dark;
+}
+
+/* ── light: an override, for a bright room or a projector ──
+   Dark is the base above, so light is reached two ways and never by default: the system
+   asking for it (with no explicit choice on the page), or the page being set to it. The
+   second block repeats the first because plain CSS has no way to share a declaration
+   list, and a `:not([data-theme="dark"])` selector covering both would make light apply
+   when nothing is set at all — the opposite of what section 12 asks for. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --surface-0: #f7f7f5;
+    --surface-1: #ffffff;
+    --surface-2: #ffffff;
+    --text-primary: #1f1f1e;
+    --text-secondary: #5f5e5a;
+    --text-muted: #6b6a67;
+    --border: rgba(0, 0, 0, 0.08);
+    --border-strong: rgba(0, 0, 0, 0.16);
+    --surface-sunk: #eeedea;
+    --accent: #206dba;
+    --success: #2d7844;
+    --warning: #8f6114;
+    --danger: #d02221;
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --surface-0: #f7f7f5;
+  --surface-1: #ffffff;
+  --surface-2: #ffffff;
+  --text-primary: #1f1f1e;
+  --text-secondary: #5f5e5a;
+  --text-muted: #6b6a67;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --surface-sunk: #eeedea;
+  --accent: #206dba;
+  --success: #2d7844;
+  --warning: #8f6114;
+  --danger: #d02221;
+  color-scheme: light;
+}
+
+/* ── the names the existing stylesheets use ──
+   `app.css` and `bench.css` were written against an earlier palette. Rather than a
+   sweeping rename in the same change that introduces the tokens — which would make a
+   visual regression impossible to attribute — the old names alias the new ones here and
+   are removed stylesheet by stylesheet. Nothing new may use them. */
+:root {
+  --ground: var(--surface-0);
+  --panel: var(--surface-1);
+  --sunk: var(--surface-sunk);
+  --line: var(--border);
+  --line-soft: color-mix(in srgb, var(--border) 50%, transparent);
+  --ink: var(--text-primary);
+  --ink-2: var(--text-secondary);
+  --ink-3: var(--text-muted);
+  --gain: var(--success);
+  --gain-soft: var(--success-soft);
+  --loss: var(--danger);
+  --loss-soft: var(--danger-soft);
+  --warn: var(--warning);
+  --warn-soft: var(--warning-soft);
+  --radius: var(--radius-sm);
+}

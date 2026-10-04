@@ -80,6 +80,7 @@ class TestTheOrderWithinATimestamp:
         for _, word in stages:
             assert word in ORDER_AS_WRITTEN
 
+    @pytest.mark.req("0.1.bus")
     def test_events_are_delivered_in_phase_order_not_publication_order(self):
         """Published backwards, delivered forwards.
 
@@ -197,6 +198,7 @@ class TestAHandlerThatPublishes:
 class TestWhatWouldOtherwiseBeSilent:
     """Four ways to be wrong that produce a complete-looking run."""
 
+    @pytest.mark.req("0.1.bus")
     def test_a_handler_cannot_be_registered_twice(self):
         """It would run twice on every event: a double position on a fill, a double
         trade on a signal, and no error anywhere."""

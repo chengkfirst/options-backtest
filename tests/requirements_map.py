@@ -53,11 +53,30 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     # ── 0.1 Events ────────────────────────────────────────────────────────
     Requirement(
         "0.1.bus", "0.1",
-        "Events are the only way layers communicate",
-        "a layer calling another directly",
-        not_built="no event bus exists; layers call each other directly. The largest "
-                  "structural gap, and 0.2's on_event, 3.2's target portfolio and 5.1's "
-                  "scheduler all wait on it",
+        "Thirteen named event types, carrying the causal chain between layers",
+        "a fill that cannot be followed back to the component that decided it, or two "
+        "events on one timestamp delivered in an order that depends on who published "
+        "first",
+    ),
+    Requirement(
+        "0.1.only", "0.1",
+        "Events are the **only** way layers communicate",
+        "a layer calling another directly, so removing a subscriber changes what is "
+        "observed rather than what happens",
+        not_built="the engine **acts inline**. It publishes the chain -- so 0.1.bus and "
+                  "0.6 are real -- and a fill is still executed by the loop rather than "
+                  "by a handler subscribed to ORDER. That is the remaining work and it "
+                  "is what 7.2 needs: 'the same component code both sides' means the "
+                  "same handlers receiving the same events from a different source.\n\n"
+                  "Deliberately excluded: data reads stay direct calls. A read is a "
+                  "query, not a message between layers, and making the selection rule "
+                  "wait for a QuoteEvent it then has to find is strictly worse than "
+                  "asking the chain.\n\n"
+                  "One caution learned immediately, which applies to every event type "
+                  "still to come: a second record of a fact the system already records "
+                  "will diverge from it. The FILL event and the decision log disagreed "
+                  "within hours -- 22 rows against 34 events -- and nothing else in the "
+                  "suite could see it",
     ),
     Requirement(
         "0.1.order", "0.1",
@@ -369,24 +388,28 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     # ── The strategy model ────────────────────────────────────────────────
     Requirement("S.lifecycle", "S",
                 "A four-state lifecycle: Idle, Armed, Open, Closed",
-                "a candidate re-entering before its reentry policy allows",
-                not_built="no Armed state; a candidate re-enters as soon as the "
-                          "condition is true, the most permissive policy there is"),
+                "a candidate re-entering before its reentry policy allows, or entry "
+                "being asked anything while the candidate is idle"),
     Requirement("S.context", "S",
                 "A per-trade record of the market state the decisions saw, built once and "
                 "read by everything downstream",
                 "two parts of the system reading different values for one trade on one "
                 "day"),
     Requirement("S.namespaces", "S",
-                "Each slot writes only to its own namespace in the trade context "
-                "(setup, entry, take_profit, stop_loss, headwind, hedge), and a "
-                "candidate context is copied in when the trade opens",
+                "Each slot that decides per day writes only to its own namespace in the "
+                "trade context, and a candidate context is copied in when the trade opens",
                 "one slot overwriting another's value, or a reader unable to say which "
-                "slot produced a field",
-                not_built="the context is a flat snapshot of market state, not a "
-                          "partitioned record: the slots do not write to it at all, so "
-                          "there is nothing yet to partition. It arrives with the "
-                          "component protocol reaching every slot"),
+                "slot produced a field"),
+    Requirement("S.namespaces_candidate", "S",
+                "The setup and entry slots write to their namespaces too, as the "
+                "candidate's own record",
+                "a trade whose candidate namespace cannot say which regime armed it",
+                not_built="setup and entry are still bare callables rather than "
+                          "components, so there is nothing to hand a writer to. Their "
+                          "namespaces exist and stay empty, which is honest: an empty "
+                          "namespace is not a claim. `hedge` is absent entirely. This "
+                          "arrives with the component protocol reaching those two slots, "
+                          "which is also what S.lifecycle's Armed state needs"),
     Requirement("S.view", "S",
                 "Every slot reads through the DataView, so the availability cut applies "
                 "to all of them",

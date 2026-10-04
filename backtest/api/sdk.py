@@ -210,6 +210,29 @@ def _exit_from(spec: Mapping[str, Any] | ExitRule) -> ExitRule:
     )
 
 
+def _lifecycle_from(given) -> "Lifecycle":
+    """The lifecycle settings from a mapping, with the unknown key refused.
+
+    Refused rather than ignored for the same reason the config does it: a misspelled
+    ``reentry_polcy`` accepted silently is a researcher who believes a policy is in force
+    and is reading the permissive result.
+    """
+    from backtest.signals.lifecycle import Lifecycle
+
+    if given is None:
+        return Lifecycle()
+    if isinstance(given, Lifecycle):
+        return given
+    known = {f for f in Lifecycle.__dataclass_fields__}
+    unknown = sorted(set(given) - known)
+    if unknown:
+        raise StartupError(
+            f"these are not lifecycle settings: {unknown}. One of "
+            f"{', '.join(sorted(known))}"
+        )
+    return Lifecycle(**dict(given))
+
+
 def run(
     *,
     engine: str = "trade_table",
@@ -241,6 +264,19 @@ def run(
     risk: "Mapping[str, Any] | None" = None,
     hold_out: "tuple[str | date, str | date] | None" = None,
     unlock: str = "",
+    #: Slot 1 · setup / regime: ``f(ctx) -> bool``, whether this is an environment to
+    #: trade in at all. Returning True **arms** the candidate; it opens nothing by
+    #: itself, and entry then looks for timing inside the armed window.
+    #:
+    #: ``None`` is always armed, which is what the engine did before the Armed state
+    #: existed. Separating the two is what makes either measurable: while they were one
+    #: test, no ablation could say what a regime filter was worth, because removing it
+    #: also removed the timing.
+    setup: Callable | None = None,
+    #: The lifecycle settings, as a mapping: ``reentry_policy``,
+    #: ``cooldown_sessions``, ``max_concurrent_trades``. Every default reproduces the
+    #: engine's old behaviour, so naming them changes no result.
+    lifecycle: "Mapping[str, Any] | None" = None,
 ) -> "Result":
     """Run one backtest.
 
@@ -348,6 +384,8 @@ def run(
         quantity=quantity,
         name=name,
         components=built,
+        setup=setup,
+        lifecycle=_lifecycle_from(lifecycle),
     )
     if engine == "event_driven":
         from backtest.engine.loop import EventDrivenEngine
@@ -524,6 +562,16 @@ class Result:
                 slot: {"ref": c.ref, "params": dict(c.params)}
                 for slot, c in sorted(self.raw.strategy.components.items())
             },
+            # Slot 1, and the lifecycle settings. Both change which trades happen: a
+            # setup slot that does not arm removes all of them, and a reentry policy
+            # removes most of them -- 136 trades becomes 1 under `once`.
+            #
+            # **Fourth time this class of gap has appeared**: something that moves the
+            # result reaching the engine without reaching the fingerprint. It was found
+            # here by a round-trip check reporting two runs identical when one had a
+            # five-session cooldown and the other had none.
+            "setup": self.raw.strategy.setup is not None,
+            "lifecycle": dataclasses.asdict(self.raw.strategy.lifecycle),
         }
         settings = self.raw.config.describe()
         # Which engine ran, and the limits it ran under. These change the trades and are

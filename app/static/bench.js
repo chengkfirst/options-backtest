@@ -557,7 +557,14 @@ async function runValidation(kind, btn){
      response
 
    Scanning the JS source to guess field names is unreliable (it misses forms like
-   RUNS[0].x), hence the declaration. */
+   RUNS[0].x), hence the declaration.
+
+   A path may be **nested**, written with dots, and `*` descends into every element of a
+   list: `config.select.dte_lo`, `rows.*.net_pnl`, `scenarios.*.max drawdown`. Top-level
+   keys alone were not enough — `cfgLine` read `config.select.dte` for weeks after the
+   backend renamed it to `dte_lo`/`dte_hi`, the run history printed "undefinedDTE", and
+   the guard stayed green because `config` itself was present. A field the interface
+   reads is declared at the depth it is read. */
 const CONTRACT = {
   run: ["id", "rows", "config", "engine", "started", "seconds",
         "n_trades", "win_rate", "net_pnl", "boundary", "problems",
@@ -565,28 +572,131 @@ const CONTRACT = {
         // Which validation tools this run can answer. Declared per run rather than
         // assumed, because the counterfactual needs the shadow prices only the
         // event-driven engine keeps.
-        "validations"],
+        "validations",
+        // What `describeConfig` reads to say what ran. The selection fields are a
+        // feasible region, not one pinned point, so the guard's sample run fills every
+        // one of them in — otherwise "absent because nobody asked for it" and "absent
+        // because it was renamed" look the same and neither fails.
+        "config.symbol", "config.start", "config.end", "config.entry", "config.engine",
+        "config.select.right", "config.select.dte_lo", "config.select.dte_hi",
+        "config.select.delta_lo", "config.select.delta_hi", "config.select.delta",
+        "config.select.max_spread", "config.select.min_open_interest",
+        "config.exit.take_profit", "config.exit.stop_loss", "config.exit.hold_days",
+        "config.exit.dte_floor", "config.sizing.method",
+        // The trade columns every chart and table reads. The column allowlist in
+        // runner.py has dropped one of these before, and every group then came out empty.
+        "rows.*.net_pnl", "rows.*.gross_pnl", "rows.*.fees", "rows.*.entry_date",
+        "rows.*.exit_date", "rows.*.exit_reason", "rows.*.holding_days",
+        "rows.*.contract", "rows.*.entry_price", "rows.*.exit_price",
+        "rows.*.entry_iv", "rows.*.entry_delta",
+        "diagnostics.*.kind", "diagnostics.*.count", "diagnostics.*.first",
+        "diagnostics.*.last", "diagnostics.*.reasons"],
   // Only the event-driven engine has these; their absence under the trade table is normal
-  run_optional: ["equity", "equity_metrics", "scenarios", "attribution"],
+  run_optional: ["equity", "equity_metrics", "scenarios", "attribution",
+                 "equity.*.date", "equity.*.equity_mid", "equity.*.equity_liq",
+                 "equity_metrics.total_return", "equity_metrics.annualised",
+                 "equity_metrics.max_drawdown", "equity_metrics.sharpe",
+                 "equity_metrics.annualised_vol", "equity_metrics.mean_capital_used",
+                 "attribution.totals", "attribution.high_residual",
+                 "scenarios.*.scenario", "scenarios.*.from", "scenarios.*.to",
+                 "scenarios.*.sessions", "scenarios.*.return",
+                 "scenarios.*.max drawdown", "scenarios.*.note"],
   meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps",
          "validations"],
   sizing_methods: ["fixed", "risk_pct", "fixed_notional", "scale_by_vol"],
 };
 
+/* Resolve one declared path against a response.
+   Returns "ok", "missing" or "empty" — and "empty" is **not** a failure: a list with no
+   elements (no anomaly fired, no scenario covered) cannot show whether its fields are
+   there, and reporting that as missing would cry wolf on every quiet run. */
+function resolvePath(obj, path){
+  let node = obj;
+  for(const part of path.split(".")){
+    if(node == null) return "missing";
+    if(part === "*"){
+      if(!Array.isArray(node)) return "missing";
+      if(!node.length) return "empty";
+      node = node[0];
+      continue;
+    }
+    if(typeof node !== "object" || !(part in node)) return "missing";
+    node = node[part];
+  }
+  return "ok";
+}
+
 function checkContract(record){
-  const missing = CONTRACT.run.filter(k => !(k in record));
+  const missing = CONTRACT.run.filter(p => resolvePath(record, p) === "missing");
   if(missing.length)
     notice(`the backend response is missing fields: ${missing.join(", ")}. Something on the interface will not render — the two sides are out of step.`);
+  // The event-driven-only fields are checked only when the section they feed is present.
+  // Under the trade table their absence is how the interface knows to hide the section.
+  const partial = CONTRACT.run_optional.filter(p => {
+    const root = p.split(".")[0];
+    return record[root] != null && resolvePath(record, p) === "missing";
+  });
+  if(partial.length)
+    notice(`the backend sent ${partial.map(p => p.split(".")[0]).filter((v, i, a) => a.indexOf(v) === i).join(", ")} without: ${partial.join(", ")}. That section will render incomplete.`);
+}
+
+/* ── describing a configuration ───────────────────────────
+   **One reading of the stored config, used by every place that describes a run.**
+
+   There were two, and both had gone stale: each read `select.dte` and
+   `select.moneyness`, neither of which the backend writes — selection has been a
+   feasible region (`dte_lo`/`dte_hi`, a delta band, a ranking target) for some time. The
+   run history printed "undefinedDTE" and the same string was handed to Claude as the
+   strategy's description. Nothing raised, because reading an absent field is not an
+   error in JS; it just renders.
+
+   Absence is shown as "—" and never as `undefined`, and the field names are declared in
+   CONTRACT so that check_wiring fails on the next rename instead of the screen. */
+function describeConfig(c){
+  const s = c.select || {}, x = c.exit || {};
+  const band = (lo, hi, fmt = v => v) =>
+    lo != null && hi != null ? `${fmt(lo)}–${fmt(hi)}`
+      : lo != null ? `≥${fmt(lo)}` : hi != null ? `≤${fmt(hi)}` : null;
+  // The target delta is the ranking objective inside the band; both can be present, and
+  // showing only one of them hides half of how the contract was chosen.
+  const deltaBand = band(s.delta_lo, s.delta_hi, v => Number(v).toFixed(2));
+  const strike = [deltaBand ? `Δ${deltaBand}` : null,
+                  s.delta != null ? `→Δ${Number(s.delta).toFixed(2)}` : null,
+                  s.moneyness != null ? `${(s.moneyness*100).toFixed(0)}% OTM` : null]
+                 .filter(Boolean).join(" ") || "any strike";
+  return {
+    engine: c.engine === "event_driven" ? "event driven" : "trade table",
+    entry: typeof c.entry === "string" ? c.entry
+      : c.plan_code ? "(a plan function)" : "(custom code)",
+    right: s.right || "—",
+    dte: band(s.dte_lo, s.dte_hi) ? `${band(s.dte_lo, s.dte_hi)} DTE` : "any tenor",
+    strike,
+    // Both are real constraints on what could be bought, and in live trading the spread
+    // is often the binding one — worth a place in the one-line summary.
+    spread: s.max_spread != null ? `spread ≤${s.max_spread}` : null,
+    openInterest: s.min_open_interest != null ? `OI ≥${s.min_open_interest}` : null,
+    takeProfit: x.take_profit ?? null,
+    stopLoss: x.stop_loss ?? null,
+    holdDays: x.hold_days ?? null,
+    dteFloor: x.dte_floor ?? null,
+    sizing: c.sizing?.method || null,
+    // A slot filled by a registered form decides that slot instead of the matching exit
+    // field, so a summary that omits it describes a different run from the one that ran.
+    components: Object.entries(c.components || {}).map(([slot, one]) =>
+      `${slot}=${one.variant}${one.version != null ? "@" + one.version : ""}`),
+    risk: c.risk?.variant ? `risk=${c.risk.variant}` : null,
+  };
 }
 
 /* ── the run history ── */
 function cfgLine(c){
-  const s = c.select, x = c.exit;
-  const strike = s.delta != null ? `Δ${s.delta}` : `${(s.moneyness*100).toFixed(0)}% OTM`;
-  const entry = typeof c.entry === "string" ? c.entry : "(custom code)";
-  const eng = c.engine === "event_driven" ? "event driven" : "trade table";
-  return `[${eng}] ${entry} · ${s.dte}DTE ${strike} · TP${x.take_profit ?? "—"} `
-       + `SL${x.stop_loss ?? "—"} hold${x.hold_days ?? "—"}`;
+  const d = describeConfig(c);
+  const num = v => v == null ? "—" : v;
+  return [`[${d.engine}] ${d.entry}`,
+          `${d.right} ${d.dte} ${d.strike}`,
+          d.spread, d.openInterest,
+          `TP${num(d.takeProfit)} SL${num(d.stopLoss)} hold${num(d.holdDays)}`,
+          ...d.components, d.risk].filter(Boolean).join(" · ");
 }
 function paintRuns(){
   $("runsSec").hidden = RUNS.length === 0;
@@ -708,11 +818,17 @@ function digest(rows, col, k){
   for(const r of rows){ const k2 = r.exit_reason || "?";
     (reasons[k2] = reasons[k2] || {n:0, sum:0}).n++; reasons[k2].sum += r.net_pnl; }
   const hold = rows.reduce((a,r)=>a+r.holding_days,0)/rows.length;
-  const c = run.config;
+  const c = run.config, d = describeConfig(c);
+  // The same reading as the run history's. Claude is told what actually ran, including
+  // which form filled a slot — a premium stop and an underlying stop are different
+  // strategies, and a summary that omitted it would invite a conclusion about the wrong one.
+  const num = v => v == null ? "not set" : v;
   return [
-    `Strategy: entry ${typeof c.entry === "string" ? c.entry : "(user's own code)"} · `
-      + `${c.select.dte}DTE · ${c.select.delta != null ? "delta "+c.select.delta : (c.select.moneyness*100).toFixed(0)+"% OTM"}`
-      + ` · take profit ${c.exit.take_profit}, stop loss ${c.exit.stop_loss}, hold at most ${c.exit.hold_days} trading days`,
+    `Strategy: entry ${d.entry} · ${d.right} · ${d.dte} · ${d.strike}`
+      + ` · take profit ${num(d.takeProfit)}, stop loss ${num(d.stopLoss)}, `
+      + `hold at most ${num(d.holdDays)} trading days`
+      + (d.components.length ? ` · slots filled by: ${d.components.join(", ")}` : "")
+      + (d.risk ? ` · book-wide ${d.risk}` : ""),
     `Underlying and range: ${c.symbol} ${c.start} ~ ${c.end}`,
     `Data: ${(run.boundary||"").includes("ynthetic") ? "a synthetic option chain (the underlying's prices are real; the option prices come from Black-Scholes)" : "real data"}`,
     ``,

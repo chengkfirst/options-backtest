@@ -138,17 +138,46 @@ class TestTheDocumentsShape:
         from backtest.signals.lifecycle import SETTINGS
 
         written = to_mapping(result)["lifecycle"]
-        assert {s.name for s in SETTINGS} == set(written)
+        assert {s.name for s in SETTINGS} <= set(written)
 
-    def test_an_edited_lifecycle_value_is_refused(self, result, tmp_path):
-        """Four of the five are fixed in the engine. A file carrying an edited value the
-        run then ignores is a setting that looks honoured and is not."""
+        # `cooldown_sessions` is the extra, and it is not a sixth setting: it is how long
+        # `reentry_policy="cooldown"` waits, meaningless under the other three policies
+        # and required under that one. Written because a file recording the policy
+        # without its length would not reproduce the run.
+        assert set(written) - {s.name for s in SETTINGS} == {"cooldown_sessions"}
+
+    def test_an_edited_description_is_refused_and_an_edited_setting_is_not(self,
+                                                                            result,
+                                                                            tmp_path):
+        """The lifecycle block holds two kinds of entry, and the difference matters.
+
+        Three are **values the run honours**, so editing one changes the run and the
+        loader takes it. Two are **descriptions** of what the engine fixes, so editing
+        one changes the record and not the run -- a setting that looks honoured and is
+        not, which is the failure this format exists to prevent.
+
+        This test used to edit `reentry_policy`, which was a description then and is a
+        setting now. It passed by matching a string that no longer appears, and would
+        have gone on passing against a file nothing checked.
+        """
         path = save(result, tmp_path / "edited.yaml")
         raw = path.read_text(encoding="utf-8")
-        path.write_text(raw.replace("reentry_policy: nothing enforces it",
-                                    "reentry_policy: wait 5 days"), encoding="utf-8")
+
+        # Matched on a fragment that survives YAML's flow style, which wraps the block
+        # across lines wherever it likes. A replacement keyed to a whole value silently
+        # matched nothing and the test passed against a file it had not edited.
+        description = raw.replace("check_frequency: 'once per trading day",
+                                  "check_frequency: 'twice a day")
+        assert description != raw, "the description this test edits is no longer written"
+        path.write_text(description, encoding="utf-8")
         with pytest.raises(StartupError, match="fixed in the engine"):
             load(path)
+
+        setting = raw.replace("reentry_policy: immediate",
+                              "reentry_policy: next_session")
+        assert setting != raw, "reentry_policy is no longer written as a value"
+        path.write_text(setting, encoding="utf-8")
+        assert load(path)["lifecycle"] == {"reentry_policy": "next_session"}
 
     def test_an_unknown_key_inside_a_block_is_refused(self, tmp_path):
         path = tmp_path / "nested.yaml"

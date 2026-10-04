@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
 from types import MappingProxyType
-from typing import Mapping
+from typing import Any, Mapping
 
 from backtest.core.errors import StartupError
 from backtest.core.invariants import trade_record_balances
@@ -223,6 +223,18 @@ class TradeRecord:
     source: QuoteSource
     entry_context: Mapping[str, Maybe[float]]
     exit_context: Mapping[str, Maybe[float]]
+    #: **What each slot recorded, partitioned by slot**, as ``slot.key``.
+    #:
+    #: Separate from the two contexts above, which are market state at two moments. This
+    #: is what the slots decided and the figures they turned on -- the stop's level beside
+    #: the target's, both called ``level`` and neither overwriting the other, each
+    #: answerable as to which slot produced it. See ``core/trade_context.py``.
+    #:
+    #: Empty from the trade-table engine: it evaluates exits over a whole path at once
+    #: rather than slot by slot on each day, so there is no per-slot decision to record.
+    #: Empty rather than absent, because a reader comparing the two engines' logs needs
+    #: the column to exist in both.
+    slot_record: Mapping[str, Any] = field(default_factory=dict)
     quote_gaps: int = 0
     deferred_days: int = 0
     #: Maximum favourable / adverse excursion over the holding period, as a
