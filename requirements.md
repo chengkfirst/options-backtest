@@ -299,7 +299,7 @@ direction rather than a verdict.
 | 3.2 | Option-side conclusions can be trusted (which delta, where to take profit) | missing, **blocked** | the synthetic chain's IV is constant, with no skew and no term structure. **The only fix is your real data** |
 | 3.3 | The confidence in a conclusion can be judged | missing → **goal four, 4D** | see the section of its own below |
 | 3.4 | Once settled, it can be validated and falsified repeatedly over the long run | missing → **goal four** | the platform's second use |
-| 3.5 | Out-of-sample isolation / walk-forward | missing → 4.16 | — |
+| 3.5 | Out-of-sample isolation / walk-forward | done | `research/validation/splits.py` (walk-forward, purging, embargo) and `research/holdout.py`, which **refuses** a run reaching into a declared hold-out rather than warning |
 | 3.6 | Research accumulates, and the history can be traced | done | run records are immutable and strategies are versioned by a content hash |
 | 3.7 | Selling strategies (cash-secured puts, spreads) | missing, placeholder | needs a margin model plus multi-leg; architectural |
 | 3.8 | Live drift monitoring | missing, placeholder | your eventual goal, but it needs live trading first |
@@ -320,7 +320,7 @@ direction rather than a verdict.
 
 | # | The criterion | Status | Why it is wanted |
 |---|---|---|---|
-| 4.1 | The parameter surface is visible: is this a region or a needle | missing → P4 | a conclusion that holds at delta 0.30 and at neither 0.25 nor 0.35 is noise, not a regularity |
+| 4.1 | The parameter surface is visible: is this a region or a needle | partial | `research/sweep.py` produces the surface and `research/anomaly.py` calls out a spike; the plateau-versus-peak reading is the researcher's |
 | 4.2 | Neighbourhood robustness: how the ring around the optimum performs | missing → P4 | a live parameter never lands exactly on that point |
 | 4.3 | A sweep counts its trials automatically and discloses them | partial, counted but unused → P4 | try a hundred sets and keep the best: how much of that best is luck |
 | 4.4 | Refuse to output "the optimal parameters" | missing → P4 | the platform should not encourage that use; it owes a region and that region's stability |
@@ -410,18 +410,18 @@ direction rather than a verdict.
 | 1.23 | **The same strategy code runs in backtest, paper and live**, with only the feed and the broker swapped | missing | There is no SimBroker interface, so nothing proves it |
 | 1.24 | **The fill-price multiple λ can exceed 1** (worse than the ask), so the strategy can be tested at λ = 1.5 | done | `adverse_fraction` is the document's λ and may now exceed 1, capped at 3. λ = 1.5 fills a buy above the ask, which is the sensitivity the document names as one of the five things that move results most |
 | 1.25 | **Beta-weighted delta and vega to a common index** | missing | SPY, QQQ, IWM and their largest holdings behave largely as one position; without this, book risk is understated |
-| 1.26 | **Shadow tracking after a trade closes** | missing | Without prices after the exit, counterfactual exit research is guesswork — which blocks 4.15 |
+| 1.26 | **Shadow tracking after a trade closes** | done | `shadow_days` on the run; `EventDrivenResult.shadow` holds each closed trade's contract afterwards, which is what `research/counterfactual.py` replays |
 | 1.27 | **A point-in-time earnings and event calendar**, readable by Setup, Entry and Headwind | missing | A long option held through an earnings event behaves very differently; results should be split by event exposure |
-| 1.28 | **Deflated Sharpe over the total trial count**, across every slot and setting | missing | `research/sweep.py` records trials per sweep; nothing aggregates them across an idea |
+| 1.28 | **Deflated Sharpe over the total trial count**, across every slot and setting | partial | `research/validation/deflated.py` deflates over a trial count and `research/tracker.py` records runs; `run_batch` counts the configurations that failed as trials. Nothing aggregates across separate sessions |
 
 ## Goal two, continued: the research tools the architecture document adds
 
 | # | The criterion | Status | Note |
 |---|---|---|---|
 | 2.9 | **Ablation**: run with one slot switched off or filled by a neutral variant | done | `research/ablation.py`, as `r.ablate()`. Four slots are ablatable; the others raise with the reason rather than reporting a contribution of zero. **It refuses the stop-loss ablation under `risk_pct` sizing** unless the caller accepts the joint reading, because removing the stop also changes the size |
-| 2.10 | **Variant swap**: fill one slot differently, everything else fixed, as a pair of runs differing in one slot alone | missing | Needs 1.16. This is what makes the strategy's change history auditable |
+| 2.10 | **Variant swap**: fill one slot differently, everything else fixed, as a pair of runs differing in one slot alone | done | `core/component.py` registers forms per slot by name and version; `Result.compare_forms` runs them side by side and the ref reaches the run fingerprint |
 | 2.11 | **Counterfactual exits**: replay each closed trade under an alternative exit | done | `research/counterfactual.py`, as `r.counterfactual(take_profits=…, stop_losses=…)`. A trade whose alternative never fires is **censored**, never assumed to have closed |
-| 2.12 | **Attribution by component**: split P&L by the slot that opened, sized, reduced, hedged or closed each part | missing | Needs the action envelope to carry `component_id`, which `core/actions.py` now defines |
+| 2.12 | **Attribution by component**: split P&L by the slot that opened, sized, reduced, hedged or closed each part | done | `TradeAction.component_id` on every fill, plus the per-slot namespaces in `core/trade_context.py` -- and the exit reason is asserted against the slot whose own record says it fired |
 | 2.13 | **Interaction tests**: vary two slots jointly and compare against the sum of the single-slot effects | missing | A large gap means the two have to be researched together |
 | 2.14 | **An ExperimentTracker**: every run findable, comparable and reproducible, with the trial count per idea | done | `research/tracker.py` over `Store.run_records()`. The reproducibility hash is its own indexed column, named `fingerprint` rather than `run_id` because that table's `run_id` already means a row's integer key — two meanings behind one name is how the counter would have ended up counting rows instead of configurations. Reachable from the interface as "how much searching this took" |
 | 2.15 | **Baselines**: a delta-equivalent position in the underlying, and random entries with the same structure, delta and days to expiry | done | `research/baselines.py`, as `r.baselines(draws=n)`. Random entry reports a **percentile in a distribution**, never a single draw. `valid_on_synthetic` travels with each comparison: random entry holds on a synthetic chain because both sides share it, and the delta-equivalent does not because one side is real |
