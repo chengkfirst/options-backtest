@@ -243,14 +243,19 @@ body.rail-open .rail-name {
   animation: tip-in var(--motion-fast) var(--ease);
 }
 
+/* Opacity only. A box that slides into place reads as the page moving; the tooltip has
+   already been positioned where the answer belongs, so it should simply be there. */
 @keyframes tip-in {
-  from { opacity: 0; transform: translateY(2px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .tip { animation: none; }
 }
 
-/* Anything that explains itself says so by the cursor. */
-[data-tip] { cursor: help; }
+/* **The cursor is not set here.** A blanket `[data-tip] { cursor: help }` turned the
+   pointer into a question mark over whole metric cards, rail links and table rows — a
+   large target carrying an explanation is still a card, and a link that explains itself
+   is still a link. Each place that wants the help cursor asks for it on the small thing
+   that carries the explanation, usually a label. */

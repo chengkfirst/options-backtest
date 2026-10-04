@@ -28,6 +28,7 @@ import {EXCLUDE, REASON, absent, fmtVal, label, money, moneyShort, num, pct}
   from "../fmt.js";
 import {areaLayer, chartStack, lineLayer, underwaterLayer} from "../charts/axis.js";
 import {renderAB, renderHist, renderScatter, renderYears} from "../charts/distribution.js";
+import {renderCurve} from "../charts/equity.js";
 import {renderBuckets, renderCross, renderRobust} from "../charts/tables.js";
 import {replace} from "../router.js";
 
@@ -49,6 +50,10 @@ const TABS = [
   {key: "trades", name: "what closed them"},
   {key: "execution", name: "what it cost"},
   {key: "robustness", name: "does it hold up"},
+  // What was actually set. It was on the composer and nowhere else, so reading a run
+  // meant remembering what you had typed — or going back and hoping the form still held
+  // it. A result without its settings beside it is half a record.
+  {key: "settings", name: "what was set"},
   {key: "exposure", name: "exposure",
    pending: "daily portfolio greeks and premium at risk against the book's limits. The "
           + "engine computes them; they are not yet kept with the run, so this tab has "
@@ -75,11 +80,26 @@ export async function enter({params, query}){
 
 /* ── the conclusion tier ────────────────────────────────────────────────────── */
 
-/** One read-only line restating what determined this result.
+/* ── three blocks, three jobs ────────────────────────────────────────────────────
  *
- * Chips, not switches. A realism assumption is varied by launching a robustness run, not
- * by changing it here — which is the architecture's rule that these are tested, never
- * tuned, and the reason the only toggle on this page is the display one. */
+ * They were one list called "Limitations", and it mixed three kinds of statement that a
+ * reader uses completely differently:
+ *
+ *   an assumption   what the result rests on — a synthetic chain, λ = 1.00, a one-session
+ *                   fill lag. Conditions, chosen before the run
+ *   a limitation    where the numbers stop being reliable — 48 trades, an interval
+ *                   containing zero, a censored distribution. Properties of the evidence
+ *   a finding       what this particular run did — one trade made 45% of the profit.
+ *                   Not a caveat at all: a lead worth following
+ *
+ * Side by side they diluted each other. "The data is synthetic" and "one trade carried the
+ * result" are both true and call for entirely different next actions, and a reader
+ * scanning one list of nine grey rows takes neither.
+ */
+
+/** What the result rests on. Facts about the run, not controls: a realism assumption is
+ *  varied by launching another run, which is the architecture's rule that these are
+ *  tested and never tuned. */
 function realismStrip(){
   const m = RUN.manifest || {};
   const cfg = m.config || {};
@@ -120,87 +140,114 @@ function realismStrip(){
      "the hash of everything that determines this result — config, code and data. Two "
      + "runs sharing it are the same run; two differing in any input cannot share it"],
   ];
-  return `<div class="realism">
-    <span class="realism-lead" data-tip="These describe what produced the result. They are facts about this run, not controls: a realism assumption is changed by launching another run, never by editing it here.">what produced this result</span>
-    ${chips.map(([k, v, why]) =>
-      `<span class="realism-chip" data-tip="${esc(why)}"><b>${esc(k)}</b>${esc(v)}</span>`
-    ).join("")}</div>`;
+  return `<section class="block">
+    <h3 class="block-head">Assumptions
+      <span class="block-why">what the result rests on. Changed by launching another run,
+        never by editing here — an assumption that can be tuned is one that will be.</span>
+    </h3>
+    <dl class="assume">${chips.map(([k, v, why]) => `
+      <div class="assume-item"><dt data-tip="${esc(why)}">${esc(k)}</dt>
+        <dd>${esc(v)}</dd></div>`).join("")}</dl>
+  </section>`;
 }
 
-/** What the research protocol wants said before any number is read.
+/* The anomaly scan reports both kinds, so its findings are sorted by what they are
+   **about**: the reliability of the evidence, or the behaviour of this strategy. */
+const ABOUT_THE_EVIDENCE = new Set([
+  "overlap",        // trades that overlap are not independent observations
+  "too_good",       // a figure too good to be a measurement of anything
+  "rule_failed",    // a rule the run could not hold
+]);
+
+/** Where these numbers stop being reliable.
  *
- * Each flag names the cut behind it. The anomaly scan already applies most of them in the
- * backend, so its findings are flags rather than a second opinion computed here. */
-function protocolFlags(){
+ * Properties of the evidence, each naming the cut behind it, and every cut read from
+ * `/api/meta` rather than written here. */
+function limitations(){
   const t = (META && META.thresholds) || {};
   const a = RUN.analysis || {};
   const prov = RUN.manifest?.provenance || {};
-  const flags = [];
-
-  if(RUN.boundary)
-    flags.push({level: "warn", short: "synthetic chain", detail: RUN.boundary});
+  const out = [];
 
   const holdOut = prov.hold_out || {};
-  flags.push(holdOut.hold_out
-    ? {level: holdOut.touched ? "warn" : "ok",
-       short: holdOut.touched ? "hold-out revealed" : "hold-out respected",
-       detail: holdOut.note || ""}
-    : {level: "warn", short: "no hold-out",
-       detail: holdOut.note || "nothing was reserved, so no result here is out of sample"});
+  if(!holdOut.hold_out)
+    out.push({level: "warn", short: "nothing was held out",
+      detail: holdOut.note || "no period was reserved, so no number here is out of sample: "
+        + "every one of them was available while the strategy was being chosen."});
+  else if(holdOut.touched)
+    out.push({level: "warn", short: "the hold-out was revealed",
+              detail: holdOut.note || ""});
 
   const floor = t.bootstrap_min_observations?.value;
   if(floor != null && RUN.n_trades < floor)
-    flags.push({level: "warn", short: `${RUN.n_trades} trades`,
+    out.push({level: "warn", short: `only ${RUN.n_trades} trades`,
       detail: `below the ${floor} this project requires before a statistic carries an `
             + `interval. ${t.bootstrap_min_observations.because || ""}`});
 
-  for(const [key, interval] of Object.entries(a.intervals || {})){
+  for(const interval of Object.values(a.intervals || {})){
     if(!interval) continue;
     if(interval.low <= 0 && 0 <= interval.high)
-      flags.push({level: "warn", short: `${interval.name}: sign not established`,
-        detail: `the 95% interval is [${num(interval.low, 0)}, ${num(interval.high, 0)}] `
-              + `and contains zero. ${interval.caveat || ""}`});
+      out.push({level: "warn", short: `${interval.name}: the sign is not established`,
+        detail: `a different sample of the same trades could plausibly have given anything `
+              + `from ${money(interval.low)} to ${money(interval.high)}, which includes `
+              + `zero. ${interval.caveat || ""}`});
   }
+
+  for(const line of a.excursion?.censoring || [])
+    out.push({level: "warn", short: `censored: ${String(line).split(":")[0]}`,
+              detail: line});
+
+  for(const found of RUN.anomalies || [])
+    if(ABOUT_THE_EVIDENCE.has(found.kind))
+      out.push({level: found.severity === "high" ? "bad" : "warn",
+                short: found.headline, detail: found.detail});
 
   const guards = RUN.manifest?.guards || {};
   if(guards.state && guards.state !== "clean")
-    flags.push({level: "warn", short: `guards ${guards.state}`, detail: guards.note || ""});
-
-  for(const found of RUN.anomalies || [])
-    flags.push({level: found.severity === "high" ? "bad" : "warn",
-                short: found.headline, detail: found.detail});
-
-  for(const line of a.excursion?.censoring || [])
-    // The summary carries what was censoring, not just that something was: three chips
-    // reading "the excursion distribution is censored" cannot be told apart, and which
-    // rule did the censoring is the whole content — it is what has to be turned off to
-    // see the distribution at all.
-    flags.push({level: "warn",
-                short: `censored: ${String(line).split(":")[0]}`, detail: line});
+    out.push({level: "warn", short: `the guards were ${guards.state} for this code`,
+              detail: guards.note || ""});
 
   if(RUN.anomalies === null)
-    flags.push({level: "warn", short: "no anomaly scan recorded",
+    out.push({level: "warn", short: "no scan was recorded",
       detail: "this run was stored before the interface kept one, which is not the same "
             + "as a scan that found nothing."});
 
-  if(!flags.length)
-    return `<section class="limits"><h3 class="limits-head">Limitations</h3>
-      <p class="limits-none">Nothing the research protocol flags on this run. The numbers
-      below still carry whatever their sample size allows.</p></section>`;
-  const bad = flags.filter(f => f.level !== "ok").length;
-  // "Limitations" rather than a sentence counting them. These are the standing conditions
-  // on the result — what it assumes and where it stops being reliable — and a reader
-  // scanning the page looks for a noun, not a line of prose.
-  return `<section class="limits">
-    <h3 class="limits-head">Limitations
-      <span class="limits-count">${bad}</span>
-      <span class="limits-hint">what these numbers assume, and where they stop being
-        reliable. Open one for the detail.</span></h3>
-    <div class="limits-list">${flags.map(f => `
-      <details class="limit ${f.level}">
-        <summary><span class="limit-dot" aria-hidden="true"></span>${esc(f.short)}</summary>
+  return rows("Limitations",
+    "where these numbers stop being reliable. Each names the cut behind it.", out,
+    "Nothing limits these numbers beyond what their sample size allows.");
+}
+
+/** What this run actually did that is worth a second look.
+ *
+ * Not caveats: leads. The scan finds them by rule rather than by asking a model to look,
+ * and an empty list shows nothing at all — an insight forced out of nothing is noise, and
+ * noise is what makes real warnings get skipped. */
+function standsOut(){
+  const found = (RUN.anomalies || []).filter(f => !ABOUT_THE_EVIDENCE.has(f.kind));
+  if(!found.length) return "";
+  return rows("What stands out",
+    "found by rule, not by looking. Each is a lead rather than a fault.",
+    found.map(f => ({level: f.severity === "high" ? "bad" : "warn",
+                     short: f.headline, detail: f.detail})), "");
+}
+
+/** One block of openable rows. Shared so the two read identically. */
+function rows(title, why, items, whenEmpty){
+  if(!items.length)
+    return whenEmpty
+      ? `<section class="block"><h3 class="block-head">${esc(title)}</h3>
+           <p class="block-empty">${esc(whenEmpty)}</p></section>`
+      : "";
+  return `<section class="block">
+    <h3 class="block-head">${esc(title)}
+      <span class="block-count">${items.length}</span>
+      <span class="block-why">${esc(why)}</span></h3>
+    <div class="rows">${items.map(f => `
+      <details class="row-item ${f.level}">
+        <summary><span class="row-dot" aria-hidden="true"></span>${esc(f.short)}</summary>
         <p>${mark(f.detail)}</p>
-      </details>`).join("")}</div></section>`;
+      </details>`).join("")}</div>
+  </section>`;
 }
 
 /** The metric cards: value, interval, and what makes it untrustworthy.
@@ -265,9 +312,8 @@ function metricCards(){
                  c.better ? `${c.better} is better.` : "",
                  thin ? `Fewer than ${floor} trades, so this number is shown but cannot `
                       + `carry weight.` : ""].filter(Boolean).join(" ");
-    return `<div class="card${thin ? " thin" : ""}${absentCard ? " empty" : ""}"
-       data-tip="${esc(tip)}">
-      <dt>${esc(c.name)}${c.better
+    return `<div class="card${thin ? " thin" : ""}${absentCard ? " empty" : ""}">
+      <dt data-tip="${esc(tip)}">${esc(c.name)}${c.better
         ? `<span class="card-dir" aria-hidden="true">${
             c.better === "higher" ? "↑" : c.better === "lower" ? "↓" : "→0"}</span>` : ""}</dt>
       <dd>${absentCard ? "—" : esc(c.value)}</dd>
@@ -455,7 +501,8 @@ function render(query){
         Read the limitations first — they are the reasons a number here might not mean
         what it appears to.</p>
       ${realismStrip()}
-      ${protocolFlags()}
+      ${limitations()}
+      ${standsOut()}
       ${metricCards()}
     </section>
 
@@ -483,36 +530,8 @@ function render(query){
       render({...query, tab: button.dataset.tab});
     });
 
-  watchScroll();
   renderTab(tab, query);
   paintDetail();
-}
-
-/** Shrink the conclusion tier once the reader has scrolled past it.
- *
- * The design plan asks for it, and without it the page is broken rather than merely
- * unpolished: the tier is about 500 px of sticky header, so the chart stack it sits above
- * has no room left and reads as missing.
- */
-let onScroll = null;
-
-function watchScroll(){
-  const top = $("view-run")?.querySelector(".tier-top");
-  if(!top) return;
-  // **Two thresholds, not one.** Shrinking the header makes the page shorter, which can
-  // drop the scroll position back under a single threshold, which expands the header,
-  // which lengthens the page again — an oscillation that shows up as the whole page
-  // flickering while scrolling. Compacting at 96 and expanding only below 24 leaves a gap
-  // that no single scroll step can cross in both directions.
-  const apply = () => {
-    const y = window.scrollY;
-    if(y > 96) top.classList.add("compact");
-    else if(y < 24) top.classList.remove("compact");
-  };
-  apply();
-  if(onScroll) window.removeEventListener("scroll", onScroll);
-  onScroll = apply;
-  window.addEventListener("scroll", apply, {passive: true});
 }
 
 function renderTab(tab, query){
@@ -546,6 +565,7 @@ function renderTab(tab, query){
     }
     return;
   }
+  if(tab === "settings"){ host.innerHTML = settingsTab(); return; }
   if(tab === "spread"){ spreadTab(host); return; }
   if(tab === "slice"){ sliceTab(host); return; }
   if(tab === "attribution"){ host.innerHTML = attributionTab(); return; }
@@ -568,6 +588,12 @@ function spreadTab(host){
     <p class="hint">Where the outcomes sit, and whether a few of them carry the result.
       ${VIEW.length === (RUN.rows || []).length ? ""
         : `<b>Showing the ${VIEW.length} trades in the brushed period.</b>`}</p>
+    <h4>cumulative P&amp;L, trade by trade</h4>
+    <p class="hint">The equity curve above marks the book every day; this adds up the
+      closed trades in the order they closed. A staircase with one tall step is a result
+      resting on one trade.</p>
+    <div class="chart"><svg id="curve" role="img" aria-label="cumulative P&amp;L"></svg></div>
+    <p class="hint" id="curveNote"></p>
     <div class="two-up">
       <section><h4>per-trade P&amp;L</h4>
         <div class="chart"><svg id="hist" role="img"
@@ -580,6 +606,7 @@ function spreadTab(host){
     <p class="hint">A sign flip means the result rests on a handful of outcomes rather
       than on the rule.</p>
     <table class="plain" id="robust"></table></div>`;
+  renderCurve(VIEW, false);
   renderHist(VIEW);
   renderYears(VIEW);
   renderRobust(VIEW);
@@ -642,6 +669,97 @@ function numericCols(rows){
   if(!rows.length) return [];
   return Object.keys(rows[0]).filter(c =>
     !EXCLUDE.has(c) && typeof rows[0][c] === "number" && Number.isFinite(rows[0][c]));
+}
+
+/** Every setting this run was given, grouped the way the composer asks for them.
+ *
+ * The same seven components in the same order, so a reader who filled the form in
+ * recognises what they are looking at rather than translating between two vocabularies.
+ * A slot that was left alone says so — "not set" is a real answer and is different from a
+ * slot that does not exist yet. */
+function settingsTab(){
+  const c = RUN.config || {};
+  const sel = c.select || {}, ex = c.exit || {}, sizing = c.sizing || {};
+  const band = (lo, hi, unit = "") =>
+    lo != null && hi != null ? `${lo}–${hi}${unit}`
+      : lo != null ? `at least ${lo}${unit}` : hi != null ? `at most ${hi}${unit}` : null;
+
+  const groups = [
+    ["(1) setup / regime", [
+      ["", null, "No regime condition was applied: every signal was taken."],
+    ]],
+    ["(2) entry", [
+      ["condition", typeof c.entry === "string" ? c.entry : "(a function)", "mono"],
+      ["custom signals", (c.signals || []).join(", ") || null],
+    ]],
+    ["(2b) contract selection", [
+      ["type", sel.right],
+      ["days to expiry", band(sel.dte_lo, sel.dte_hi, " calendar days")],
+      ["delta band", band(sel.delta_lo, sel.delta_hi)],
+      ["target delta", sel.delta, "", "the contract in the band closest to this"],
+      ["max bid/ask spread", sel.max_spread, "", "as a fraction of the mid"],
+      ["min open interest", sel.min_open_interest],
+      ["IV band", band(sel.iv_lo, sel.iv_hi)],
+    ]],
+    ["(3) take profit", [
+      ["take profit", ex.take_profit, "", "times the premium paid"],
+    ]],
+    ["(4) stop loss", [
+      ["stop loss", ex.stop_loss, "", "times the premium paid"],
+      ["max holding period", ex.hold_days != null ? `${ex.hold_days} trading days` : null],
+      ["min days to expiry", ex.dte_floor != null ? `${ex.dte_floor} days` : null,
+       "", "forces an exit rather than being dragged into expiry"],
+    ]],
+    ["(5) headwind", [
+      ["daily review", c.review_code ? "a review function" : null],
+      ["book-wide risk rule", c.risk?.variant || null],
+    ]],
+    ["(6) positioning", [
+      ["how size is set", sizing.method],
+      ["risk per trade", sizing.risk_pct, "", "fraction of equity lost if the stop is hit"],
+      ["contracts", sizing.method === "fixed" ? c.quantity : null],
+      ["amount per trade", sizing.notional],
+      ["reference volatility", sizing.target_vol],
+    ]],
+    ["(7) hedge", [
+      ["", null, "No hedge was configured: exposure limits and multi-leg are not wired "
+                 + "to the interface yet."],
+    ]],
+    ["how it was run", [
+      ["symbol", c.symbol],
+      ["period", `${c.start} → ${c.end}`],
+      ["engine", c.engine === "event_driven" ? "event driven" : "trade table"],
+      ["max concurrent", c.max_concurrent],
+      ["slots filled by a registered form",
+       Object.entries(c.components || {}).map(([slot, one]) =>
+         `${slot} = ${one.variant}`).join(", ") || null],
+    ]],
+  ];
+
+  return `<div class="pad">
+    <p class="hint">Everything this run was given. A blank means it was left alone, which
+      is a different statement from a slot that does not exist yet — those say so.</p>
+    <div class="settings">${groups.map(([name, fields]) => {
+      const shown = fields.filter(([, v]) => v != null && v !== "");
+      const notes = fields.filter(([k, v, , ]) => v == null && !k);
+      return `<section class="setting-group">
+        <h4>${esc(name)}</h4>
+        ${shown.length ? `<dl>${shown.map(([k, v, cls, why]) => `
+          <dt${why ? ` data-tip="${esc(why)}"` : ""}>${esc(k)}</dt>
+          <dd${cls === "mono" ? ' class="mono"' : ""}>${esc(String(v))}</dd>`).join("")}</dl>`
+          : ""}
+        ${notes.map(n => `<p class="setting-none">${esc(n[2])}</p>`).join("")}
+        ${!shown.length && !notes.length
+          ? `<p class="setting-none">Not set.</p>` : ""}
+      </section>`;
+    }).join("")}</div>
+    ${c.entry_code || c.plan_code || c.signals_code ? `
+      <h4 class="code-head">the code this run carried</h4>
+      ${[["entry", c.entry_code], ["plan", c.plan_code], ["signals", c.signals_code]]
+        .filter(([, code]) => code && code.trim())
+        .map(([what, code]) => `<details class="code-block"><summary>${esc(what)}</summary>
+          <pre>${esc(code)}</pre></details>`).join("")}` : ""}
+  </div>`;
 }
 
 function attributionTab(){
@@ -800,7 +918,4 @@ function robustnessTab(){
 
 export function leave(){
   if(STACK){ STACK.destroy(); STACK = null; }
-  // The scroll listener belongs to this surface. Left behind it would go on toggling a
-  // class on an element another surface replaced.
-  if(onScroll){ window.removeEventListener("scroll", onScroll); onScroll = null; }
 }
