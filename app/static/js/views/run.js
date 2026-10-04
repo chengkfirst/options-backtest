@@ -24,7 +24,7 @@
 import {$, esc, mark} from "../dom.js";
 import {API, getJSON, postJSON} from "../net.js";
 import {checkContract} from "../contract.js";
-import {EXCLUDE, REASON, absent, fmtVal, label, money, moneyShort, num, pct}
+import {EXCLUDE, REASON, absent, fmtVal, label, money, moneyShort, num, pct, size}
   from "../fmt.js";
 import {areaLayer, chartStack, lineLayer, underwaterLayer} from "../charts/axis.js";
 import {renderAB, renderHist, renderScatter, renderYears} from "../charts/distribution.js";
@@ -80,6 +80,47 @@ export async function enter({params, query}){
 
 /* ── the conclusion tier ────────────────────────────────────────────────────── */
 
+/** The answer, before the evidence for it.
+ *
+ * A reader opening a finished run is asking one question — did this work — and the only
+ * honest form of it compares against doing nothing. That sentence was card number five
+ * on a page where every block had the same weight, which is why the page could be read
+ * end to end without learning what it said.
+ *
+ * It is a sentence and not a score. "Good" and "bad" are the reader's to decide on
+ * evidence; what this does is put the evidence that decides it first, and name what would
+ * most change the answer.
+ */
+function verdict(){
+  const inv = RUN.analysis?.investor || {};
+  const beat = inv.strategy_total != null && inv.buy_and_hold != null
+    ? inv.strategy_total - inv.buy_and_hold : null;
+  const made = RUN.net_pnl;
+  const tone = beat != null ? (beat > 0 ? "good" : "bad") : (made > 0 ? "good" : "bad");
+
+  const verb = made >= 0 ? "Made" : "Lost";
+  const headline = beat != null
+    ? `${verb} ${size(made)} — a ${pct(Math.abs(inv.strategy_total))}
+       ${inv.strategy_total >= 0 ? "gain" : "loss"} where holding
+       ${esc(RUN.config?.symbol || "the underlying")} returned ${pct(inv.buy_and_hold)}.`
+    : `${verb} ${size(made)} over ${RUN.n_trades} trades.`;
+
+  // The one caveat most likely to change the reading, named here rather than left for the
+  // reader to find among the others.
+  const worst = (RUN.anomalies || []).find(f => f.severity === "high");
+  const thin = RUN.n_trades < (META?.thresholds?.bootstrap_min_observations?.value ?? 0);
+  const caveat = thin
+    ? `On ${RUN.n_trades} trades, too few for any of this to carry an interval.`
+    : worst ? worst.headline
+    : (RUN.boundary ? "On a synthetic option chain: the option-side numbers describe "
+                    + "Black-Scholes, not the market." : "");
+
+  return `<div class="verdict ${tone}">
+    <p class="verdict-line">${headline}</p>
+    ${caveat ? `<p class="verdict-caveat">${esc(caveat)}</p>` : ""}
+  </div>`;
+}
+
 /* ── three blocks, three jobs ────────────────────────────────────────────────────
  *
  * They were one list called "Limitations", and it mixed three kinds of statement that a
@@ -100,7 +141,7 @@ export async function enter({params, query}){
 /** What the result rests on. Facts about the run, not controls: a realism assumption is
  *  varied by launching another run, which is the architecture's rule that these are
  *  tested and never tuned. */
-function realismStrip(){
+function assumptions(){
   const m = RUN.manifest || {};
   const cfg = m.config || {};
   const ex = m.execution || {};
@@ -140,15 +181,11 @@ function realismStrip(){
      "the hash of everything that determines this result — config, code and data. Two "
      + "runs sharing it are the same run; two differing in any input cannot share it"],
   ];
-  return `<section class="block">
-    <h3 class="block-head">Assumptions
-      <span class="block-why">what the result rests on. Changed by launching another run,
-        never by editing here — an assumption that can be tuned is one that will be.</span>
-    </h3>
-    <dl class="assume">${chips.map(([k, v, why]) => `
-      <div class="assume-item"><dt data-tip="${esc(why)}">${esc(k)}</dt>
-        <dd>${esc(v)}</dd></div>`).join("")}</dl>
-  </section>`;
+  return `<dl class="assume">${chips.map(([k, v, why]) => `
+    <div class="assume-item"><dt data-tip="${esc(why)}">${esc(k)}</dt>
+      <dd>${esc(v)}</dd></div>`).join("")}</dl>
+    <p class="assume-note">Changed by launching another run, never by editing here — an
+      assumption that can be tuned is one that will be.</p>`;
 }
 
 /* The anomaly scan reports both kinds, so its findings are sorted by what they are
@@ -163,7 +200,7 @@ const ABOUT_THE_EVIDENCE = new Set([
  *
  * Properties of the evidence, each naming the cut behind it, and every cut read from
  * `/api/meta` rather than written here. */
-function limitations(){
+function limitationItems(){
   const t = (META && META.thresholds) || {};
   const a = RUN.analysis || {};
   const prov = RUN.manifest?.provenance || {};
@@ -212,9 +249,7 @@ function limitations(){
       detail: "this run was stored before the interface kept one, which is not the same "
             + "as a scan that found nothing."});
 
-  return rows("Limitations",
-    "where these numbers stop being reliable. Each names the cut behind it.", out,
-    "Nothing limits these numbers beyond what their sample size allows.");
+  return out;
 }
 
 /** What this run actually did that is worth a second look.
@@ -222,32 +257,58 @@ function limitations(){
  * Not caveats: leads. The scan finds them by rule rather than by asking a model to look,
  * and an empty list shows nothing at all — an insight forced out of nothing is noise, and
  * noise is what makes real warnings get skipped. */
-function standsOut(){
-  const found = (RUN.anomalies || []).filter(f => !ABOUT_THE_EVIDENCE.has(f.kind));
-  if(!found.length) return "";
-  return rows("What stands out",
-    "found by rule, not by looking. Each is a lead rather than a fault.",
-    found.map(f => ({level: f.severity === "high" ? "bad" : "warn",
-                     short: f.headline, detail: f.detail})), "");
+function standsOutItems(){
+  return (RUN.anomalies || [])
+    .filter(f => !ABOUT_THE_EVIDENCE.has(f.kind))
+    .map(f => ({level: f.severity === "high" ? "bad" : "warn",
+                short: f.headline, detail: f.detail}));
 }
 
-/** One block of openable rows. Shared so the two read identically. */
-function rows(title, why, items, whenEmpty){
-  if(!items.length)
-    return whenEmpty
-      ? `<section class="block"><h3 class="block-head">${esc(title)}</h3>
-           <p class="block-empty">${esc(whenEmpty)}</p></section>`
-      : "";
-  return `<section class="block">
-    <h3 class="block-head">${esc(title)}
-      <span class="block-count">${items.length}</span>
-      <span class="block-why">${esc(why)}</span></h3>
-    <div class="rows">${items.map(f => `
-      <details class="row-item ${f.level}">
-        <summary><span class="row-dot" aria-hidden="true"></span>${esc(f.short)}</summary>
-        <p>${mark(f.detail)}</p>
-      </details>`).join("")}</div>
-  </section>`;
+/** Openable rows, shared so every evidence block reads identically. */
+function rows(items){
+  return `<div class="rows">${items.map(f => `
+    <details class="row-item ${f.level}">
+      <summary><span class="row-dot" aria-hidden="true"></span>${esc(f.short)}</summary>
+      <p>${mark(f.detail)}</p>
+    </details>`).join("")}</div>`;
+}
+
+/** The three evidence blocks, folded away until wanted.
+ *
+ * They are not less important than the numbers — the limitations decide how to read every
+ * figure above. But three open blocks of grey rows between the answer and the chart meant
+ * a page with no shape, where nothing was emphasised because everything was. Folded, each
+ * one states its count and its worst severity on the summary line, so what is inside is
+ * visible without being in the way, and one click opens it.
+ */
+function evidence(){
+  const lim = limitationItems();
+  const out = standsOutItems();
+  const worst = items => items.some(i => i.level === "bad") ? "bad"
+    : items.some(i => i.level === "warn") ? "warn" : "ok";
+  const blocks = [
+    {key: "limits", glyph: "!", title: "Limitations", items: lim,
+     why: "where these numbers stop being reliable",
+     empty: "Nothing beyond what the sample size allows."},
+    {key: "stands", glyph: "◆", title: "What stands out", items: out,
+     why: "found by rule — leads, not faults", empty: ""},
+    {key: "assume", glyph: "=", title: "Assumptions", items: null,
+     why: "what the result rests on", empty: ""},
+  ].filter(b => b.items === null || b.items.length || b.empty);
+
+  return `<div class="evidence">${blocks.map(b => `
+    <details class="ev ${b.items ? worst(b.items) : "flat"}" data-ev="${b.key}">
+      <summary>
+        <span class="ev-glyph" aria-hidden="true">${b.glyph}</span>
+        <span class="ev-title">${esc(b.title)}</span>
+        ${b.items ? `<span class="ev-count">${b.items.length}</span>` : ""}
+        <span class="ev-why">${esc(b.why)}</span>
+      </summary>
+      <div class="ev-body">${
+        b.key === "assume" ? assumptions()
+        : b.items.length ? rows(b.items)
+        : `<p class="block-empty">${esc(b.empty)}</p>`}</div>
+    </details>`).join("")}</div>`;
 }
 
 /** The metric cards: value, interval, and what makes it untrustworthy.
@@ -267,16 +328,16 @@ function metricCards(){
   // A reader who meets "Calmar -0.44" with no explanation has been given a number and no
   // way to use it, which is worse than giving nothing.
   const cards = [
-    {name: "annualised", value: eq && pct(eq.annualised), better: "higher",
+    {lead: true, name: "annualised", value: eq && pct(eq.annualised), better: "higher",
      means: "the compound yearly rate this equity curve grew at over the period",
      missing: "needs an equity curve, which only the event-driven engine builds. Rerun on "
             + "the event-driven engine for this one"},
-    {name: "max drawdown", value: eq && pct(eq.max_drawdown), better: "closer to zero",
+    {lead: true, name: "max drawdown", value: eq && pct(eq.max_drawdown), better: "closer to zero",
      means: "the deepest fall from a peak of the account, at any point in the run. It is "
           + "what a person would actually have had to sit through",
      note: eq && `at the bid: ${pct(eq.max_drawdown_liq)}`,
      missing: "needs an equity curve, which only the event-driven engine builds"},
-    {name: "Sortino", value: inv && num(inv.Sortino), better: "higher",
+    {lead: true, name: "Sortino", value: inv && num(inv.Sortino), better: "higher",
      means: "return per unit of **downside** volatility. Unlike a Sharpe it does not "
           + "penalise upside swings, which matters for an option buyer whose good days "
           + "are large by design",
@@ -286,7 +347,7 @@ function metricCards(){
     // find: a return shown alone cannot be judged. Beta and alpha ride with it rather than
     // taking cards of their own — the plan allows eight, and ten wrapped onto an orphaned
     // second row where the eye stopped before reaching them.
-    {name: "vs buy and hold", better: "higher",
+    {lead: true, name: "vs buy and hold", better: "higher",
      value: inv && inv.buy_and_hold != null && inv.strategy_total != null
        ? pct(inv.strategy_total - inv.buy_and_hold) : null,
      note: inv && inv.buy_and_hold != null
@@ -319,13 +380,18 @@ function metricCards(){
             + "total was negative, in which case a share of it would not mean anything"},
   ];
 
-  return `<dl class="cards">${cards.map(c => {
+  // Four lead the band at full size and the rest follow smaller. Eight cells of equal
+  // weight give the eye nowhere to land, and a reader who must weigh every number equally
+  // weighs none of them.
+  const ordered = [...cards.filter(c => c.lead), ...cards.filter(c => !c.lead)];
+  return `<dl class="cards">${ordered.map(c => {
     const absentCard = c.value == null || c.value === "—" || c.value === false;
     const tip = [c.means ? c.means.replace(/\*\*/g, "") : "",
                  c.better ? `${c.better} is better.` : "",
                  thin ? `Fewer than ${floor} trades, so this number is shown but cannot `
                       + `carry weight.` : ""].filter(Boolean).join(" ");
-    return `<div class="card${thin ? " thin" : ""}${absentCard ? " empty" : ""}">
+    return `<div class="card${c.lead ? " lead" : ""}${thin ? " thin" : ""}${
+      absentCard ? " empty" : ""}">
       <dt data-tip="${esc(tip)}">${esc(c.name)}${c.better
         ? `<span class="card-dir" aria-hidden="true">${
             c.better === "higher" ? "↑" : c.better === "lower" ? "↓" : "→0"}</span>` : ""}</dt>
@@ -409,7 +475,7 @@ function buildStack(host){
         hint: benchmark.some(v => v != null)
           ? "the thin line is buying and holding the underlying"
           : "the thin line is the other mark",
-        height: 160,
+        height: 230,
         values: curve,
         second: benchmark.some(v => v != null) ? benchmark : other,
         secondTitle: benchmark.some(v => v != null)
@@ -419,14 +485,14 @@ function buildStack(host){
       }),
       drawdown.some(v => v != null) && underwaterLayer({
         key: "drawdown", title: "drawdown", hint: "distance below the running peak",
-        height: 86, values: drawdown, format: pct,
+        height: 80, values: drawdown, format: pct,
       }),
       areaLayer({
         key: "deployed", title: "capital deployed", hint: "against the account",
-        height: 86, values: equity.map(r => r.deployed), limit: capital, format: money,
+        height: 70, values: equity.map(r => r.deployed), limit: capital, format: money,
       }),
       areaLayer({
-        key: "positions", title: "positions held", height: 64,
+        key: "positions", title: "positions held", height: 56,
         values: equity.map(r => r.positions), format: v => num(v, 0),
         colour: "var(--slot-6)",
       }),
@@ -533,13 +599,9 @@ function render(query){
              data-tip="The bench is where a configuration is written and run.">compose a run</a>
         </div>
       </header>
-      <p class="run-lead">What this run did, and whether its numbers can be trusted.
-        Read the limitations first — they are the reasons a number here might not mean
-        what it appears to.</p>
-      ${realismStrip()}
-      ${limitations()}
-      ${standsOut()}
+      ${verdict()}
       ${metricCards()}
+      ${evidence()}
     </section>
 
     <nav class="run-tabs" role="tablist">${TABS.map(t =>

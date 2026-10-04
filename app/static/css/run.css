@@ -64,23 +64,87 @@
   line-height: 1.7;
 }
 
-/* ── the three blocks ──
-   Assumptions, Limitations and What stands out. One shape, so the eye learns it once, and
-   the heading carries what the block is for. */
-.block { margin: var(--space-4) 0 0; }
-
-.block-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  margin: 0 0 var(--space-2);
-  font-family: var(--display);
-  font-size: var(--font-md);
-  font-weight: var(--weight-medium);
+/* ── the verdict ──
+   The answer, before the evidence for it. It is the one thing on the page set large
+   enough to be read from across a desk: a reader opening a finished run asks whether it
+   worked, and that sentence used to be the fifth of eight equal cards. */
+.verdict {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--text-muted);
+  background: var(--surface-1);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
 }
 
-.block-count {
+.verdict.good { border-left-color: var(--success); }
+.verdict.bad { border-left-color: var(--danger); }
+
+.verdict-line {
+  margin: 0;
+  font-family: var(--display);
+  font-size: var(--font-xl);
+  font-weight: var(--weight-medium);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.verdict-caveat {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-base);
+  color: var(--text-secondary);
+}
+
+/* ── the evidence, folded ──
+   Limitations, findings and assumptions do different jobs, so each carries a glyph and a
+   count and can be told apart closed. Open they are identical rows, so reading one teaches
+   how to read the others. */
+.evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.ev {
+  flex: 1 1 260px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  min-width: 0;
+}
+
+.ev[open] { flex-basis: 100%; }
+
+.ev > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  list-style: none;
+  font-size: var(--font-base);
+}
+
+.ev > summary::-webkit-details-marker { display: none; }
+
+.ev-glyph {
+  flex: 0 0 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.ev.warn .ev-glyph { background: var(--warning-soft); color: var(--warning); }
+.ev.bad .ev-glyph { background: var(--danger-soft); color: var(--danger); }
+.ev.ok .ev-glyph { background: var(--success-soft); color: var(--success); }
+
+.ev-title { font-weight: var(--weight-medium); }
+
+.ev-count {
   font-family: var(--mono);
   font-size: var(--font-xs);
   color: var(--text-muted);
@@ -89,23 +153,24 @@
   padding: 0 var(--space-2);
 }
 
-.block-why {
-  font-family: var(--sans);
-  font-size: var(--font-sm);
-  font-weight: var(--weight-regular);
+/* The reason the block exists, kept off the line when there is no room for it: a label
+   that wraps to two lines in a folded card is noise. */
+.ev-why {
   color: var(--text-muted);
-  flex: 1 1 24ch;
+  font-size: var(--font-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.block-empty { margin: 0; font-size: var(--font-sm); color: var(--text-muted); }
+@media (max-width: 1100px) { .ev-why { display: none; } }
 
-/* ── assumptions: label over value, in a grid ──
-   It was a wrapping line of monospace that ran to two rows and could only be read by
-   starting at the left each time. Pairs in a grid can be scanned down a column. */
+.ev-body { padding: 0 var(--space-3) var(--space-2); }
+
 .assume {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  gap: var(--space-1) var(--space-4);
+  gap: var(--space-2) var(--space-4);
   margin: 0;
 }
 
@@ -117,8 +182,6 @@
   white-space: nowrap;
 }
 
-/* Only the label explains itself, so only the label takes the help cursor. The whole
-   block carrying it made the pointer a question mark across half the page. */
 .assume dt[data-tip] { border-bottom: 1px dotted var(--border-strong); }
 
 .assume dd {
@@ -131,15 +194,23 @@
   white-space: nowrap;
 }
 
-/* ── limitations and findings: rows that open ── */
+.assume-note {
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+}
+
+.block-empty { margin: 0; font-size: var(--font-sm); color: var(--text-muted); }
+
+/* ── the rows inside an evidence block ── */
 .rows {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 0 var(--space-5);
-  border-top: 1px solid var(--border);
 }
 
 .row-item { border-bottom: 1px solid var(--border); }
+.row-item:last-child { border-bottom: none; }
 
 .row-item > summary {
   display: flex;
@@ -172,65 +243,11 @@
 .row-item p {
   margin: 0;
   padding: 0 0 var(--space-3) calc(var(--space-2) + 6px);
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-  max-width: 68ch;
-}
-
-/* ── what was set ── */
-.settings {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: var(--space-5);
-  margin: var(--space-4) 0 0;
-}
-
-.setting-group h4 {
-  font-family: var(--display);
+  /* Prose at label size is prose nobody reads. 11 px is for labels; a sentence gets 13. */
   font-size: var(--font-base);
-  font-weight: var(--weight-medium);
-  margin: 0 0 var(--space-2);
-  padding-bottom: var(--space-1);
-  border-bottom: 1px solid var(--border);
-}
-
-.setting-group dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: var(--space-1) var(--space-3);
-  margin: 0;
-  font-size: var(--font-sm);
-}
-
-.setting-group dt { color: var(--text-muted); }
-.setting-group dd {
-  margin: 0;
-  font-family: var(--mono);
-  color: var(--text-primary);
-  overflow-wrap: anywhere;
-}
-
-.setting-none { margin: 0; font-size: var(--font-sm); color: var(--text-muted); }
-
-.code-head {
-  font-family: var(--display);
-  font-size: var(--font-md);
-  font-weight: var(--weight-medium);
-  margin: var(--space-6) 0 var(--space-2);
-}
-
-.code-block { border: 1px solid var(--border); border-radius: var(--radius-sm);
-              margin-bottom: var(--space-2); }
-.code-block > summary { cursor: pointer; padding: var(--space-2) var(--space-3);
-                        font-size: var(--font-sm); color: var(--text-secondary); }
-.code-block pre {
-  margin: 0;
-  padding: var(--space-3);
-  background: var(--surface-sunk);
-  font-family: var(--mono);
-  font-size: var(--font-xs);
-  line-height: 1.6;
-  overflow-x: auto;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 70ch;
 }
 
 /* ── the metric cards ──
@@ -274,7 +291,7 @@
 .card dd {
   margin: 0;
   font-family: var(--mono);
-  font-size: var(--font-xl);
+  font-size: var(--font-lg);
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
@@ -297,6 +314,12 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* The four that lead are set larger, and sit on the panel rather than the page, so the
+   eye lands on them before the rest. Eight cells of one weight give it nowhere to land. */
+.card.lead dd { font-size: 26px; }
+.card.lead dt { color: var(--text-secondary); }
+.card.lead { background: var(--surface-2); }
 
 .card.thin dd { color: var(--text-secondary); }
 .card.empty dd { color: var(--text-muted); }
@@ -573,7 +596,10 @@ td.bar span {
 .checks li em { display: block; color: var(--text-muted); font-style: normal;
                 margin-top: var(--space-1); }
 
-.stack-lead { margin: 0 0 var(--space-3); max-width: 78ch; }
+/* Prose is set at reading size. A paragraph in label type is a paragraph that gets
+   skipped, which is how the page ended up explaining itself to nobody. */
+.stack-lead { margin: 0 0 var(--space-3); max-width: 78ch; font-size: var(--font-base); }
+.pad > .hint, .tier-head .hint { font-size: var(--font-base); }
 .tier-count { margin-left: auto; }
 
 /* ── the exploratory tabs ──

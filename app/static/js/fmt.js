@@ -51,6 +51,11 @@ export const money = v => absent(v)
 
 export const pct = v => absent(v) ? "—" : (v * 100).toFixed(1) + "%";
 
+/** A size with no sign, for a sentence that has already said the direction in words.
+ *  "Lost +31,220" is what happens when a signed formatter is handed an absolute value. */
+export const size = v => absent(v)
+  ? "—" : Math.abs(v).toLocaleString("en-US", {maximumFractionDigits: 0});
+
 export const num = (v, digits = 2) => absent(v) ? "—" : v.toFixed(digits);
 
 /** Money in as few characters as carry the magnitude: −23.3k, +1.19M.
