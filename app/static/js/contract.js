@@ -1,0 +1,112 @@
+/* contract.js — what the interface needs from the backend, declared once.
+ *
+ * Both sides use this declaration:
+ *
+ * - **at runtime**: a response is checked against it and anything missing is reported at
+ *   once, rather than letting `undefined` seep into the render functions. When the
+ *   backend returned `id` and the interface read `run_id`, `RUNS.find()` "matched"
+ *   because both sides were undefined, and it still looked like it worked.
+ * - **before committing**: `tools/check_wiring.py` reads this same file and checks the
+ *   declaration against a real response.
+ *
+ * Scanning the JS source to guess field names is unreliable — it misses forms like
+ * `RUNS[0].x` — hence the declaration.
+ *
+ * A path may be **nested**, written with dots, and `*` descends into every element of a
+ * list: `config.select.dte_lo`, `rows.*.net_pnl`, `scenarios.*.max drawdown`. Top-level
+ * keys alone were not enough: `cfgLine` read `config.select.dte` for weeks after the
+ * backend renamed it to `dte_lo`/`dte_hi`, the run history printed "undefinedDTE", the
+ * same string was handed to Claude as the strategy's description, and the guard stayed
+ * green because `config` itself was present. A field is declared at the depth it is read.
+ */
+"use strict";
+
+import {notice} from "./net.js";
+
+export const CONTRACT = {
+  run: ["id", "rows", "config", "engine", "started", "seconds",
+        "n_trades", "win_rate", "net_pnl", "boundary", "problems",
+        "diagnostics", "anomalies", "manifest", "events", "synthetic",
+        // Which validation tools this run can answer. Declared per run rather than
+        // assumed, because the counterfactual needs the shadow prices only the
+        // event-driven engine keeps.
+        "validations",
+        // What `describeConfig` reads to say what ran. The selection fields are a
+        // feasible region, not one pinned point, so the guard's sample run fills every
+        // one of them in — otherwise "absent because nobody asked for it" and "absent
+        // because it was renamed" look the same and neither fails.
+        "config.symbol", "config.start", "config.end", "config.entry", "config.engine",
+        "config.select.right", "config.select.dte_lo", "config.select.dte_hi",
+        "config.select.delta_lo", "config.select.delta_hi", "config.select.delta",
+        "config.select.max_spread", "config.select.min_open_interest",
+        "config.exit.take_profit", "config.exit.stop_loss", "config.exit.hold_days",
+        "config.exit.dte_floor", "config.sizing.method",
+        // The trade columns every chart and table reads. The column allowlist in
+        // runner.py has dropped one of these before, and every group then came out empty.
+        "rows.*.net_pnl", "rows.*.gross_pnl", "rows.*.fees", "rows.*.entry_date",
+        "rows.*.exit_date", "rows.*.exit_reason", "rows.*.holding_days",
+        "rows.*.contract", "rows.*.entry_price", "rows.*.exit_price",
+        "rows.*.entry_iv", "rows.*.entry_delta",
+        "diagnostics.*.kind", "diagnostics.*.count", "diagnostics.*.first",
+        "diagnostics.*.last", "diagnostics.*.reasons"],
+  // Only the event-driven engine has these; their absence under the trade table is normal
+  run_optional: ["equity", "equity_metrics", "scenarios", "attribution",
+                 "equity.*.date", "equity.*.equity_mid", "equity.*.equity_liq",
+                 "equity_metrics.total_return", "equity_metrics.annualised",
+                 "equity_metrics.max_drawdown", "equity_metrics.sharpe",
+                 "equity_metrics.annualised_vol", "equity_metrics.mean_capital_used",
+                 "attribution.totals", "attribution.high_residual",
+                 "scenarios.*.scenario", "scenarios.*.from", "scenarios.*.to",
+                 "scenarios.*.sessions", "scenarios.*.return",
+                 "scenarios.*.max drawdown", "scenarios.*.note"],
+  meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps",
+         "validations"],
+  sizing_methods: ["fixed", "risk_pct", "fixed_notional", "scale_by_vol"],
+};
+
+/** Resolve one declared path against a response.
+ *
+ * Returns "ok", "missing" or "empty" — and "empty" is **not** a failure: a list with no
+ * elements (no anomaly fired, no scenario covered) cannot show whether its fields are
+ * there, and reporting that as missing would cry wolf on every quiet run.
+ */
+export function resolvePath(obj, path){
+  let node = obj;
+  for(const part of path.split(".")){
+    if(node == null) return "missing";
+    if(part === "*"){
+      if(!Array.isArray(node)) return "missing";
+      if(!node.length) return "empty";
+      node = node[0];
+      continue;
+    }
+    if(typeof node !== "object" || !(part in node)) return "missing";
+    node = node[part];
+  }
+  return "ok";
+}
+
+export function checkContract(record){
+  const missing = CONTRACT.run.filter(p => resolvePath(record, p) === "missing");
+  if(missing.length)
+    notice(`the backend response is missing fields: ${missing.join(", ")}. Something on `
+      + `the interface will not render — the two sides are out of step.`);
+  // The event-driven-only fields are checked only when the section they feed is present.
+  // Under the trade table their absence is how the interface knows to hide the section.
+  const partial = CONTRACT.run_optional.filter(p => {
+    const root = p.split(".")[0];
+    return record[root] != null && resolvePath(record, p) === "missing";
+  });
+  if(partial.length){
+    const roots = [...new Set(partial.map(p => p.split(".")[0]))];
+    notice(`the backend sent ${roots.join(", ")} without: ${partial.join(", ")}. That `
+      + `section will render incomplete.`);
+  }
+}
+
+export function checkMeta(meta){
+  const missing = CONTRACT.meta.filter(p => resolvePath(meta, p) === "missing");
+  if(missing.length)
+    notice(`/api/meta is missing: ${missing.join(", ")}. The form is generated from it, `
+      + `so part of it will not appear.`);
+}

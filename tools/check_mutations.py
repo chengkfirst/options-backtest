@@ -277,6 +277,32 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_adapters.py::TestBadDataIsFound",),
     ),
     Mutation(
+        # The mark not surviving between days turns the trailing stop into a fixed one
+        # at the same fraction: a plausible result from a strategy nobody wrote.
+        "a stateful form's state survives between days",
+        "backtest/core/component.py",
+        "        if trade_id not in self._state:\n"
+        "            self._state[trade_id] = dict(self.variant.initial_state(ctx))\n"
+        "        return self._state[trade_id]",
+        "        return dict(self.variant.initial_state(ctx))",
+        ("tests/test_component_state.py::TestTheTrailingStop",
+         "tests/test_component_state.py::TestTheEngineUsesIt"),
+    ),
+    Mutation(
+        "a stateful form's state is per trade, not shared",
+        "backtest/core/component.py",
+        "        trade_id = ctx.get(\"trade_id\")",
+        "        trade_id = 0",
+        ("tests/test_component_state.py::TestTheStateIsPerTrade",),
+    ),
+    Mutation(
+        "a snapshot's keys survive a round trip through JSON",
+        "backtest/core/component.py",
+        "        return {str(trade): dict(state) for trade, state in self._state.items()}",
+        "        return {trade: dict(state) for trade, state in self._state.items()}",
+        ("tests/test_component_state.py::TestTheSnapshot",),
+    ),
+    Mutation(
         "a slot writes only into its own namespace",
         "backtest/core/trade_context.py",
         "        return SlotWriter(slot=slot, _into=self._slots.setdefault(slot, {}))",

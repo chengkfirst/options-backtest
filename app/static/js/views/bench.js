@@ -1,15 +1,31 @@
-/* bench.js — the bench's wiring
+/* views/bench.js — the bench: compose a configuration, run it, read the result.
  *
- * Its job: probe the service, collect the form, send the request, keep the run records,
- * and hand results to charts.js. It contains no statistical formula (those are in
- * core.js) and no drawing code (that is in charts.js).
+ * Its job: collect the form, send the request, keep the run records, and hand results to
+ * the chart modules. It holds no statistical formula (those are in stats.js, under
+ * notice) and no drawing code (that is in charts/).
  *
  * One rule runs through the whole file: **no silent failure**. Every error and every
  * skipped thing goes through notice() into the problem strip at the top of the page —
  * seeing a blank in the browser without knowing why is worse than a crash. So there is
  * no empty catch here, and no quiet early return.
+ *
+ * This is the surface the design plan splits into a composer and a run-analysis page.
+ * Until those exist it is one view, moved into the module tree unchanged so that the
+ * move and the redesign are separate changes.
  */
 "use strict";
+
+import {$, esc, mark} from "./../dom.js";
+import {API, clearIssues, getJSON, notice, postJSON} from "./../net.js";
+import {CONTRACT, checkContract, checkMeta} from "./../contract.js";
+import {EXCLUDE, REASON, fmtVal, label, money, num, pct, sgn} from "./../fmt.js";
+import {bucketize, stats} from "./../stats.js";
+import {blankChart} from "./../charts/svg.js";
+import {renderCurve, renderEquity, renderEquityStrip} from "./../charts/equity.js";
+import {renderAB, renderHist, renderScatter, renderYears} from "./../charts/distribution.js";
+import {renderBuckets, renderCross, renderDetail, renderRobust, renderScenarios,
+        renderStrip} from "./../charts/tables.js";
+import {renderAttribution} from "./../charts/attribution.js";
 
 let META = null;          // the contents of /api/meta
 let LIVE = false;         // is the service up
@@ -19,31 +35,11 @@ let BASE = null;          // the pinned baseline run id (the server's `id` field
 let RAW = [], VIEW = [];  // this run's trade rows (charts.js reads these two)
 let ask = null, ctl = null;
 
-/* ── the problem strip ── */
-const ISSUES = [];
-function notice(msg){
-  if(!ISSUES.includes(msg)) ISSUES.push(msg);
-  paintIssues();
-}
-function clearIssues(){ ISSUES.length = 0; paintIssues(); }
-function paintIssues(){
-  const box = $("issues");
-  box.hidden = ISSUES.length === 0;
-  box.innerHTML = ISSUES.length
-    ? `<b>${ISSUES.length} notice${ISSUES.length>1?"s":""}</b><ul>${ISSUES.map(m =>
-        `<li>${String(m).replace(/</g,"&lt;").replace(/\n/g,"<br>")}</li>`).join("")}</ul>`
-    : "";
-}
-window.addEventListener("error", e =>
-  notice(`page error: ${e.message} (${(e.filename||"").split("/").pop()}:${e.lineno})`));
-window.addEventListener("unhandledrejection", e =>
-  notice(`async error: ${e.reason?.message || e.reason}`));
 
 /* ── startup: probe the service ── */
-(async function boot(){
+export async function init(){
   try{
-    const r = await fetch("/api/health");
-    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    await getJSON(API.health);
     LIVE = true;
   }catch(e){
     LIVE = false;
@@ -58,17 +54,18 @@ window.addEventListener("unhandledrejection", e =>
   $("mode").textContent = "connected to the local service";
   $("mode").className = "mode live";
   await loadMeta();
-})();
+}
 
 async function loadMeta(){
   try{
-    const r = await fetch("/api/meta");
-    if(!r.ok) throw new Error(`HTTP ${r.status}`);
-    META = await r.json();
+    META = await getJSON(API.meta);
   }catch(e){
     notice(`could not fetch the available signals: ${e.message}. The interface still works, but the defaults and hints will be missing.`);
     return;
   }
+  // The form, the gap list and the signal reference are all generated from this payload,
+  // so a field missing from it is a part of the interface that silently does not appear.
+  checkMeta(META);
   $("symbol").innerHTML = META.symbols.map(s =>
     `<option${s === META.defaults.symbol ? " selected" : ""}>${s}</option>`).join("");
   $("sigCount").textContent = `${(META.signal_docs || []).length}`;
@@ -253,8 +250,6 @@ document.querySelectorAll("[data-strat]").forEach(tab =>
     switchMode();
   }));
 
-const esc = t => String(t).replace(/</g, "&lt;");
-const mark = t => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>");
 
 /* ── the form ── */
 function updateSpanHint(){
@@ -329,23 +324,17 @@ async function runBacktest(){
 
   const t0 = performance.now();
   try{
-    const r = await fetch("/api/run", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify(formPayload()),
-    });
-    const data = await r.json().catch(() => ({error:`the service's response was not JSON (HTTP ${r.status})`}));
-    if(!r.ok || data.error){
-      notice(data.detail ? `${data.error}\n\n${data.detail}` : (data.error || `HTTP ${r.status}`));
-      return;
-    }
+    const data = await postJSON(API.run, formPayload());
     checkContract(data);
     RUNS.push(data);
     BASE = BASE ?? data.id;
-    show(data.id);
+    showRun(data.id);
     if(!data.rows.length)
       notice("this run produced no trades. The entry condition may be too strict, or nothing in the range could be selected.");
   }catch(e){
-    notice(`the request failed: ${e.message}. The service may have stopped — check the terminal.`);
+    // The whole error chain goes back to the interface on purpose: seeing "it failed" in
+    // the browser without knowing where is worse than a crash.
+    notice(e.detail ? `${e.message}\n\n${e.detail}` : e.message);
   }finally{
     note.remove();
     btn.disabled = false; btn.classList.remove("busy"); btn.textContent = "run";
@@ -370,19 +359,20 @@ const TRADEOFF_GRIDS = [
 
 async function loadTradeoff(){
   const f = $("form");
-  const url = `/api/tradeoff?symbol=${encodeURIComponent(f.symbol.value)}`
-            + `&date=${encodeURIComponent(f.end.value)}`
-            + `&right=${(f.right?.value || "call").toUpperCase()[0]}`;
   $("tradeoffBody").innerHTML = `<p class="hint">computing…</p>`;
   try{
-    const r = await fetch(url);
-    const d = await r.json();
-    if(d.error){ $("tradeoffBody").innerHTML = `<p class="hint">${esc(d.error)}</p>`; return; }
-    $("toWhen").textContent = `${d.day} · ${d.symbol} ${d.spot.toFixed(2)}`;
+    const d = await getJSON(API.tradeoff, {
+      symbol: f.symbol.value,
+      date: f.end.value,
+      right: (f.right?.value || "call").toUpperCase()[0],
+    });
+    $("toWhen").textContent = `${d.day} · ${d.symbol} ${num(d.spot)}`;
     $("tradeoffBody").innerHTML = TRADEOFF_GRIDS.map(g =>
       gridTable(g, d.grids[g.key])).join("");
   }catch(e){
-    $("tradeoffBody").innerHTML = `<p class="hint">could not fetch it: ${esc(e.message)}</p>`;
+    // In the panel rather than the problem strip: this reference is optional, and a day
+    // with no chain is a fact about that day, not a fault in the run.
+    $("tradeoffBody").innerHTML = `<p class="hint">${esc(e.message)}</p>`;
   }
 }
 
@@ -396,7 +386,10 @@ function gridTable(meta, g){
   const shade = v => {
     if(meta.worse !== "high" || v == null || hi === lo) return "";
     const t = (v - lo) / (hi - lo);
-    return ` style="background:rgba(156,74,52,${(t*0.28).toFixed(3)})"`;
+    // Mixed from the token, not written as rgba(): the literal here was the light theme's
+    // loss colour from a palette that no longer exists.
+    return ` style="background:color-mix(in srgb, var(--danger) `
+         + `${(t * 28).toFixed(1)}%, transparent)"`;
   };
   return `<div class="to-grid">
     <div class="to-h">${meta.title}<span class="to-why">${meta.why}</span></div>
@@ -526,119 +519,21 @@ async function runValidation(kind, btn){
   out.hidden = false;
   out.textContent = "Running. This re-runs the strategy, so it takes about as long as the backtest did.";
   try{
-    const r = await fetch("/api/validate", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({id: CURRENT, kind, params: validParams(kind)}),
+    const data = await postJSON(API.validate, {
+      id: CURRENT, kind, params: validParams(kind),
     });
-    const data = await r.json().catch(() => ({error:`the service's response was not JSON (HTTP ${r.status})`}));
-    if(!r.ok || data.error){
-      // A refusal belongs where the report would have gone, not in the problem strip:
-      // "the counterfactual needs its levels" is an instruction, not a fault.
-      out.textContent = data.error || `HTTP ${r.status}`;
-      return;
-    }
-    out.innerHTML = esc(data.text).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+    out.innerHTML = mark(data.text);
   }catch(e){
-    out.textContent = `the request failed: ${e.message}. The service may have stopped — check the terminal.`;
+    // Both a refusal and a dropped connection land here, and both belong in the report's
+    // own box rather than the problem strip: "the counterfactual needs its levels" is an
+    // instruction, not a fault, and net.js already writes the transport failures as a
+    // sentence that says what to check.
+    out.textContent = e.message;
   }finally{
     btn.disabled = false; btn.textContent = was;
   }
 }
 
-/* ── the front/back contract ──────────────────────────────
-   Which fields the interface needs from the backend is **declared explicitly** here, and
-   both sides use the declaration:
-
-   - at runtime: the response is checked against it and anything missing is reported at
-     once, rather than letting undefined seep into the render functions (when the backend
-     returned `id` and the front end read `run_id`, RUNS.find() "matched" because both
-     sides were undefined, and it still looked like it worked)
-   - before committing: tools/check_wiring.py checks the declaration against a real
-     response
-
-   Scanning the JS source to guess field names is unreliable (it misses forms like
-   RUNS[0].x), hence the declaration.
-
-   A path may be **nested**, written with dots, and `*` descends into every element of a
-   list: `config.select.dte_lo`, `rows.*.net_pnl`, `scenarios.*.max drawdown`. Top-level
-   keys alone were not enough — `cfgLine` read `config.select.dte` for weeks after the
-   backend renamed it to `dte_lo`/`dte_hi`, the run history printed "undefinedDTE", and
-   the guard stayed green because `config` itself was present. A field the interface
-   reads is declared at the depth it is read. */
-const CONTRACT = {
-  run: ["id", "rows", "config", "engine", "started", "seconds",
-        "n_trades", "win_rate", "net_pnl", "boundary", "problems",
-        "diagnostics", "anomalies", "manifest", "events", "synthetic",
-        // Which validation tools this run can answer. Declared per run rather than
-        // assumed, because the counterfactual needs the shadow prices only the
-        // event-driven engine keeps.
-        "validations",
-        // What `describeConfig` reads to say what ran. The selection fields are a
-        // feasible region, not one pinned point, so the guard's sample run fills every
-        // one of them in — otherwise "absent because nobody asked for it" and "absent
-        // because it was renamed" look the same and neither fails.
-        "config.symbol", "config.start", "config.end", "config.entry", "config.engine",
-        "config.select.right", "config.select.dte_lo", "config.select.dte_hi",
-        "config.select.delta_lo", "config.select.delta_hi", "config.select.delta",
-        "config.select.max_spread", "config.select.min_open_interest",
-        "config.exit.take_profit", "config.exit.stop_loss", "config.exit.hold_days",
-        "config.exit.dte_floor", "config.sizing.method",
-        // The trade columns every chart and table reads. The column allowlist in
-        // runner.py has dropped one of these before, and every group then came out empty.
-        "rows.*.net_pnl", "rows.*.gross_pnl", "rows.*.fees", "rows.*.entry_date",
-        "rows.*.exit_date", "rows.*.exit_reason", "rows.*.holding_days",
-        "rows.*.contract", "rows.*.entry_price", "rows.*.exit_price",
-        "rows.*.entry_iv", "rows.*.entry_delta",
-        "diagnostics.*.kind", "diagnostics.*.count", "diagnostics.*.first",
-        "diagnostics.*.last", "diagnostics.*.reasons"],
-  // Only the event-driven engine has these; their absence under the trade table is normal
-  run_optional: ["equity", "equity_metrics", "scenarios", "attribution",
-                 "equity.*.date", "equity.*.equity_mid", "equity.*.equity_liq",
-                 "equity_metrics.total_return", "equity_metrics.annualised",
-                 "equity_metrics.max_drawdown", "equity_metrics.sharpe",
-                 "equity_metrics.annualised_vol", "equity_metrics.mean_capital_used",
-                 "attribution.totals", "attribution.high_residual",
-                 "scenarios.*.scenario", "scenarios.*.from", "scenarios.*.to",
-                 "scenarios.*.sessions", "scenarios.*.return",
-                 "scenarios.*.max drawdown", "scenarios.*.note"],
-  meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps",
-         "validations"],
-  sizing_methods: ["fixed", "risk_pct", "fixed_notional", "scale_by_vol"],
-};
-
-/* Resolve one declared path against a response.
-   Returns "ok", "missing" or "empty" — and "empty" is **not** a failure: a list with no
-   elements (no anomaly fired, no scenario covered) cannot show whether its fields are
-   there, and reporting that as missing would cry wolf on every quiet run. */
-function resolvePath(obj, path){
-  let node = obj;
-  for(const part of path.split(".")){
-    if(node == null) return "missing";
-    if(part === "*"){
-      if(!Array.isArray(node)) return "missing";
-      if(!node.length) return "empty";
-      node = node[0];
-      continue;
-    }
-    if(typeof node !== "object" || !(part in node)) return "missing";
-    node = node[part];
-  }
-  return "ok";
-}
-
-function checkContract(record){
-  const missing = CONTRACT.run.filter(p => resolvePath(record, p) === "missing");
-  if(missing.length)
-    notice(`the backend response is missing fields: ${missing.join(", ")}. Something on the interface will not render — the two sides are out of step.`);
-  // The event-driven-only fields are checked only when the section they feed is present.
-  // Under the trade table their absence is how the interface knows to hide the section.
-  const partial = CONTRACT.run_optional.filter(p => {
-    const root = p.split(".")[0];
-    return record[root] != null && resolvePath(record, p) === "missing";
-  });
-  if(partial.length)
-    notice(`the backend sent ${partial.map(p => p.split(".")[0]).filter((v, i, a) => a.indexOf(v) === i).join(", ")} without: ${partial.join(", ")}. That section will render incomplete.`);
-}
 
 /* ── describing a configuration ───────────────────────────
    **One reading of the stored config, used by every place that describes a run.**
@@ -722,14 +617,14 @@ function paintRuns(){
   $("runs").querySelectorAll("tbody tr").forEach(tr =>
     tr.addEventListener("click", e => {
       if(e.target.dataset.pin) return;
-      show(+tr.dataset.run);
+      showRun(+tr.dataset.run);
     }));
   $("runs").querySelectorAll(".pin").forEach(b =>
     b.addEventListener("click", e => { e.stopPropagation(); BASE = +b.dataset.pin; paintRuns(); }));
 }
 
 /* ── show one run ── */
-function show(runId){
+function showRun(runId){
   const run = RUNS.find(r => r.id === runId);
   if(!run){ notice(`no result found for run ${runId}.`); return; }
   CURRENT = runId;

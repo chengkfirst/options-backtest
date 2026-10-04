@@ -79,7 +79,7 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
 
 /* The run button */
 .panel-foot{padding:14px 20px 18px;border-top:1px solid var(--line-soft);background:var(--panel)}
-.run{width:100%;background:var(--accent);color:#fff;border:none;border-radius:2px;padding:11px;
+.run{width:100%;background:var(--accent);color:var(--on-accent);border:none;border-radius:2px;padding:11px;
   font-family:var(--display);font-size:14px;font-weight:600;cursor:pointer;letter-spacing:.01em}
 .run:hover{filter:brightness(1.08)}
 .run:disabled{opacity:.55;cursor:default}
@@ -105,7 +105,7 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
 #runs tbody tr.on td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .pin{background:none;border:1px solid var(--line);border-radius:2px;padding:1px 7px;font-size:10.5px;
   color:var(--ink-3);cursor:pointer}
-.pin.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.pin.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
 .delta{font-size:11px;color:var(--ink-3);display:block;font-variant-numeric:tabular-nums}
 .cfg{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);max-width:280px;overflow:hidden;
   text-overflow:ellipsis;display:block}

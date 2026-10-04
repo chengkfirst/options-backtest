@@ -105,11 +105,22 @@
      chosen against a dark ground, where it reads well and on white does not (`--warning`
      on white is 2.58:1). So each theme carries the tone of the same hue that clears
      4.5:1 on its own surfaces. `--data-strategy` keeps the proposed blue unchanged,
-     because an equity line is not text and must not shift between themes. */
-  --accent: #378add;
+     because an equity line is not text and must not shift between themes.
+
+     Two are also lifted a shade from the proposal: `--accent` (#378add) and `--danger`
+     (#e24b4a). Both are used as small bold text on a tint of themselves — that is what a
+     badge is — and #e24b4a reaches 4.51:1 on the bare panel, so **any** tint of its own
+     colour behind it falls under the bar and no mixing share can rescue it. Lifting the
+     text colour can, and does. */
+  --accent: #3e8ede;
   --success: #3b9f5a;
   --warning: #d9931e;
-  --danger: #e24b4a;
+  --danger: #e55c5c;
+  /* The text on an accent fill — a primary button, a selected chip. It is a token and
+     not `white` because white on the dark theme's accent is 3.43:1, and a primary button
+     whose label cannot be read is a conspicuous place to fail. Dark carries a near-black
+     label on a bright fill (5.41:1); light carries white on a deeper blue (5.31:1). */
+  --on-accent: #0a1420;
 
   /* A recessed area (a code box, a table head). Darker than the page in dark mode and
      lighter-but-tinted in light mode, so "sunk" reads as sunk in both. */
@@ -158,6 +169,7 @@
     --success: #2d7844;
     --warning: #8f6114;
     --danger: #d02221;
+    --on-accent: #ffffff;
     color-scheme: light;
   }
 }
@@ -176,6 +188,7 @@
   --success: #2d7844;
   --warning: #8f6114;
   --danger: #d02221;
+  --on-accent: #ffffff;
   color-scheme: light;
 }
 

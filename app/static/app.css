@@ -1,34 +1,10 @@
-:root{
-  --ground:#FAF9F6; --panel:#FFFFFF; --sunk:#F1EFEA;
-  --line:#DFDCD4; --line-soft:#ECE9E2;
-  --ink:#1A1D24; --ink-2:#5A5F6B; --ink-3:#8B8F99;
-  --accent:#3F62A0; --accent-soft:#E6ECF7;
-  --gain:#2F7A62; --gain-soft:#E1EFE9;
-  --loss:#9C4A34; --loss-soft:#F6E5DF;
-  --warn:#8A6A1F; --warn-soft:#F7EFD9;
-  --radius:3px;
-  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
-  --sans:"IBM Plex Sans","PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
-  --display:"Archivo","IBM Plex Sans","PingFang SC",system-ui,sans-serif;
-}
-:root:not([data-theme="light"]){ @media (prefers-color-scheme:dark){
-  --ground:#11151C; --panel:#171C25; --sunk:#0C1015;
-  --line:#2A313D; --line-soft:#212833;
-  --ink:#E8E6E1; --ink-2:#9AA0AC; --ink-3:#6B7280;
-  --accent:#7B9BD8; --accent-soft:#1B2436;
-  --gain:#5FB396; --gain-soft:#152620;
-  --loss:#CE7D62; --loss-soft:#2A1A15;
-  --warn:#C9A84E; --warn-soft:#241E10;
-}}
-:root[data-theme="dark"]{
-  --ground:#11151C; --panel:#171C25; --sunk:#0C1015;
-  --line:#2A313D; --line-soft:#212833;
-  --ink:#E8E6E1; --ink-2:#9AA0AC; --ink-3:#6B7280;
-  --accent:#7B9BD8; --accent-soft:#1B2436;
-  --gain:#5FB396; --gain-soft:#152620;
-  --loss:#CE7D62; --loss-soft:#2A1A15;
-  --warn:#C9A84E; --warn-soft:#241E10;
-}
+/* app.css — how a result is presented: tables, charts, stat strips, banners.
+ *
+ * The palette used to be declared at the top of this file. It now lives in
+ * css/tokens.css, which is the only file in the interface allowed to contain a colour and
+ * the only one `tools/check_contrast.py` reads. Two palettes, one of them stale, is the
+ * drift this project refuses — and the old one here would have won, being linked second.
+ */
 
 *{box-sizing:border-box}
 
@@ -131,7 +107,7 @@ svg{display:block;width:100%;height:auto;overflow:visible}
   background:var(--sunk);flex-wrap:wrap}
 .ai-head h2{flex:0 0 auto}
 .ai-head p{margin:0;font-size:12.5px;color:var(--ink-2);flex:1;min-width:200px}
-.btn{background:var(--accent);color:#fff;border:none;border-radius:2px;padding:7px 15px;font-size:13px;
+.btn{background:var(--accent);color:var(--on-accent);border:none;border-radius:2px;padding:7px 15px;font-size:13px;
   font-weight:500;cursor:pointer}
 .btn:hover{filter:brightness(1.08)}
 .btn:disabled{opacity:.5;cursor:default}

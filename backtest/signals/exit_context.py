@@ -15,6 +15,10 @@ def exit_context(
     underlying_move: float,
     days_held: int,
     days_to_expiry: int,
+    #: Which trade this is. Required by a stateful form, whose state is per trade --
+    #: see ``core/component.py``. Passed for every form, so a form becoming stateful is
+    #: not also a change to every call site.
+    trade_id: int | None = None,
     view: Any = None,
     **extra: Any,
 ) -> dict[str, Any]:
@@ -40,6 +44,7 @@ def exit_context(
         "underlying_move": underlying_move,
         "days_held": days_held,
         "days_to_expiry": days_to_expiry,
+        "trade_id": trade_id,
         "view": view,
         **extra,
     }

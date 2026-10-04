@@ -12,7 +12,7 @@ quietly:
 - a sizing method is renamed and the front end keeps sending the old name — the
   backend never receives it and silently uses the default
 
-**The interface declares ``CONTRACT`` explicitly in bench.js**, and this checks it
+**The interface declares ``CONTRACT`` explicitly in js/contract.js**, and this checks it
 against a real response. Scanning the JS source to guess field names is unreliable (it
 misses forms like ``RUNS[0].x``), hence the declaration. The interface checks the same
 declaration at runtime and reports anything missing at once.
@@ -26,15 +26,17 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BENCH = ROOT / "app" / "static" / "bench.js"
+CONTRACT_FILE = ROOT / "app" / "static" / "js" / "contract.js"
 
 
 def contract() -> dict[str, list[str]]:
-    """Extract the CONTRACT declaration from bench.js."""
-    js = BENCH.read_text(encoding="utf-8")
-    m = re.search(r"const CONTRACT = \{(.*?)\n\};", js, re.S)
+    """Extract the CONTRACT declaration from js/contract.js."""
+    js = CONTRACT_FILE.read_text(encoding="utf-8")
+    m = re.search(r"export const CONTRACT = \{(.*?)\n\};", js, re.S)
     if not m:
-        raise SystemExit("no CONTRACT declaration found in bench.js")
+        raise SystemExit(
+            f"no CONTRACT declaration found in {CONTRACT_FILE.relative_to(ROOT)}"
+        )
     body = re.sub(r"//.*", "", m.group(1))
     out: dict[str, list[str]] = {}
     for key, items in re.findall(r"(\w+):\s*\[(.*?)\]", body, re.S):
@@ -148,7 +150,7 @@ def main() -> int:
     # the backend accepts.
     #
     # What it does **not** check: that the interface sends the matching parameter for the
-    # method it selected. It does today -- `formPayload` in bench.js sends only the
+    # method it selected. It does today -- `formPayload` in views/bench.js sends only the
     # parameters the chosen method uses -- but nothing holds it there. Checking it needs
     # the pairing declared in CONTRACT, the way the field lists are, so that this guard can
     # read it rather than parse the JS.

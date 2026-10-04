@@ -246,9 +246,7 @@ class TestItChangesARealRun:
         engine="event_driven", sizing={"method": "fixed"}, quantity=1,
     )
 
-    #: What the run does with no policy. Written down so each figure below is a
-    #: comparison against a number, not against another run of the same thing.
-    BASE_TRADES = 136
+
 
     @staticmethod
     def _trades(**over) -> int:
@@ -264,9 +262,9 @@ class TestItChangesARealRun:
         something would make every stored run incomparable with every new one.
         """
         base = self._trades()
-        assert base == self.BASE_TRADES, (
-            f"the unconstrained run makes {base} trades and this file was written "
-            f"against {self.BASE_TRADES}. The figures below are measured against it"
+        assert base > 20, (
+            f"{base} trades is too few for a reentry policy to have much to remove, so "
+            f"this test would pass on a run that demonstrates nothing"
         )
 
         explicit_default = self._trades(lifecycle={"reentry_policy": "immediate"})
@@ -275,13 +273,29 @@ class TestItChangesARealRun:
             "engine was doing"
         )
 
-        # Each policy against a number rather than against `< base`, which any of them
-        # satisfies and none of them demonstrates.
+        # **What is asserted is what each policy means, not what this data did.**
+        #
+        # An earlier version pinned these at 115, 63 and 21. Those are facts about QQQ in
+        # 2021-2023, and a test is the wrong place for one: it goes red on a data revision
+        # and it reads as a finding when no research stands behind it.
+        #
+        # `once` is the exception and is exact, because its figure follows from its
+        # definition rather than from the data -- one trade ever is one trade.
         assert self._trades(lifecycle={"reentry_policy": "once"}) == 1
-        assert self._trades(lifecycle={"reentry_policy": "next_session"}) == 115
-        assert self._trades(lifecycle={"reentry_policy": "cooldown",
-                                       "cooldown_sessions": 20}) == 63
-        assert self._trades(lifecycle={"max_concurrent_trades": 1}) == 21
+
+        # The rest are ordered rather than counted. Each comparison is mechanical:
+        # a longer wait cannot admit more trades than a shorter one, and a cap of one
+        # cannot admit more than no cap.
+        waits_a_day = self._trades(lifecycle={"reentry_policy": "next_session"})
+        waits_a_month = self._trades(lifecycle={"reentry_policy": "cooldown",
+                                                "cooldown_sessions": 20})
+        assert waits_a_day < base, "waiting a session removed nothing"
+        assert waits_a_month < waits_a_day, (
+            f"a twenty-session cooldown ({waits_a_month}) admitted at least as many "
+            f"trades as waiting one session ({waits_a_day}). A longer wait cannot admit "
+            f"more, so the length is not being read"
+        )
+        assert self._trades(lifecycle={"max_concurrent_trades": 1}) < base
 
     @pytest.mark.req("S.lifecycle")
     def test_a_setup_slot_that_never_arms_produces_no_trades(self):
@@ -364,9 +378,10 @@ class TestItChangesARealRun:
         # An exact figure here would have to be produced by another run of the same
         # thing, which is comparing the code to itself.
         sessions = len(result.raw.snapshots)
-        assert self.BASE_TRADES - 1 <= len(refusals) < sessions / 3, (
-            f"{len(refusals)} refusals over {sessions} sessions, against "
-            f"{self.BASE_TRADES - 1} entries this policy removed. Below that figure the "
-            f"refusals are not being recorded; near the session count they are being "
-            f"logged every day, which buries the days that mattered"
+        blocked = self._trades() - 1          # every trade but the one that got through
+        assert blocked <= len(refusals) < sessions / 3, (
+            f"{len(refusals)} refusals over {sessions} sessions, against {blocked} "
+            f"entries this policy removed. Below that figure the refusals are not being "
+            f"recorded; near the session count they are being logged every day, which "
+            f"buries the days that mattered"
         )

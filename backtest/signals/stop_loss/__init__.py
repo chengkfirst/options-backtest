@@ -55,3 +55,64 @@ UNDERLYING = register(Variant(
                   "position", lo=0.0, hi=1.0),),
     decide=_underlying,
 ))
+
+
+def _trailing_initial(ctx: Mapping[str, Any]) -> dict:
+    """The high-water mark a trade starts at.
+
+    The **entry**, not zero. A trailing stop that began at zero would allow the premium
+    to halve before the mark caught up, which is a fixed stop for the first part of the
+    trade and a trailing one afterwards -- two rules wearing one name.
+
+    ``premium_ratio`` is 0.0 at entry by construction, so this is 0.0 in practice and is
+    written as a read rather than a constant: a form that hardcoded the entry would be
+    wrong the first time one is restored mid-trade from a snapshot.
+    """
+    ratio = ctx.get("premium_ratio")
+    return {"high_water": float(ratio) if ratio is not None and math.isfinite(ratio)
+                           else 0.0}
+
+
+def _trailing(ctx: Mapping[str, Any], *, fraction: float) -> bool:
+    """Out when the premium falls ``fraction`` **from its best**, not from entry.
+
+    **The first stateful form**, and what the state protocol was built for. The document's
+    register names the trailing stop as the case that needs it: the high-water mark is a
+    fact about the trade's history, and no amount of context about today can reconstruct
+    it.
+
+    Why it is a different rule rather than a better one: a fixed stop asks "how much of
+    what I paid am I prepared to lose", and this asks "how much of what I had am I
+    prepared to give back". On a trade that doubled and then fell by half, a 50% fixed
+    stop does not fire and a 50% trailing stop does. Which question is the right one is
+    the researcher's; having both is what makes it askable.
+    """
+    state = ctx["state"]
+    ratio = ctx.get("premium_ratio")
+    if ratio is None or not math.isfinite(ratio):
+        # No quote today: the mark does not move and the stop does not fire. Treating a
+        # missing quote as a fall would exit on a data gap, which is the commonest way a
+        # trailing stop in a backtest beats one in an account.
+        return False
+    ratio = float(ratio)
+    if ratio > state["high_water"]:
+        state["high_water"] = ratio
+    # Measured in the premium's own terms: from +100% back to +50% is a give-back of
+    # 0.5 of the entry premium, not 0.25 of the peak value. The alternative -- a fraction
+    # of the peak -- makes the stop tighten as the trade wins, which is a third rule.
+    return (state["high_water"] - ratio) >= fraction
+
+
+TRAILING = register(Variant(
+    slot="stop_loss", name="trailing", version=1,
+    describes="out when the premium falls by a fraction **from its best**, not from "
+              "entry. Asks how much of what the trade had it may give back, where a "
+              "fixed stop asks how much of what was paid it may lose. On a trade that "
+              "doubled and halved, a 0.5 fixed stop does not fire and a 0.5 trailing "
+              "stop does",
+    params=(Param("fraction", "float", "how much of the best premium may be given back",
+                  lo=0.0, hi=2.0),),
+    decide=_trailing,
+    stateful=True,
+    initial_state=_trailing_initial,
+))

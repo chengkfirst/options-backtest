@@ -1,0 +1,216 @@
+/* shell.css — the frame every surface sits in: the rail, the top bar, the drawer.
+ *
+ * Linked last, so the few rules that adjust the bench's own full-height layout for life
+ * inside a frame can do so without editing bench.css while it is still in use.
+ *
+ * Everything here is in tokens. The design plan's section 12 asks for separation by
+ * surface difference rather than by borders, and for no shadows.
+ */
+
+/* ── the frame ── */
+.shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.rail {
+  width: var(--nav-collapsed);
+  flex: 0 0 var(--nav-collapsed);
+  background: var(--surface-1);
+  border-right: 1px solid var(--border);
+  padding: var(--space-2) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  transition: width var(--motion-base) var(--ease), flex-basis var(--motion-base) var(--ease);
+}
+
+body.rail-open .rail {
+  width: var(--nav-expanded);
+  flex-basis: var(--nav-expanded);
+}
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  height: var(--row-comfortable);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: var(--font-base);
+  white-space: nowrap;
+  border-left: 2px solid transparent;
+}
+
+.rail-item:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+/* Selected: an accent fill and a 2 px accent bar on the left (section 11's table). */
+.rail-item.on {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.rail-icon {
+  flex: 0 0 var(--space-4);
+  font-size: var(--font-lg);
+  line-height: 1;
+  text-align: center;
+}
+
+/* The name is present for the screen reader even while the rail is collapsed; it is the
+   rail's width that hides it, not `display:none`. */
+.rail-name {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+body.rail-open .rail-name {
+  opacity: 1;
+}
+
+.frame {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  height: var(--topbar-height);
+  flex: 0 0 var(--topbar-height);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+}
+
+.topbar h1 {
+  font-family: var(--display);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.icon-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--font-md);
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+}
+
+.icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.chip {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  padding: var(--space-1) var(--space-3);
+}
+
+.chip:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+/* ── a surface that is not built yet ──
+   It says what it will be and what it is waiting on. The design plan's state table
+   forbids the words "no data" alone, and criterion 2.7 of the requirements asks that a
+   feature which is not built says so on the interface rather than being absent. */
+.pending {
+  padding: var(--space-6);
+  max-width: 62ch;
+}
+
+.pending h2 {
+  font-family: var(--display);
+  font-size: var(--font-xl);
+  font-weight: var(--weight-medium);
+  margin: 0 0 var(--space-2);
+}
+
+.pending .lead {
+  color: var(--text-secondary);
+  font-size: var(--font-md);
+  margin: 0 0 var(--space-4);
+}
+
+.pending .hint {
+  margin: 0 0 var(--space-3);
+}
+
+/* ── the job strip ──
+   The design plan asks for a job tray with queue position, progress and cancel. The
+   service runs a backtest synchronously on one request, so there is no queue to show and
+   nothing to cancel; what is honest is the one request in flight and how long it has been
+   going. The rest is named in the plan's "not built" list. */
+.job-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+}
+
+/* ── the drawer ──
+   Built in phase 2 for the trade card. Here now so the shell's geometry is settled once.
+*/
+.drawer {
+  position: fixed;
+  top: var(--topbar-height);
+  right: 0;
+  bottom: 0;
+  width: var(--drawer-width);
+  max-width: var(--drawer-max);
+  background: var(--surface-1);
+  border-left: 1px solid var(--border);
+  border-radius: var(--radius-lg) 0 0 0;
+  overflow-y: auto;
+  z-index: 4;
+}
+
+/* ── the bench, inside the frame ──
+   bench.css gives the panel a full-viewport height and sticks it to the top, which was
+   right when it was the whole page. Inside the frame it has to leave room for the top
+   bar, or the page gains exactly 48 px of scroll that nothing explains. */
+.shell .bench {
+  min-height: calc(100vh - var(--topbar-height));
+}
+
+.shell .panel {
+  top: var(--topbar-height);
+  height: calc(100vh - var(--topbar-height));
+}

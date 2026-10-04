@@ -100,10 +100,9 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     Requirement(
         "0.2.state", "0.2",
-        "get_state / set_state, for resume",
-        "a resumed run differing from a continuous one",
-        not_built="no form keeps state; a variant declaring itself stateful is refused "
-                  "with the reason",
+        "get_state / set_state on a component, so a run's state can be snapshotted",
+        "a resumed run differing from a continuous one, or two open trades under one "
+        "stateful form sharing a state",
     ),
     # ── 0.3 Clock and data view ───────────────────────────────────────────
     Requirement(

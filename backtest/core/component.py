@@ -30,18 +30,25 @@ such a method to receive, and defining an empty one would be a shape that reads 
 and does nothing. What is here instead is the part the engine actually calls: ``decide``.
 When the bus lands, ``decide`` is what ``on_event`` will dispatch to.
 
-``get_state`` / ``set_state`` are **not** here either, and the honest reason is that
-nothing needs them yet: no shipped form keeps state across days. What is here is the
-``stateful`` flag and a refusal -- :func:`register` rejects a variant that declares itself
-stateful, naming what is missing. The first stateful form (a trailing stop remembering its
-high-water mark) is what will make the state protocol worth building, and until then a
-component that quietly kept state would make a resumed run differ from a continuous one
-with nothing raising.
+``get_state`` / ``set_state`` are here, on :class:`Bound`, and they were built when the
+first form needed them: a trailing stop, which remembers its high-water mark. They were
+deliberately absent before that, because an empty pair of methods reads as built and does
+nothing -- and a component that quietly kept state would have made a resumed run differ
+from a continuous one with nothing raising.
 
-An earlier version of this docstring claimed both methods were "here and are real". They
-were not. The claim is recorded rather than deleted because a file that describes
-machinery it does not have is the precise failure this project refuses, and it is easier
-to make in a docstring than in code.
+**A stateful form is per trade, not per run.** Two open trades under one trailing stop
+have two different high-water marks, and a single state on the component would make them
+share one -- the second trade's stop moving because the first one's did. So the engine
+asks the component for a fresh state per trade and hands the right one back on each call;
+see :meth:`Bound.state_for`.
+
+An earlier version of this docstring claimed both methods were "here and are real" when
+they were not, and the next version said they were absent after they had been built. Both
+are recorded rather than deleted: a file that describes machinery it does not have is the
+precise failure this project refuses, the mirror of it sends the next reader to build what
+exists, and both are easier to make in a docstring than in code. ``tools/check_doc_claims.py``
+now holds the project's documents to the code; nothing holds a docstring, so this one says
+what it is.
 """
 
 from __future__ import annotations
@@ -50,7 +57,7 @@ import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
-from backtest.core.errors import StartupError
+from backtest.core.errors import InvariantError, StartupError
 
 def _slot_names() -> tuple[str, ...]:
     """The slots a component may fill, from the one place they are defined.
@@ -142,6 +149,10 @@ class Variant:
     #: an engine that does not step day by day, and declaring it is what lets that be
     #: refused rather than silently producing a different answer.
     stateful: bool = False
+    #: ``f(ctx) -> dict``: the state this form starts a **trade** with, called once when
+    #: the trade opens. Required when ``stateful``, and refused when not -- see
+    #: :func:`register` for why each half is refused.
+    initial_state: "Callable[[Mapping[str, Any]], dict] | None" = None
 
     @property
     def ref(self) -> str:
@@ -175,7 +186,7 @@ class Variant:
         return Bound(variant=self, params=out)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Bound:
     """A variant with its parameters fixed: the thing the engine actually calls."""
 
@@ -190,8 +201,68 @@ class Bound:
     def slot(self) -> str:
         return self.variant.slot
 
+    #: trade_id -> that trade's state. Per trade and not per component: two open trades
+    #: under one trailing stop have two high-water marks, and sharing one would move the
+    #: second trade's stop because the first one's moved.
+    #:
+    #: Not a frozen field, because this is the one part of a component that is *about*
+    #: changing. Everything else here is fixed at bind time.
+    _state: dict[int, dict] = field(default_factory=dict, repr=False)
+
     def __call__(self, ctx: Mapping[str, Any]) -> Any:
-        return self.variant.decide(ctx, **self.params)
+        """Decide. A stateful form is given its trade's state as ``ctx["state"]``.
+
+        The state is a mutable mapping the form may write to, which is how a trailing
+        stop raises its high-water mark. Handing it the dict rather than taking a returned
+        one is deliberate: a form that forgot to return its state would silently lose it,
+        and losing a trailing stop's high-water mark turns it into a fixed stop -- a
+        plausible result from a different strategy.
+        """
+        if not self.variant.stateful:
+            return self.variant.decide(ctx, **self.params)
+        trade_id = ctx.get("trade_id")
+        if trade_id is None:
+            raise InvariantError(
+                f"{self.ref} is stateful and was called with no trade_id in the context, "
+                f"so its state cannot be told from another trade's"
+            )
+        return self.variant.decide(
+            {**ctx, "state": self.state_for(trade_id, ctx)}, **self.params)
+
+    def state_for(self, trade_id: int, ctx: Mapping[str, Any]) -> dict:
+        """This trade's state, created from ``initial_state`` the first time."""
+        if trade_id not in self._state:
+            self._state[trade_id] = dict(self.variant.initial_state(ctx))
+        return self._state[trade_id]
+
+    def get_state(self) -> dict[str, Any]:
+        """Everything this component is carrying, for a snapshot.
+
+        Keys are strings because a snapshot is written to a file: a ``dict`` keyed by int
+        round-trips through JSON as a ``dict`` keyed by string, and a resumed run would
+        then find no state for any trade and start every stop again from its entry --
+        which looks like a run, and is a different one.
+        """
+        return {str(trade): dict(state) for trade, state in self._state.items()}
+
+    def set_state(self, state: Mapping[str, Any]) -> None:
+        """Restore what :meth:`get_state` returned.
+
+        Replaces rather than merges. A merge would let a resumed run carry state from two
+        different runs at once, and nothing downstream could tell.
+        """
+        self._state.clear()
+        for trade, held in state.items():
+            self._state[int(trade)] = dict(held)
+
+    def forget(self, trade_id: int) -> None:
+        """Drop a closed trade's state.
+
+        Without this a long run accumulates one entry per trade for ever, and a snapshot
+        of it grows without bound -- and a trade_id reused by a later run would inherit a
+        closed trade's high-water mark.
+        """
+        self._state.pop(trade_id, None)
 
     def describe(self) -> str:
         shown = ", ".join(f"{k}={v}" for k, v in sorted(self.params.items()))
@@ -222,12 +293,20 @@ def register(variant: Variant) -> Variant:
         raise StartupError(
             f"{variant.slot!r} is not a slot; one of {', '.join(SLOTS)}"
         )
-    if variant.stateful:
+    if variant.stateful and variant.initial_state is None:
         raise StartupError(
-            f"{variant.ref} declares itself stateful, and there is no state protocol yet: "
-            f"nothing saves a component's state at the end of a run or restores it at the "
-            f"start of the next. A stateful form would make a resumed run differ from a "
-            f"continuous one with nothing raising, so it is refused rather than run"
+            f"{variant.ref} declares itself stateful and supplies no `initial_state`. "
+            f"The state a form starts a trade with is part of the form -- a trailing stop "
+            f"starts at the entry price, not at zero -- and a platform-chosen default "
+            f"would be the platform deciding a research parameter.\n\n"
+            f"Give `initial_state=lambda ctx: {{...}}`, which is called once per trade."
+        )
+    if variant.initial_state is not None and not variant.stateful:
+        raise StartupError(
+            f"{variant.ref} supplies an `initial_state` and does not declare itself "
+            f"stateful. The flag is what the engine reads to decide whether to keep and "
+            f"snapshot state at all, so a form with state and no flag would have its "
+            f"state discarded between days with nothing saying so"
         )
     key = f"{variant.slot}/{variant.name}"
     existing = _REGISTRY.get(key)

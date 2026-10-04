@@ -326,6 +326,9 @@ class EventDrivenEngine:
     # ── the main loop ─────────────────────────────────────
     def run(self, strategy: Strategy) -> EventDrivenResult:
         self._guard(strategy)
+        #: Held so the state protocol can reach the bound components. The engine is given
+        #: the strategy per run rather than per construction, so this is where it lands.
+        self._strategy = strategy
         cal = self.market.calendar
         ledger = Ledger(self.config.notional_capital, self.config.contract)
         queue: list[Intent] = []
@@ -948,6 +951,10 @@ class EventDrivenEngine:
             # two forms would be measuring neither.
             spot = self.market.spot(day).or_else(float("nan"))
             ctx = exit_context(
+                # The trade a stateful form's state belongs to. Two open trades under one
+                # trailing stop have two high-water marks; without this they would share
+                # one, and the second trade's stop would move because the first one's did.
+                trade_id=trade.trade_id,
                 premium_ratio=ratio,
                 underlying_move=((spot / trade.entry_spot - 1.0) * trade.direction
                                  if math.isfinite(trade.entry_spot) and math.isfinite(spot)
@@ -1466,6 +1473,11 @@ class EventDrivenEngine:
         if trade is None:
             raise InvariantError(f"the exit intent {intent.trade_id} has no matching "
                                  f"open trade")
+        # The trade is over: its components forget it. Without this a long run keeps one
+        # state entry per trade for ever, a snapshot of it grows without bound, and a
+        # trade_id reused later inherits a closed trade's high-water mark.
+        for bound in self._stateful_components().values():
+            bound.forget(intent.trade_id)
         reason = resolve_exit_reason(list(intent.exit_reasons)) if intent.exit_reasons else ExitReason.TIME_EXIT
         return self._record(trade, exit_day=day, exit_price=price, exit_fees=fees,
                             exit_deferred=self.market.calendar.sessions_between(
@@ -1502,6 +1514,19 @@ class EventDrivenEngine:
                 f"this figure and is not a cost the strategy chose",
                 symbol)
             del deliveries[symbol]
+
+    def _stateful_components(self) -> dict:
+        """The bound components that keep state, by slot.
+
+        Read from the strategy each time rather than cached: a cache would have to be
+        invalidated when a component is swapped, and a stale one would snapshot the state
+        of a form that is no longer running.
+        """
+        strategy = getattr(self, "_strategy", None)
+        if strategy is None:
+            return {}
+        return {slot: c for slot, c in strategy.components.items()
+                if getattr(getattr(c, "variant", None), "stateful", False)}
 
     def _settle(self, pos: Position, ledger: Ledger, open_trades, day: date) -> TradeRecord | None:
         spot = self.market.spot(day)

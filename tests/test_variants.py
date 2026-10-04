@@ -83,8 +83,25 @@ class TestRegistry:
                              params=(), decide=second))
 
     def test_an_unknown_variant_lists_what_exists(self):
-        with pytest.raises(StartupError, match="Registered: premium, underlying"):
-            get("stop_loss", "trailing")
+        """The name and the list both come from the registry.
+
+        This asked for ``trailing`` as the example of a form that does not exist, and
+        matched the literal "Registered: premium, underlying". Both went stale the day a
+        trailing stop was registered -- the test then passed only because the name it
+        chose had become real, which is the opposite of what it says.
+        """
+        from backtest.core.component import variants
+
+        registered = sorted(v.name for v in variants("stop_loss"))
+        assert registered, "no stop_loss forms are registered at all"
+        absent = "no_such_form"
+        assert absent not in registered
+
+        with pytest.raises(StartupError) as caught:
+            get("stop_loss", absent)
+        message = str(caught.value)
+        for name in registered:
+            assert name in message, f"the refusal does not list {name}"
 
 
 class TestParameters:
