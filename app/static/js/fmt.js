@@ -53,6 +53,20 @@ export const pct = v => absent(v) ? "—" : (v * 100).toFixed(1) + "%";
 
 export const num = (v, digits = 2) => absent(v) ? "—" : v.toFixed(digits);
 
+/** Money in as few characters as carry the magnitude: −23.3k, +1.19M.
+ *
+ * For places where the full figure does not fit and being cut off mid-number is worse
+ * than being rounded — an interval under a metric card showed "+57,18…", which reads as a
+ * different number from the one it is. The exact value stays one hover away. */
+export const moneyShort = v => {
+  if(absent(v)) return "—";
+  const sign = v >= 0 ? "+" : "−";
+  const size = Math.abs(v);
+  if(size >= 1e6) return `${sign}${(size / 1e6).toFixed(2)}M`;
+  if(size >= 1e3) return `${sign}${(size / 1e3).toFixed(1)}k`;
+  return `${sign}${size.toFixed(0)}`;
+};
+
 export const sgn = v => absent(v) ? "" : v > 0 ? "pos" : v < 0 ? "neg" : "";
 
 export const label = c => LABEL[c] || c;

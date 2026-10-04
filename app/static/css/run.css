@@ -17,7 +17,7 @@
   z-index: 3;
   background: var(--surface-0);
   border-bottom: 1px solid var(--border);
-  padding: var(--space-4) var(--space-5) var(--space-3);
+  padding: var(--space-3) var(--space-5);
 }
 
 .run-head {
@@ -65,6 +65,7 @@
 .realism {
   display: flex;
   flex-wrap: wrap;
+  align-items: baseline;
   gap: var(--space-1) var(--space-4);
   margin: var(--space-3) 0 0;
   padding: var(--space-2) 0;
@@ -75,101 +76,180 @@
   font-family: var(--mono);
 }
 
+/* The two longest chips carry a hash and a commit and would otherwise set the line
+   length for everything. Truncated with the full value one hover away. */
+.realism-chip {
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .realism-chip b {
   color: var(--text-muted);
   font-weight: var(--weight-regular);
   margin-right: var(--space-1);
 }
 
-/* ── the protocol flags ── */
-.flags {
+/* ── limitations ──
+   The standing conditions on the result: what it assumes, and where it stops being
+   reliable. They come before the numbers because they decide how to read them.
+
+   A list of rows, not a field of pills. Ten outlined chips wrapping across two lines had
+   no hierarchy, no alignment and no way to tell a severe one from a mild one at a glance;
+   rows share a left edge, so the eye runs down them, and a dot carries severity without
+   the whole row having to be coloured. */
+.limits { margin: var(--space-4) 0 0; }
+
+.limits-head {
   display: flex;
-  flex-wrap: wrap;
+  align-items: baseline;
   gap: var(--space-2);
-  margin: var(--space-3) 0 0;
+  margin: 0 0 var(--space-2);
+  font-family: var(--display);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
 }
 
-.flags-none {
-  margin: var(--space-3) 0 0;
+.limits-count {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+}
+
+.limits-hint {
+  font-family: var(--sans);
   font-size: var(--font-sm);
+  font-weight: var(--weight-regular);
   color: var(--text-muted);
 }
 
-.flag {
-  border: 1px solid var(--border);
-  border-left-width: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-1);
-  font-size: var(--font-sm);
-  max-width: 100%;
+.limits-none { margin: 0; font-size: var(--font-sm); color: var(--text-muted); }
+
+/* Two columns where there is room: ten of these in one column is a wall, and in three
+   the text is too short to read as a list. */
+.limits-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 0 var(--space-5);
+  border-top: 1px solid var(--border);
 }
 
-.flag > summary {
+.limit { border-bottom: 1px solid var(--border); }
+
+.limit > summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
   cursor: pointer;
-  padding: var(--space-1) var(--space-3);
   list-style: none;
+  padding: var(--space-2) 0;
+  font-size: var(--font-sm);
   color: var(--text-secondary);
 }
 
-.flag > summary::-webkit-details-marker { display: none; }
-.flag[open] > summary { color: var(--text-primary); }
-.flag.ok { border-left-color: var(--success); }
-.flag.warn { border-left-color: var(--warning); }
-.flag.bad { border-left-color: var(--danger); }
+.limit > summary::-webkit-details-marker { display: none; }
+.limit > summary:hover { color: var(--text-primary); }
+.limit[open] > summary { color: var(--text-primary); }
 
-.flag p {
+/* Severity as a dot. Colour is never the only carrier: an open row shows the sentence,
+   and the dot's size changes with severity as well as its colour. */
+.limit-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transform: translateY(-1px);
+}
+
+.limit.ok .limit-dot { background: var(--success); }
+.limit.warn .limit-dot { background: var(--warning); }
+.limit.bad .limit-dot { background: var(--danger); width: 8px; height: 8px; }
+
+.limit p {
   margin: 0;
-  padding: 0 var(--space-3) var(--space-3);
+  padding: 0 0 var(--space-3) calc(var(--space-2) + 6px);
+  font-size: var(--font-sm);
   color: var(--text-secondary);
   max-width: 68ch;
 }
 
-/* ── the metric cards ── */
+/* ── the metric cards ──
+   Eight numbers, read at a glance and compared with each other, so they are one band of
+   equal cells rather than eight boxes of different heights. The earlier version let each
+   card size to its own content: two rows, the second orphaned, and a column of dead space
+   under every card without an interval. */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
-  gap: var(--space-2);
-  margin: var(--space-3) 0 0;
-}
-
-.card {
-  background: var(--surface-1);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0;
+  margin: var(--space-4) 0 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  background: var(--surface-1);
+}
+
+/* Separated by a line rather than by a gap: a row of numbers that belong to one run reads
+   as one object, and eight floating boxes read as eight. */
+.card {
+  padding: var(--space-3);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   min-width: 0;
+  cursor: help;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .card dt {
   font-size: var(--font-xs);
   color: var(--text-muted);
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card dd {
-  margin: 2px 0 0;
+  margin: 0;
   font-family: var(--mono);
   font-size: var(--font-xl);
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
+  line-height: 1.2;
 }
+
+.card-dir { margin-left: var(--space-1); color: var(--text-muted); font-size: var(--font-xs); }
 
 .card-note, .card-why {
-  margin: var(--space-1) 0 0;
+  margin: 0;
   font-size: var(--font-xs);
   color: var(--text-muted);
+  line-height: 1.35;
 }
 
-/* Below the minimum trade count the cards are muted, not hidden: the number exists, it
-   simply cannot carry weight, and hiding it would invite rerunning until it appears. */
+/* The explanation of an absent number is secondary: it should not make its cell taller
+   than the cells carrying real numbers. */
+.card-why {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .card.thin dd { color: var(--text-secondary); }
 .card.empty dd { color: var(--text-muted); }
 
 /* The interval, drawn as a bar beneath the point estimate. */
-.interval {
-  margin-top: var(--space-2);
-}
+.interval { margin-top: auto; padding-top: var(--space-2); }
 
 .interval-bar {
   display: block;
@@ -197,6 +277,9 @@
   font-family: var(--mono);
   font-size: var(--font-xs);
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── the tabs ──
@@ -435,15 +518,15 @@ td.bar span {
    stack below it has no room left — the page looks as though the charts are missing.
 
    What survives the shrink is what a reader glancing up needs: the run's identity and the
-   numbers. The realism strip and the flags are read once, before the numbers, so they
-   give up their space and come back on scrolling up. */
+   numbers. The realism strip and the limitations are read once, before the numbers, so
+   they give up their space and come back on scrolling up. */
 .tier-top.compact {
   padding-bottom: var(--space-2);
 }
 
 .tier-top.compact .realism,
-.tier-top.compact .flags,
-.tier-top.compact .flags-none,
+.tier-top.compact .limits,
+.tier-top.compact .run-lead,
 .tier-top.compact .card-note,
 .tier-top.compact .card-why,
 .tier-top.compact .interval {
@@ -494,50 +577,22 @@ td.bar span {
    These are the lines that let a reader who has not built it work out what they are
    looking at. */
 .run-lead {
-  margin: var(--space-2) 0 0;
+  margin: var(--space-1) 0 0;
   font-size: var(--font-sm);
-  color: var(--text-secondary);
-  max-width: 76ch;
-}
-
-.realism-lead, .flags-lead {
-  font-size: var(--font-xs);
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  max-width: 82ch;
 }
 
 .realism-lead {
   font-family: var(--sans);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   border-right: 1px solid var(--border);
   padding-right: var(--space-3);
   cursor: help;
 }
-
-.flags-lead {
-  margin: var(--space-4) 0 var(--space-2);
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
-.flags-hint { color: var(--text-muted); }
-
-/* A marker, so a flag reads as something that opens. Without it the flags were chips
-   that happened to be clickable, which nobody discovers. */
-.flag-mark {
-  display: inline-block;
-  width: 1em;
-  color: var(--text-muted);
-  font-family: var(--mono);
-}
-
-.flag[open] .flag-mark::after { content: "−"; }
-.flag[open] .flag-mark { font-size: 0; }
-.flag[open] .flag-mark::after { font-size: var(--font-sm); }
-
-.card { cursor: help; }
 
 .card-dir {
   margin-left: var(--space-1);

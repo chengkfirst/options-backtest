@@ -269,11 +269,18 @@ export function chartStack(root, spec){
   // flicker whenever anything on the page moved, and worst while scrolling, when the
   // sticky header above was also changing size.
   let lastWidth = 0;
+  let pending = 0;
   const observer = new ResizeObserver(entries => {
     const now = Math.round(entries[0].contentRect.width);
     if(now === lastWidth) return;
     lastWidth = now;
-    draw();
+    // **Drawn on the next frame, not inside the callback.** Redrawing during delivery
+    // changes layout while the browser is still handing out resize notifications, which
+    // it reports as "ResizeObserver loop completed with undelivered notifications" — an
+    // error the page's own strip then shows to the reader. Deferring takes the mutation
+    // out of that window entirely.
+    cancelAnimationFrame(pending);
+    pending = requestAnimationFrame(draw);
   });
   observer.observe(root);
 
@@ -288,7 +295,10 @@ export function chartStack(root, spec){
         : null;
       draw();
     },
-    destroy(){ observer.disconnect(); },
+    destroy(){
+      observer.disconnect();
+      cancelAnimationFrame(pending);
+    },
   };
 }
 

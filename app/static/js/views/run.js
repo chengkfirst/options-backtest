@@ -24,7 +24,8 @@
 import {$, esc, mark} from "../dom.js";
 import {API, getJSON, postJSON} from "../net.js";
 import {checkContract} from "../contract.js";
-import {EXCLUDE, REASON, absent, fmtVal, label, money, num, pct} from "../fmt.js";
+import {EXCLUDE, REASON, absent, fmtVal, label, money, moneyShort, num, pct}
+  from "../fmt.js";
 import {areaLayer, chartStack, lineLayer, underwaterLayer} from "../charts/axis.js";
 import {renderAB, renderHist, renderScatter, renderYears} from "../charts/distribution.js";
 import {renderBuckets, renderCross, renderRobust} from "../charts/tables.js";
@@ -185,19 +186,23 @@ function protocolFlags(){
             + "as a scan that found nothing."});
 
   if(!flags.length)
-    return `<p class="flags-none">Nothing the research protocol flags on this run. The
-      numbers below still carry whatever their sample size allows.</p>`;
+    return `<section class="limits"><h3 class="limits-head">Limitations</h3>
+      <p class="limits-none">Nothing the research protocol flags on this run. The numbers
+      below still carry whatever their sample size allows.</p></section>`;
   const bad = flags.filter(f => f.level !== "ok").length;
-  // A heading that says what these are and that they come first, and a visible marker so
-  // they read as openable. They were chips with no affordance, which made a page of
-  // warnings look like a page of labels.
-  return `<p class="flags-lead">${bad} thing${bad === 1 ? "" : "s"} to know before
-    reading the numbers <span class="flags-hint">— click any one for what it means</span></p>
-    <div class="flags">${flags.map(f => `
-    <details class="flag ${f.level}">
-      <summary><span class="flag-mark" aria-hidden="true">+</span>${esc(f.short)}</summary>
-      <p>${mark(f.detail)}</p>
-    </details>`).join("")}</div>`;
+  // "Limitations" rather than a sentence counting them. These are the standing conditions
+  // on the result — what it assumes and where it stops being reliable — and a reader
+  // scanning the page looks for a noun, not a line of prose.
+  return `<section class="limits">
+    <h3 class="limits-head">Limitations
+      <span class="limits-count">${bad}</span>
+      <span class="limits-hint">what these numbers assume, and where they stop being
+        reliable. Open one for the detail.</span></h3>
+    <div class="limits-list">${flags.map(f => `
+      <details class="limit ${f.level}">
+        <summary><span class="limit-dot" aria-hidden="true"></span>${esc(f.short)}</summary>
+        <p>${mark(f.detail)}</p>
+      </details>`).join("")}</div></section>`;
 }
 
 /** The metric cards: value, interval, and what makes it untrustworthy.
@@ -291,8 +296,8 @@ function intervalBar(interval){
   return `<div class="interval${crosses ? " crosses" : ""}" title="${esc(why)}">
     <span class="interval-bar">${crosses
       ? `<i class="interval-zero" style="left:${zeroAt.toFixed(1)}%"></i>` : ""}</span>
-    <span class="interval-text">${level} ${money(interval.low)} … ${money(interval.high)}${
-      crosses ? " · contains zero" : ""}</span>
+    <span class="interval-text">${level} ${moneyShort(interval.low)} … ${
+      moneyShort(interval.high)}${crosses ? " · spans 0" : ""}</span>
   </div>`;
 }
 
@@ -449,8 +454,8 @@ function render(query){
         </div>
       </header>
       <p class="run-lead">What this run did, and whether its numbers can be trusted.
-        Read the flags first — they are the reasons a number here might not mean what it
-        appears to.</p>
+        Read the limitations first — they are the reasons a number here might not mean
+        what it appears to.</p>
       ${realismStrip()}
       ${protocolFlags()}
       ${metricCards()}

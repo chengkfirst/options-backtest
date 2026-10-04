@@ -492,13 +492,13 @@ function paintRuns(){
         <td><button class="pin ${r.id === BASE ? "on" : ""}" data-pin="${r.id}">
           ${r.id === BASE ? "baseline" : "set as baseline"}</button></td></tr>`;
     }).join("") + `</tbody>`;
+  // The whole row opens the run, not only its number: a table of results where most of
+  // each row is dead is a table people click twice before learning where to aim.
   $("runs").querySelectorAll("tbody tr").forEach(tr =>
     tr.addEventListener("click", e => {
-      // The id is a link to the analysis page; the rest of the row previews the run here.
-      // Letting the row handler also fire would navigate and then immediately re-render
-      // the surface being left.
-      if(e.target.dataset.pin || e.target.closest(".run-link")) return;
-      showRun(+tr.dataset.run);
+      if(e.target.closest("[data-pin]")) return;      // pinning is not navigating
+      if(e.target.closest(".run-link")) return;       // the link does it itself
+      go(`/runs/${tr.dataset.run}`);
     }));
   $("runs").querySelectorAll(".pin").forEach(b =>
     b.addEventListener("click", e => { e.stopPropagation(); BASE = +b.dataset.pin; paintRuns(); }));
