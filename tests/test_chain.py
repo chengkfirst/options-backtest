@@ -112,7 +112,8 @@ class TestTheChainDistinguishesWhatMustBeDistinguished:
         and opposite causes.
         """
         bus = result.raw.bus
-        rejects = bus.of_type(EventType.REJECT)
+        rejects = [e for e in bus.of_type(EventType.ORDER_STATUS)
+                   if e.data.get("status") == "reject"]
         orders = bus.of_type(EventType.ORDER)
         fills = bus.of_type(EventType.FILL)
         assert rejects, "this run used to reject two intents; if it no longer does, " \
@@ -130,7 +131,7 @@ class TestTheChainDistinguishesWhatMustBeDistinguished:
     def test_a_rejection_still_names_the_slot_that_asked(self, result):
         """Which slot is being refused is the question a researcher asks of a rejection
         count, and it is lost if the rejection carries only the contract."""
-        for event in result.raw.bus.of_type(EventType.REJECT):
+        for event in result.raw.bus.of_type(EventType.ORDER_STATUS):
             assert event.component_id, f"{event.describe()} does not name a slot"
             assert event.trade_id is not None
 

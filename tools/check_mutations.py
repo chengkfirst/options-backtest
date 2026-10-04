@@ -317,6 +317,15 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
     ),
     Mutation(
+        # A buy placed before the sell that pays for it is a rejected order in a cash
+        # account, on a day the strategy intended to trade.
+        "sells are ordered before buys",
+        "backtest/portfolio/target.py",
+        "        return tuple(sorted(out, key=lambda o: (o.quantity > 0, str(o.contract))))",
+        "        return tuple(out)",
+        ("tests/test_target.py::TestTheDiff",),
+    ),
+    Mutation(
         "the scenario limit is read before an entry is placed",
         "backtest/engine/loop.py",
         "        if self.scenario_limit is not None:",

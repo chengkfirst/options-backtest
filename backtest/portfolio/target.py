@@ -170,7 +170,15 @@ class TargetPortfolio:
                 continue
             out.append(Order(contract=contract, quantity=target - have, held=have,
                               target=target, because=self.reasons_for(contract)))
-        return tuple(out)
+        # **Sells before buys, so the cash suffices.** The document says this of the
+        # order generator and it was missing: orders came out sorted by contract, so a
+        # buy could be placed before the sell that pays for it. In a cash account that
+        # is a rejected order on a day the strategy intended to trade -- and the trade
+        # is then absent from the result with only a rejection event to say why.
+        #
+        # Within each side the contract order is kept, so two runs of the same day queue
+        # the same orders in the same sequence.
+        return tuple(sorted(out, key=lambda o: (o.quantity > 0, str(o.contract))))
 
     def clear(self) -> None:
         """Forget the day's targets.

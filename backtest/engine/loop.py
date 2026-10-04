@@ -824,11 +824,16 @@ class EventDrivenEngine:
                           "adjustments": [{"slot": a.slot, "reason": a.reason}
                                           for a in adjustments]})
                 if not self._validate(intent, ledger, day):
+                    # ORDER_STATUS rather than a REJECT of its own: the document's event
+                    # covers a partial fill, a reject and a cancel, each with its reason,
+                    # and the narrow name lost the other two -- a partial fill is not a
+                    # rejection and is the figure 4.2 asks to be reported.
                     self.bus.emit(
-                        EventType.REJECT, day, "execution", caused_by=target_event.id,
+                        EventType.ORDER_STATUS, day, "execution",
+                        caused_by=target_event.id,
                         trade_id=intent.trade_id, component_id=intent.component_id,
                         reason=f"the {intent.kind.value} order was not placed",
-                        data={"contract": str(intent.contract)})
+                        data={"contract": str(intent.contract), "status": "reject"})
                     continue
                 order = self.bus.emit(
                     EventType.ORDER, day, "execution", caused_by=target_event.id,
@@ -1305,9 +1310,17 @@ class EventDrivenEngine:
             if blocked:
                 from backtest.portfolio.scenario_rule import describe
 
+                # Whether the greeks were the chain's own or its pricing model's. On a
+                # synthetic chain they are model output, so the loss is self-consistent
+                # with the prices rather than measured against them -- which a reader
+                # deciding whether to act on a blocked trade has to know first.
+                modelled = bool(self.chain.series(contract, [day])
+                                .get("greeks_model_derived", [False]).iloc[0]) \
+                    if not self.chain.series(contract, [day]).empty else False
                 self.events.record(
                     EventKind.CANDIDATE_DROPPED, day,
-                    describe(blocked, self.scenario_limit), str(contract))
+                    describe(blocked, self.scenario_limit,
+                             greeks_model_derived=modelled), str(contract))
                 self.bus.emit(
                     EventType.RISK, day, "portfolio", component_id="headwind",
                     reason=f"the scenario limit blocked an entry: "
@@ -1845,13 +1858,22 @@ class EventDrivenEngine:
             # it is a screen, and a screen that never over-selects is a decision.
             self.events.record(
                 EventKind.EARLY_EXERCISE_RISK, day,
-                f"flagged for early exercise and the tree disagrees: "
+                f"flagged for early exercise and the tree disagrees at IV {iv:.4f}: "
                 f"{verdict.describe()}", str(pos.contract))
             return None
 
+        # The volatility the decision rested on, and where it came from. On a synthetic
+        # chain there is one IV per session shared by every strike, so the verdict
+        # describes Black-Scholes rather than the market -- and the two cases early
+        # exercise turns on are the two points furthest from an at-the-money number.
+        source = str(row.get("source", ""))
+        caveat = ("" if source != QuoteSource.SYNTHETIC.value else
+                  " -- on a synthetic chain, where one IV is shared by every strike, so "
+                  "this is a decision about the pricing model and not about the market")
         self.events.record(
             EventKind.EARLY_EXERCISE_RISK, day,
-            f"exercised early: {verdict.describe()}", str(pos.contract))
+            f"exercised early at IV {iv:.4f}: {verdict.describe()}{caveat}",
+            str(pos.contract))
         self.bus.emit(
             EventType.EXPIRY, day, "ledger", trade_id=pos.trade_id,
             component_id="exercise",

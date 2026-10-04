@@ -34,6 +34,33 @@ under stress asks slot 6 for one.
 It also does not look at history. A scenario limit on a replayed 2008 is a different and
 better tool (``scenario_replay``), and it needs the book to exist over that period, which
 a candidate being considered today does not.
+
+## The sticky assumption, which the document requires to be explicit
+
+A spot shock moves the underlying. What happens to each contract's implied volatility as
+it moves is **not** given by the shock -- it is an assumption, and the document names the
+two:
+
+- **sticky strike**: each strike keeps its IV. The option's moneyness changes, so its IV
+  no longer sits where it did on the smile.
+- **sticky delta** (sticky moneyness): the smile moves with the spot, so a contract's IV
+  changes to whatever sits at its new moneyness.
+
+The two give different scenario losses, and the register's rule is that **a risk limit uses
+the more conservative of them**.
+
+This grid is **sticky strike**, and it is sticky strike for a reason that is also its
+limitation: the grid revalues from the book's aggregate greeks, and a single vega number
+cannot express a smile moving. Expressing sticky delta needs per-contract IV at the shocked
+moneyness, which needs a surface -- and this system has no surface builder, so the
+alternative cannot be computed rather than has not been.
+
+What that costs is directional and stated rather than estimated: for a long book, a spot
+fall under sticky delta usually comes with the IV at the new moneyness being **higher**
+than the IV at the old strike, so sticky strike understates the vega gain and therefore
+**overstates the loss**. For a loss limit that is the conservative side -- which is the
+register's requirement, met by accident of the model rather than by choice, and worth
+saying so.
 """
 
 from __future__ import annotations
@@ -73,6 +100,13 @@ class Breach:
             return f"{where}: {self.unknown}"
         return (f"{where}: a loss of {self.loss:,.0f} against a limit of "
                 f"{self.limit:,.0f}")
+
+
+#: The sticky assumption this grid makes. One value, because the grid revalues from
+#: aggregate greeks and a single vega cannot express a smile that moves -- see the module
+#: docstring. Named rather than implied, because the document requires the assumption to
+#: be explicit and the two give different losses.
+STICKY = "strike"
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,11 +185,24 @@ def check(greeks, limit: ScenarioLimit) -> tuple[Breach, ...]:
     return tuple(out)
 
 
-def describe(breaches: Sequence[Breach], limit: ScenarioLimit) -> str:
-    """Why a trade was blocked, for the event log and for a person reading it."""
+def describe(breaches: Sequence[Breach], limit: ScenarioLimit, *,
+             greeks_model_derived: bool = False) -> str:
+    """Why a trade was blocked, for the event log and for a person reading it.
+
+    The sticky assumption is in every line, because a scenario loss without it is a
+    number whose meaning depends on something the reader cannot see.
+
+    ``greeks_model_derived`` says the greeks came from the same model that priced the
+    chain, which is the case on a synthetic chain: the loss is then self-consistent model
+    output rather than a measurement, and a reader deciding whether to act on a blocked
+    trade needs that before the figure.
+    """
+    where = f"sticky {STICKY}"
+    if greeks_model_derived:
+        where += ", from model-derived greeks on a synthetic chain"
     if not breaches:
-        return f"every scenario is within the {limit.max_loss:,.0f} limit"
+        return (f"every scenario is within the {limit.max_loss:,.0f} limit ({where})")
     lines = [f"{len(breaches)} of {len(limit.scenarios)} scenario(s) breach the "
-             f"{limit.max_loss:,.0f} limit:"]
+             f"{limit.max_loss:,.0f} limit ({where}):"]
     lines += [f"  {b.describe()}" for b in breaches]
     return "\n".join(lines)

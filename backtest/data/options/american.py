@@ -36,6 +36,28 @@ It does not replace the chain's prices. The chain is the market's own quotes, an
 price is not a quote -- substituting one would be marking the book to a model, which is
 the failure the whole data layer is built against. This answers one question: *is holding
 worth more than exercising*, for a position already held.
+
+## **What its answer is worth depends entirely on the volatility it is given**
+
+The tree takes ``vol`` and does not question it, which makes the input the whole of the
+boundary:
+
+- **on real option data** the contract's own implied volatility is a market observation,
+  and so is the answer.
+- **on this system's synthetic chain** there is **one volatility per session, shared by
+  every strike and every expiry** (``market.volatility(day)``). There is no skew and no
+  term structure. So an exercise decision taken there is a decision about
+  Black-Scholes, not about the market -- and the cases early exercise turns on are exactly
+  the ones a smile would move: a deep in-the-money put's IV and a dividend-paying call's
+  are the two points furthest from an at-the-money number.
+
+Stated here rather than left to the caller because the tree's output looks like a price,
+and a price carries no mark saying what went into it. ``Boundary`` is how the research
+layer says this about a figure it reports; this module is below that layer and cannot
+reach it, so it says it in words.
+
+The practical consequence: **do not read an early-exercise count off a synthetic run as a
+statement about how often early exercise matters.** Read it as whether the mechanism runs.
 """
 
 from __future__ import annotations
