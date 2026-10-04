@@ -84,6 +84,19 @@ class TradingCalendar:
                 return session
         return None
 
+    def previous_session(self, day: date) -> "date | None":
+        """The session before ``day``, or ``None`` at the start of the calendar.
+
+        The mirror of :meth:`next_session`, which existed on its own. An asymmetric pair
+        makes every caller that needs the other direction write ``shift(day, -1)`` inline
+        -- and ``shift`` requires ``day`` itself to be a session, so the inline version
+        raises on a holiday where this returns the session before it.
+        """
+        for session in reversed(self._sessions):
+            if session < day:
+                return session
+        return None
+
     def sessions_between(self, start: date, end: date) -> int:
         """Sessions between ``start`` and ``end``, excluding the first.
 

@@ -143,6 +143,11 @@ class EventDrivenResult:
     #: The book-wide risk rule, if one ran. In the fingerprint: it changes which trades
     #: happen and how large they are.
     risk_rule: Any = None
+    #: **The event stream.** Carried on the result rather than discarded with the engine:
+    #: a causal chain that only exists during the run answers requirement 0.6 for nobody.
+    #: ``result.bus.trace(fill_id)`` is how a fill is followed back to the component that
+    #: decided it.
+    bus: Any = None
 
     @property
     def actions_frame(self):

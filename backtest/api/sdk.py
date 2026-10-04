@@ -454,6 +454,44 @@ class Result:
                 out["rows_withheld_as_unknown"] = int(withheld)
         return out
 
+    def why(self, trade_id: int | None = None) -> str:
+        """Why a fill happened: the chain back to the component that decided it.
+
+        Requirement 0.6 -- "a fill traced back through order -> target -> signal ->
+        component, with the data values used". Without an argument every fill in the run;
+        with a ``trade_id``, that trade's.
+
+        **It prints the gaps.** A chain that is short because a link was never set looks
+        exactly like a complete one, so each trace says which of the four hops it found
+        and whether it reached a slot. A run where every fill is explainable and one
+        where none is produce the same trade table.
+        """
+        from backtest.core.events import EventType
+
+        bus = getattr(self.raw, "bus", None)
+        if bus is None:
+            return ("this run has no event stream, so no fill can be traced. The "
+                    "trade-table engine does not publish one -- it has no orders and no "
+                    "targets to publish, which is the same gap as requirement 0.1")
+
+        fills = [e for e in bus.of_type(EventType.FILL)
+                 if trade_id is None or e.trade_id == trade_id]
+        if not fills:
+            which = "" if trade_id is None else f" for trade {trade_id}"
+            return f"no fills{which} in this run"
+
+        traces = [bus.trace(f.id) for f in fills]
+        broken = [t for t in traces if not t.complete]
+        lines = [f"Why · {len(fills)} fill(s), "
+                 f"{len(traces) - len(broken)} traceable to a component", "─" * 68]
+        for trace in traces:
+            lines += [trace.describe(), ""]
+        if broken:
+            lines.append(f"** {len(broken)} fill(s) cannot be traced to a decision. A "
+                         f"fill with no chain is one nobody can explain, and it is not "
+                         f"visible in the trade table **")
+        return "\n".join(lines)
+
     def manifest(self) -> dict[str, Any]:
         """Configuration, provenance and dependency versions — what makes the result
         re-executable — and the ``run_id`` that identifies this exact combination.

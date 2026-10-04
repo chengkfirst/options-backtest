@@ -50,6 +50,7 @@ from backtest.signals.exit_context import exit_context
 from backtest.signals.strategy import ExitRule
 from backtest.engine.strategy import Strategy
 from backtest.core.errors import InvariantError, StartupError
+from backtest.core.events import Event, EventBus, EventType
 from backtest.core.invariants import check_all as check_invariants
 from backtest.core.run_log import EventKind, EventLog
 from backtest.accounting.tradebook import (
@@ -142,6 +143,11 @@ class Intent:
     exit_rule: "ExitRule | None" = None
     tag: str = ""
     note: str = ""
+    #: The id of the ``ORDER`` event this intent was published as. Carried on the intent
+    #: rather than looked up at fill time: the two are a day apart, and matching a fill
+    #: to an order by contract and quantity is a guess that is wrong exactly when two
+    #: orders for the same contract are in flight -- the case the chain exists for.
+    order_event: int = 0
 
 
 def _entry_scale(decision) -> float:
@@ -212,6 +218,11 @@ class OpenTrade:
     #: trade log for classified research afterwards.
     tag: str = ""
     note: str = ""
+    #: The id of the ``ORDER`` event this intent was published as. Carried on the intent
+    #: rather than looked up at fill time: the two are a day apart, and matching a fill
+    #: to an order by contract and quantity is a guess that is wrong exactly when two
+    #: orders for the same contract are in flight -- the case the chain exists for.
+    order_event: int = 0
 
 
 class EventDrivenEngine:
@@ -224,6 +235,7 @@ class EventDrivenEngine:
         signals: SignalSet,
         config: BacktestConfig | None = None,
         events: EventLog | None = None,
+        bus: "EventBus | None" = None,
         *,
         max_concurrent: int | None = None,
         enforce_capital: bool = True,
@@ -242,6 +254,10 @@ class EventDrivenEngine:
         # read another test's events.
         self.events = (events if events is not None
                        else market.events)
+        #: The document's bus. Its own, not the market's: a bus is a record of **this
+        #: run's** causal chain, and two runs sharing one would interleave their chains
+        #: with nothing in a trace saying which run a link came from.
+        self.bus = bus if bus is not None else EventBus()
         #: None means no limit. With None and enforce_capital=False, this engine
         #: should agree with the trade-table engine.
         self.max_concurrent = max_concurrent
@@ -329,6 +345,27 @@ class EventDrivenEngine:
         self._closed_pnl = records          # the same list, referenced not copied
 
         for day in self.market.sessions():
+            # The day's events, published as they happen and delivered at the end of it
+            # in the document's order. Published rather than delivered inline: delivering
+            # on publish would run observers in the order the loop happens to emit, which
+            # is the dependence on who-ran-first that the phase table exists to remove.
+            #
+            # The loop still **acts** inline. What the bus carries is the causal chain --
+            # requirement 0.6 -- and the order, which is why the requirements map says
+            # 0.1 is partial and names what is missing rather than claiming it whole.
+            dividend = self.market.dividends_between(
+                cal.previous_session(day) or day, day)
+            if dividend > 0:
+                self.bus.emit(EventType.CORPORATE_ACTION, day, "data",
+                              reason=f"ex-dividend, {dividend:.4f} per share",
+                              data={"cash_per_share": dividend})
+            spot_now = self.market.spot(day)
+            market_event = self.bus.emit(
+                EventType.MARKET, day, "data",
+                reason=("the underlying's close" if spot_now.is_present
+                        else f"no close: {spot_now.reason}"),
+                data={"spot": spot_now.or_else(float("nan"))})
+
             # 3  fill yesterday's intents
             # **Due now, and anything that was due and could not fill.** The second half
             # was missing: an intent whose execution day had no quote was dropped, not
@@ -356,6 +393,14 @@ class EventDrivenEngine:
                         str(intent.contract))
                     queue.append(intent)
                     continue
+                fill_event = self.bus.emit(
+                    EventType.FILL, day, "broker", caused_by=intent.order_event,
+                    trade_id=intent.trade_id, component_id=intent.component_id,
+                    reason=f"{intent.kind.value} {intent.quantity} "
+                           f"{intent.contract}: {intent.reason}",
+                    data={"contract": str(intent.contract), "side": intent.side.value,
+                          "quantity": intent.quantity,
+                          "decided_on": intent.created.isoformat()})
                 closed = self._execute(intent, ledger, open_trades, day, actions)
                 if closed is not None:
                     records.append(closed)
@@ -378,6 +423,10 @@ class EventDrivenEngine:
             # 4  settle expiries
             for pos in list(ledger.positions):
                 if pos.contract.expiry <= day:
+                    self.bus.emit(EventType.EXPIRY, day, "ledger",
+                                  trade_id=pos.trade_id,
+                                  reason=f"{pos.contract} reached its expiry",
+                                  data={"contract": str(pos.contract)})
                     before = {p.symbol for p in ledger.stock_positions}
                     rec = self._settle(pos, ledger, open_trades, day)
                     for p in ledger.stock_positions:
@@ -408,6 +457,14 @@ class EventDrivenEngine:
                 contracts=[p.contract for p in ledger.positions],
             )
             snapshots.append(snap)
+            # Accounting, and it is last in the phase table for the reason the audit
+            # found: a mark taken before the day's fills does not include them. Here it
+            # is published after the fill and expiry events of the same day, so the
+            # order in the stream is the document's whatever order the loop runs in.
+            self.bus.emit(EventType.ACCOUNTING, day, "ledger",
+                          reason=f"marked to market: equity {snap.equity_mid:,.2f}",
+                          data={"equity_mid": snap.equity_mid, "cash": snap.cash,
+                                "positions": len(ledger)})
             self._last_equity = snap.equity_mid
             self._peak_equity = max(self._peak_equity, snap.equity_mid)
             # The drawdown is computed unconditionally. Computing it only inside the
@@ -441,6 +498,14 @@ class EventDrivenEngine:
                 "positions": len(ledger),
             }) if self.brake is not None else NOTHING
             if self.brake is not None and self._risk.action.value != self._brake_state:
+                self.bus.emit(
+                    EventType.RISK, day, "portfolio",
+                    component_id=getattr(self.brake, "component_id", "headwind"),
+                    reason=f"the book-wide rule moved to {self._risk.action.value}: "
+                           f"{getattr(self._risk, 'reason', '')}",
+                    data={"action": self._risk.action.value,
+                          "drawdown": self._drawdown,
+                          "daily_return": self._daily_return})
                 self.events.record(
                     EventKind.CANDIDATE_DROPPED, day,
                     f"{self.brake.ref}: {self._brake_state} -> "
@@ -530,10 +595,61 @@ class EventDrivenEngine:
                     intents.append(intent)
                     next_trade_id += 1
 
-            # 8  validate and queue
+            # 8  validate and queue, and publish the chain the fill will name
+            #
+            # Three events per intent, in the document's order: the signal (which slot
+            # decided, and why), the target (what the book should hold as a result), and
+            # the order (the gap between target and actual). The fill, a day or more
+            # later, names the order -- and `Intent.order_event` is what carries the id
+            # across that gap.
+            #
+            # A rejected intent publishes the signal and the target and then a REJECT
+            # rather than an ORDER. Collapsing the two would lose the count 4.2 asks for:
+            # "log every rejected order" is a number a researcher reads, and a rejection
+            # that looks like an order that never filled is indistinguishable from a bug
+            # in the fill path.
             for intent in intents:
-                if self._validate(intent, ledger, day):
-                    queue.append(intent)
+                signal = self.bus.emit(
+                    EventType.SIGNAL, day, "signals", trade_id=intent.trade_id,
+                    component_id=intent.component_id,
+                    reason=intent.reason or intent.kind.value,
+                    data={"action": intent.kind.value,
+                          "contract": str(intent.contract),
+                          "exit_reasons": [r.value for r in intent.exit_reasons]})
+                held = ledger.position(intent.contract)
+                current = held.abs_quantity if held is not None else 0
+                target = (current + intent.quantity if intent.side is Side.BUY
+                          else current - intent.quantity)
+                target_event = self.bus.emit(
+                    EventType.TARGET_PORTFOLIO, day, "portfolio",
+                    caused_by=signal.id, trade_id=intent.trade_id,
+                    component_id=intent.component_id,
+                    reason=f"hold {target} of {intent.contract} "
+                           f"(now {current}): {intent.reason or intent.kind.value}",
+                    data={"contract": str(intent.contract), "target": target,
+                          "current": current})
+                if not self._validate(intent, ledger, day):
+                    self.bus.emit(
+                        EventType.REJECT, day, "execution", caused_by=target_event.id,
+                        trade_id=intent.trade_id, component_id=intent.component_id,
+                        reason=f"the {intent.kind.value} order was not placed",
+                        data={"contract": str(intent.contract)})
+                    continue
+                order = self.bus.emit(
+                    EventType.ORDER, day, "execution", caused_by=target_event.id,
+                    trade_id=intent.trade_id, component_id=intent.component_id,
+                    reason=f"{intent.side.value} {intent.quantity} {intent.contract}, "
+                           f"due {intent.execute_on}",
+                    data={"contract": str(intent.contract), "side": intent.side.value,
+                          "quantity": intent.quantity,
+                          "execute_on": intent.execute_on.isoformat()})
+                queue.append(replace(intent, order_event=order.id))
+
+            # The day is over: deliver what it published, in the phase order. Nothing is
+            # published during the drain -- the loop has finished the day -- so no event
+            # can arrive late for its phase here. That check earns its keep when a
+            # handler publishes, which is what the live path will do.
+            self.bus.drain(day)
 
         # **A position still open when the run ends is not a trade and must not be
         # silently absent.**
@@ -560,7 +676,7 @@ class EventDrivenEngine:
             paths=tuple(paths), shadow=tuple(shadow), actions=tuple(actions),
             records=tuple(records), snapshots=tuple(snapshots), greeks=tuple(greeks_daily),
             config=self.config, strategy=strategy, events=self.events, ledger=ledger,
-            risk_rule=self.brake,
+            risk_rule=self.brake, bus=self.bus,
             limits={
                 "max_concurrent": self.max_concurrent,
                 "enforce_capital": self.enforce_capital,

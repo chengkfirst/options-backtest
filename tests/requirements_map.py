@@ -175,9 +175,8 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "a fill whose originating slot cannot be named"),
     Requirement("0.6.chain", "0.6",
                 "The full chain: fill -> order -> target -> signal -> component",
-                "a fill that can be traced to a slot but not to the order that carried it",
-                not_built="orders and targets are not events, so two of the five links "
-                          "do not exist. They arrive with the bus (0.1)"),
+                "a fill that can be traced to a slot but not to the order that carried "
+                "it, or a chain reported as complete when a link was never set"),
     # ── Layer 1 Data ──────────────────────────────────────────────────────
     Requirement("1.rule1", "1",
                 "No data enters a backtest without an available_at",
