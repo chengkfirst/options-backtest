@@ -82,7 +82,31 @@
   --leg-main: #378add;
   --leg-hedge: #ba7517;
 
-  --data-1: #378add; --data-2: #d85a30; --data-3: #1d9e75; --data-4: #7f77dd;
+  /* ── the comparison series: colour is **not** the only carrier ──
+     Two to four runs overlaid on one chart. Unlike a slot marker, a line has no number
+     printed on it, so colour would be carrying the identity alone — and the design plan's
+     proposed fourth series (#7f77dd, a violet) is 2.5 apart from the first under
+     deuteranopia, which is to say identical. Two runs being compared would have drawn the
+     same line.
+
+     Two answers, both applied. The fourth series is chosen by search rather than taste:
+     of every colour that clears 3:1 on all five surfaces in both themes, this magenta is
+     among the furthest from the other three under both kinds of colour blindness (21.9,
+     against the 2.5 of the proposal). A pure red scores marginally higher and is not used,
+     because red already means a loss everywhere else on the page.
+
+     And **every series carries a dash pattern as well**, which survives colour blindness,
+     greyscale printing and a washed-out projector alike. `tools/check_contrast.py`
+     enforces the separation floor for this group and only reports it for the slots and
+     the Greeks, which carry a number or a written label of their own. */
+  --data-1: #378add; --data-2: #d85a30; --data-3: #1d9e75; --data-4: #c200ae;
+
+  /* The matching stroke patterns, in series order. Solid for the first, because the
+     baseline column should read as the plain one. */
+  --dash-1: none;
+  --dash-2: 7 3;
+  --dash-3: 2 3;
+  --dash-4: 9 3 2 3;
 
   /* ── dark, the default ── */
   --surface-0: #111111;

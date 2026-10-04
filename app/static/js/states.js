@@ -129,6 +129,24 @@ section("tokens", "Every value the interface draws with. The contrast of each te
     one("the locked hold-out", `<div class="g-frame"><div class="g-holdout"></div>
       <p class="hint">Hatched and <b>empty</b>: a period that has not been revealed
       carries no line, rather than a line drawn faintly.</p></div>`),
+    one("the comparison series carry a dash pattern as well as a colour", () => {
+      const style = getComputedStyle(document.documentElement);
+      const lines = [1, 2, 3, 4].map(i => {
+        const dash = style.getPropertyValue(`--dash-${i}`).trim();
+        return `<g>
+          <path d="M8,${i * 26 - 10} C 90,${i * 26 - 22} 150,${i * 26 + 2} 260,${i * 26 - 14}"
+                fill="none" stroke="var(--data-${i})" stroke-width="1.5"
+                ${dash && dash !== "none" ? `stroke-dasharray="${dash}"` : ""}/>
+          <text x="272" y="${i * 26 - 6}" fill="var(--text-secondary)"
+                font-size="11" font-family="var(--mono)">run ${i}</text></g>`;
+      }).join("");
+      return `<div class="g-frame">
+        <svg viewBox="0 0 340 112" style="width:100%;max-width:520px">${lines}</svg>
+        <p class="hint">Colour alone cannot carry which run a line belongs to: a line has
+        no number printed on it, and the design plan's proposed first and fourth series
+        are <b>2.5 apart</b> under deuteranopia. The pattern survives colour blindness,
+        greyscale printing and a washed-out projector alike.</p></div>`;
+    }),
   ]));
 
 section("controls", "Three button levels, one primary per page. Disabled is not used — a "

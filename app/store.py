@@ -73,7 +73,14 @@ CREATE TABLE IF NOT EXISTS run (
     synthetic    INTEGER NOT NULL,      -- whether the data was synthetic, which decides whether the conclusions can be trusted
     trades_file  TEXT NOT NULL,
     fingerprint  TEXT NOT NULL DEFAULT '',  -- the reproducibility hash from core/run_id.py: the same code, settings and data give the same value
-    sharpe_annualised REAL                  -- NULL when the engine builds no equity curve. Named for its basis: a bare `sharpe` is what let an annualised figure be passed where a per-period one was wanted
+    sharpe_annualised REAL,                 -- NULL when the engine builds no equity curve. Named for its basis: a bare `sharpe` is what let an annualised figure be passed where a per-period one was wanted
+    -- What the run said about itself when it finished, so reading it back says the same.
+    -- NULL means **not recorded** (a row older than the column), which is not the same
+    -- statement as an empty list.
+    boundary     TEXT,                      -- the hard boundary on these numbers, or NULL
+    problems     TEXT,                      -- JSON: what went wrong during the run
+    diagnostics  TEXT,                      -- JSON: the run events, by kind, with reasons
+    anomalies    TEXT                       -- JSON: what the rule-based scan found
 );
 
 CREATE TABLE IF NOT EXISTS note (
@@ -150,6 +157,21 @@ class Store:
     ADDED: tuple[tuple[str, str, str], ...] = (
         ("run", "fingerprint", "TEXT NOT NULL DEFAULT ''"),
         ("run", "sharpe_annualised", "REAL"),
+        # What a reader needs to judge a run, kept so that **opening a stored run says the
+        # same things the run said when it finished**. Until these existed, the two
+        # endpoints that both return "a run" returned different shapes: a fresh run
+        # carried its boundary, its diagnostics and its anomaly scan, and the same run
+        # fetched by id carried none of them, so the interface could not use the second at
+        # all.
+        #
+        # **Nullable on purpose.** A row saved before the column existed reads as NULL,
+        # which means "not recorded" — and that is a different statement from `[]`, which
+        # means "nothing fired". Writing the empty list into old rows would have been a
+        # quiet lie about runs nobody can re-examine.
+        ("run", "boundary", "TEXT"),
+        ("run", "problems", "TEXT"),
+        ("run", "diagnostics", "TEXT"),
+        ("run", "anomalies", "TEXT"),
     )
 
     #: A column that every version of our ``run`` table has had. Its absence from an
@@ -290,6 +312,26 @@ class Store:
         self._db.commit()
         return self.run(run_id)
 
+    def record_notices(self, run_id: int, *, boundary: str, problems: list,
+                       diagnostics: list, anomalies: list) -> None:
+        """Keep what the run said about itself: its boundary, problems, diagnostics, scan.
+
+        A second write rather than four more arguments to :meth:`save_run`, because these
+        are not all known when the row is created — ``problems`` collects failures from
+        the equity, attribution and anomaly steps, which happen after the trade log is
+        saved. Writing the row first and completing it is honest about that order; passing
+        a half-filled ``problems`` into the insert would not be.
+        """
+        self._db.execute(
+            "UPDATE run SET boundary=?, problems=?, diagnostics=?, anomalies=? WHERE id=?",
+            (boundary or "",
+             json.dumps(problems, ensure_ascii=False, default=str),
+             json.dumps(diagnostics, ensure_ascii=False, default=str),
+             json.dumps(anomalies, ensure_ascii=False, default=str),
+             run_id),
+        )
+        self._db.commit()
+
     def runs(
         self,
         *,
@@ -401,6 +443,11 @@ class Store:
         d = dict(row)
         for k in ("config", "manifest", "events"):
             d[k] = json.loads(d[k])
+        # NULL stays None, and that is the point: `None` reads as "this run did not record
+        # it" and `[]` as "nothing fired". Defaulting the first to the second would make
+        # every run saved before these columns existed claim a clean scan.
+        for k in ("problems", "diagnostics", "anomalies"):
+            d[k] = json.loads(d[k]) if d.get(k) else None
         d["synthetic"] = bool(d["synthetic"])
         return d
 

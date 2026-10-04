@@ -247,11 +247,26 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     # Declares to the interface which validation tools this run can actually answer, so a
     # button is never offered for something that would fail. The counterfactual needs the
     # shadow prices, which only the event-driven engine keeps.
-    record["validations"] = sorted(
-        k for k, v in VALIDATIONS.items()
-        if v["engines"] is None or kwargs["engine"] in v["engines"]
+    record["validations"] = validations_for(kwargs["engine"])
+    # Keep what this run said about itself, so opening it again by id says the same. The
+    # two endpoints that both return "a run" used to return different shapes, and that is
+    # why nothing in the interface could use the stored one.
+    STORE.record_notices(
+        record["id"],
+        boundary=record["boundary"], problems=record["problems"],
+        diagnostics=record["diagnostics"], anomalies=record["anomalies"],
     )
     return record
+
+
+def validations_for(engine: str) -> list[str]:
+    """Which validation tools a run on this engine can answer.
+
+    Declared from one place so a fresh run and a stored one offer the same buttons. The
+    counterfactual needs the shadow prices only the event-driven engine keeps.
+    """
+    return sorted(k for k, v in VALIDATIONS.items()
+                  if v["engines"] is None or engine in v["engines"])
 
 
 #: The validation tools the interface can run on a stored result, and what each needs.

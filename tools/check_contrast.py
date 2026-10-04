@@ -20,10 +20,11 @@ verification, so the proposal cannot be pasted in and called done.
 - **accent text, 4.5 : 1** — links and primary-button labels are text.
 - **data colours, 3 : 1** (WCAG 1.4.11 for non-text) — a chart line nobody can see against
   the panel is a chart with no line.
-- **slot and Greek separation under colour blindness**, reported rather than enforced: the
-  design plan requires every slot marker to carry its number as well, so colour is never
-  the only carrier of identity. A pair that collapses is worth knowing about and is not by
-  itself a defect.
+- **separation under colour blindness**, enforced where colour is the only thing carrying
+  which series is which — the comparison chart's lines, where two runs drawn alike is a
+  wrong answer — and reported for the slots and the Greeks, which carry a number or a
+  written label as well. The design plan's own proposed fourth series was 2.5 apart from
+  its first, which is to say identical to a tenth of the men who would read it.
 
 Values are read from ``app/static/css/tokens.css`` — the one file allowed to contain a
 colour — so the check cannot drift from what the interface actually renders.
@@ -32,7 +33,6 @@ colour — so the check cannot drift from what the interface actually renders.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,8 +43,24 @@ TEXT_RATIO = 4.5
 NON_TEXT_RATIO = 3.0
 
 #: Below this, two colours are close enough that a colour-blind reader may not separate
-#: them. Reported, not enforced — see the module docstring.
+#: them.
+#:
+#: **Enforced where colour is the only carrier of identity, reported everywhere else.**
+#: A slot marker carries its number and an attribution bar carries its name, so a close
+#: pair there is worth knowing about and is not by itself a defect. A line on a comparison
+#: chart carries nothing but its colour, so a close pair there means two runs drawn alike —
+#: and the design plan's own proposal had exactly that, at 2.5 apart.
 SEPARATION = 18.0
+
+#: The floor for a group where colour is the only carrier. Lower than the reporting
+#: threshold, and the number is not arbitrary: four hues that each clear 3:1 on a
+#: near-black **and** on a white ground, and separate under two kinds of colour blindness,
+#: is an over-constrained problem. A search over every such colour puts the best a fourth
+#: series can do at 22.7, and the design plan's own first three manage only 17.0 between
+#: themselves — so a floor above that would condemn its palette rather than check it. The
+#: colours clear this floor and a second carrier does the rest, which is why
+#: `--dash-1..4` exist.
+SOLE_CARRIER_FLOOR = 15.0
 
 Rgb = tuple[float, float, float]
 
@@ -222,13 +238,20 @@ DATA_TOKENS = ("--data-strategy", "--data-benchmark",
                "--leg-main", "--leg-hedge",
                "--data-1", "--data-2", "--data-3", "--data-4")
 
-GROUPS = {
+#: Groups where colour is the **only** carrier of which series is which. Enforced.
+SOLE_CARRIER = {
+    "comparison": ("--data-1", "--data-2", "--data-3", "--data-4"),
+}
+
+#: Groups that carry a number or a written label as well. Reported.
+LABELLED = {
     "slot": ("--slot-1", "--slot-2", "--slot-3", "--slot-4", "--slot-5", "--slot-6",
              "--slot-7"),
     "Greek": ("--greek-delta", "--greek-gamma", "--greek-vega", "--greek-theta",
               "--greek-residual"),
-    "comparison": ("--data-1", "--data-2", "--data-3", "--data-4"),
 }
+
+GROUPS = {**SOLE_CARRIER, **LABELLED}
 
 
 def main() -> int:
@@ -295,11 +318,18 @@ def main() -> int:
                     if ca is None or cb is None:
                         continue
                     gap = separation(simulate(ca, kind), simulate(cb, kind))
-                    if gap < SEPARATION:
+                    if group in SOLE_CARRIER and gap < SOLE_CARRIER_FLOOR:
+                        problems.append(
+                            f"{group}: {a} and {b} are {gap:.1f} apart under {kind}, "
+                            f"below the {SOLE_CARRIER_FLOOR:.0f} a series needs when "
+                            f"**colour is all it has**. A line carries no number: two "
+                            f"runs would be drawn alike"
+                        )
+                    elif gap < SEPARATION:
                         notes.append(
                             f"{group}: {a} and {b} are {gap:.1f} apart under {kind} "
                             f"(below {SEPARATION:.0f}); they are told apart by the "
-                            f"marker's number, not by colour"
+                            f"marker's number or its written label, not by colour"
                         )
 
     if problems:

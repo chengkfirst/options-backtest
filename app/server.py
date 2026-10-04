@@ -38,6 +38,7 @@ warnings.filterwarnings("ignore")
 from meta import _describe_gaps, _meta_payload, _tradeoff  # noqa: E402
 from runner import (  # noqa: E402
     STORE, SYNTHETIC_WARNING, VALIDATIONS, _finite, run_backtest, validate,
+    validations_for,
 )
 from store import VERDICTS  # noqa: E402
 
@@ -171,6 +172,18 @@ class Handler(SimpleHTTPRequestHandler):
             record["notes"] = list(_describe_gaps())
             if record["synthetic"]:
                 record["notes"].insert(0, SYNTHETIC_WARNING)
+            # The same shape a fresh run returns. Until this, opening a stored run gave a
+            # record without `engine`, `boundary`, `problems`, `diagnostics`, `anomalies`
+            # or `validations`, so every section that reads them would have rendered
+            # undefined — which is why the interface never used this endpoint at all.
+            #
+            # `engine` and `validations` are **derived** from the stored configuration
+            # rather than kept twice; the rest were recorded by the run and come back as
+            # `null` when it predates the columns, which the interface shows as "not
+            # recorded" rather than as "nothing happened".
+            record["engine"] = record["config"].get("engine", "trade_table")
+            record["validations"] = validations_for(record["engine"])
+            record.setdefault("boundary", "")
             return self._json(record)
         if url.path == "/api/strategies":
             name = q.get("name")

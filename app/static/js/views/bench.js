@@ -407,10 +407,19 @@ $("tradeoffRef").addEventListener("toggle", e => {
    Found by rules, not by asking a model to look. Nothing triggered hides the whole
    block — an insight forced out of nothing is noise, and noise makes real warnings get
    skipped. */
+/* `null` and `[]` are different answers and are shown differently.
+   `[]` means the scan ran and nothing fired, so the section is hidden — an insight forced
+   out of nothing is noise. `null` means **this run never recorded one**, which is true of
+   every run stored before the column existed, and hiding that would let an unexamined run
+   pass for a clean one. */
+const NOT_RECORDED = `<p class="hint">This run did not record it. Runs stored before the
+  interface kept this have nothing to show here — which is not the same as having found
+  nothing. Run the configuration again to get one.</p>`;
+
 function renderAnomalies(found){
-  $("anomSec").hidden = !found.length;
-  if(!found.length) return;
-  $("anomBody").innerHTML = found.map(f => `
+  $("anomSec").hidden = Array.isArray(found) && !found.length;
+  if(Array.isArray(found) && !found.length) return;
+  $("anomBody").innerHTML = found == null ? NOT_RECORDED : found.map(f => `
     <div class="anom ${f.severity}">
       <div class="anom-h">${esc(f.headline)}</div>
       <div class="anom-d">${esc(f.detail)}</div>
@@ -433,8 +442,9 @@ const DIAG_LABEL = {
 function renderDiagnostics(diags){
   const box = $("diagSec");
   if(!box) return;
-  box.hidden = !diags.length;
-  if(!diags.length) return;
+  box.hidden = Array.isArray(diags) && !diags.length;
+  if(Array.isArray(diags) && !diags.length) return;
+  if(diags == null){ $("diagBody").innerHTML = NOT_RECORDED; return; }
   $("diagBody").innerHTML = diags.map(d => `
     <details class="diag">
       <summary><span class="diag-n">${d.count.toLocaleString()}</span>
@@ -641,8 +651,8 @@ function showRun(runId){
   // Only real problems go into the notice strip. Component gaps do not — they are static,
   // and they sit beside each layer in the left panel.
   for(const m of (run.problems || [])) notice(m);
-  renderAnomalies(run.anomalies || []);
-  renderDiagnostics(run.diagnostics || []);
+  renderAnomalies(run.anomalies);
+  renderDiagnostics(run.diagnostics);
   renderValidations(run);
   // Run events are not repeated into the notice strip. They are already in the
   // diagnostics panel, with the distribution of reasons and the date range — a
