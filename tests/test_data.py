@@ -258,17 +258,63 @@ class TestPriceUsageAlignment:
 
 
 class TestEarlyExerciseFlag:
-    def test_deep_itm_call_before_dividend_is_flagged(self, chain, market):
-        """A European model on an American option is an approximation; where it fails
-        has to be flagged rather than taken as fair value."""
-        day = date(2023, 3, 1)
-        snap = chain.snapshot(day)
+    """A European model on an American option is an approximation; where it fails has to
+    be flagged rather than taken as fair value.
+
+    **What the flag says on this data, measured rather than assumed.** This class used to
+    assert that some call on 2023-03-01 was flagged, and it passed only while the call's
+    test omitted the interest given up by paying the strike early. With that term in
+    place, no call on this data is flagged, and the arithmetic says it should not be:
+    QQQ's quarterly dividend is around 0.6% of spot and a quarter of carry at the
+    fixture's 4.5% is around 1.1%. The dividend does not cover it, so exercising early
+    hands over the strike three months ahead of time to collect less than the interest.
+
+    That is the correct answer and it makes the call half of the flag **silent on this
+    underlying**. Recorded here rather than left as a passing assertion, because a flag
+    that never fires looks identical to one that is broken -- and the put half does fire,
+    which is what keeps the mechanism itself under test.
+    """
+
+    DAY = date(2023, 3, 1)
+
+    def test_no_call_is_flagged_and_the_arithmetic_says_why(self, chain, market):
+        snap = chain.snapshot(self.DAY)
         calls = snap.loc[snap["right"] == "C"]
-        assert (calls["quality_flags"] == "early_exercise_value").any()
+        assert not (calls["quality_flags"] == "early_exercise_value").any(), (
+            "a call is flagged for early exercise on this data, where the dividend in "
+            "any window is smaller than the interest given up by paying the strike "
+            "early. Either the dividends changed or the carry term was dropped again"
+        )
+
+        # The figures behind that, so a future reader does not have to rederive them.
+        spot = float(snap["underlying_price"].iloc[0])
+        expiry = snap["expiry"].min()
+        dividend = market.dividends_between(self.DAY, expiry)
+        rate = market.risk_free_rate(self.DAY)
+        years = (expiry - self.DAY).days / 365.0
+        carry = min(snap["strike"]) * (1 - pow(2.718281828459045, -rate * years))
+        assert dividend < carry, (
+            f"the dividend to {expiry} is {dividend:.2f} and the carry on the lowest "
+            f"strike is {carry:.2f}. The dividend now exceeds it, so a call can be worth "
+            f"exercising early on this data and the test above is the wrong assertion"
+        )
+        assert spot > 0
+
+    def test_the_mechanism_still_fires_for_a_put(self, chain, market):
+        """Which is what makes the silence above meaningful.
+
+        A flag that fires for nothing is indistinguishable from one that is broken, so
+        the half that does fire is asserted beside the half that does not.
+        """
+        snap = chain.snapshot(self.DAY)
+        puts = snap.loc[snap["right"] == "P"]
+        assert (puts["quality_flags"] == "early_exercise_value").any(), (
+            "neither right is flagged anywhere on this data, so nothing here "
+            "distinguishes a correct silence from a dead mechanism"
+        )
 
     def test_otm_contracts_not_flagged(self, chain, market):
-        day = date(2023, 3, 1)
-        snap = chain.snapshot(day)
+        snap = chain.snapshot(self.DAY)
         spot = float(snap["underlying_price"].iloc[0])
         otm_calls = snap.loc[(snap["right"] == "C") & (snap["strike"] > spot * 1.05)]
         assert (otm_calls["quality_flags"] == "").all()

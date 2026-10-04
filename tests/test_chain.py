@@ -135,6 +135,68 @@ class TestTheChainDistinguishesWhatMustBeDistinguished:
 
 
 @kind("guard")
+class TestTheTwoRecordsOfAFillAgree:
+    """One test, against a fork that has already happened once.
+
+    There are two records of every fill: the **decision log** (`actions_frame`, one
+    `TradeAction` per fill with the slot that asked for it) and the **event stream**
+    (`FILL` events, with the causal chain). They were written in two places, and within
+    hours of the second one existing they disagreed -- 22 rows against 34 events.
+
+    The cause is the shape of the failure rather than the arithmetic. The FILL event was
+    published by the caller, before `_execute` ran, and `_execute` has four paths that
+    fill nothing: no quote on the execution day, the position already gone, a reduction
+    that would take all of it, an untradable quote. Each left an event with no fill behind
+    it -- and an intent carried forward republished one every day it was retried, so one
+    close of one trade produced five events.
+
+    **Nothing failed.** The trade table was right, the ledger was right, the accounting
+    identity held every day, and the stream said twelve things had happened that had not.
+    The fix was to put the event on the line after `apply_fill`, beside the log's own row;
+    this is what keeps them there.
+    """
+
+    def test_one_fill_event_for_every_row_of_the_decision_log(self, result):
+        from backtest.core.events import EventType
+
+        log = result.raw.actions
+        fills = result.raw.bus.of_type(EventType.FILL)
+        assert len(log) == len(fills), (
+            f"the decision log has {len(log)} rows and the stream has {len(fills)} fill "
+            f"events. Two records of the same fact have diverged, and neither the trade "
+            f"table nor the accounting identity can see it"
+        )
+
+    def test_they_agree_row_by_row_and_not_only_in_count(self, result):
+        """Equal counts with mismatched contents is the next way to be wrong, and it is
+        the one a count test teaches you to stop looking for."""
+        from backtest.core.events import EventType
+
+        log = sorted(((a.trade_id, a.when, a.action.value, a.component_id)
+                      for a in result.raw.actions))
+        stream = sorted(((e.trade_id, e.when, e.reason.split()[0], e.component_id)
+                         for e in result.raw.bus.of_type(EventType.FILL)))
+        assert log == stream, (
+            "the two records hold the same number of fills and describe different ones:\n"
+            f"  only in the decision log: {sorted(set(log) - set(stream))[:3]}\n"
+            f"  only in the stream:       {sorted(set(stream) - set(log))[:3]}"
+        )
+
+    def test_the_price_and_quantity_in_the_event_are_the_filled_ones(self, result):
+        """A reduction is resized at the fill when the position has shrunk, and a close
+        takes whatever is held. The event has to carry what was filled, not what was
+        asked for -- which is the field that drifts when an event is published before the
+        fill rather than after it."""
+        from backtest.core.events import EventType
+
+        by_key = {(a.trade_id, a.when, a.action.value): a for a in result.raw.actions}
+        for event in result.raw.bus.of_type(EventType.FILL):
+            action = by_key[(event.trade_id, event.when, event.reason.split()[0])]
+            assert event.data["quantity"] == action.values["quantity"]
+            assert event.data["price"] == pytest.approx(action.values["price"])
+
+
+@kind("guard")
 class TestTheStreamIsComplete:
     def test_nothing_is_left_undelivered(self, result):
         """An event published and never drained is a decision the run did not act on,
@@ -143,6 +205,7 @@ class TestTheStreamIsComplete:
             f"{len(result.raw.bus.pending())} events were published and never delivered"
         )
 
+    @pytest.mark.req("0.1.order")
     def test_the_days_events_are_in_the_documents_order(self, result):
         """Within each session, the stream must read in the document's order.
 
@@ -161,6 +224,7 @@ class TestTheStreamIsComplete:
                 f"{day}'s events are not in phase order: {phases}"
             )
 
+    @pytest.mark.req("0.1.order")
     def test_the_equivalence_rests_on_the_lag_being_at_least_one_day(self):
         """**Why the loop's order is allowed to differ from the document's.**
 

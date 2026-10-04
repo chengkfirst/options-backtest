@@ -146,6 +146,39 @@ class TestEarlyExercise:
             dividend_in_window=0.5,
         )
 
+    def test_a_call_gives_up_the_carry_by_exercising_early(self):
+        """The mirror of the put, and the half that was missing.
+
+        Exercising a call early pays the strike today instead of at expiry, so the
+        interest that money would have earned is given up. The condition is the dividend
+        against the time value **and** that lost interest:
+
+            call:  time value  <  dividend - carry
+            put:   time value  <  carry - dividend
+
+        0.20 of time value, a 1.00 dividend, 4.40 of carry: 0.20 < 1.00 - 4.40 is false,
+        and without the carry 0.20 < 1.00 is true. The omission flagged calls as worth
+        exercising when they were not -- at a $400 strike and 4.5% a quarter out the
+        carry is about $4.45, larger than most quarterly dividends on an index ETF, so it
+        inverted the usual answer rather than shading it.
+        """
+        held = dict(right=Right.CALL, option_price=20.2, intrinsic=20.0, strike=100.0,
+                    rate=0.045, years_to_expiry=1.0)
+        assert not has_early_exercise_value(dividend_in_window=1.0, **held)
+        # A dividend that clears both: 0.20 < 6.00 - 4.40.
+        assert has_early_exercise_value(dividend_in_window=6.0, **held)
+
+    def test_a_call_at_zero_rates_is_decided_by_the_dividend_alone(self):
+        """There is nothing to give up, so the dividend test stands by itself.
+
+        Recorded as its own case because it is also the behaviour when a caller **omits**
+        the rate: an unspecified rate is indistinguishable from a genuine zero here, and
+        the answer is the permissive one. That is the argument for always passing it.
+        """
+        assert has_early_exercise_value(
+            right=Right.CALL, option_price=20.2, intrinsic=20.0, strike=100.0,
+            dividend_in_window=0.5, rate=0.0, years_to_expiry=1.0)
+
     def test_quiet_for_otm(self):
         assert not has_early_exercise_value(
             right=Right.CALL, option_price=1.2, intrinsic=0.0, strike=100.0,
@@ -230,7 +263,8 @@ class TestTheChainReachesBothCases:
     """
 
     @staticmethod
-    def _flags(right: Right, spot: float, *, dividend: float = 0.0):
+    def _flags(right: Right, spot: float, *, dividend: float = 0.0,
+               rate: float = 0.045, years: float = 1.0):
         """``_early_exercise_flags`` on a $100 strike, 20 in the money, a year to run.
 
         The method is called on an instance built without the constructor, deliberately:
@@ -258,7 +292,7 @@ class TestTheChainReachesBothCases:
         source.config = Config
         return SyntheticChainSource._early_exercise_flags(
             source, np.array([100.0]), np.array([20.2]), spot,
-            date(2020, 1, 2), date(2021, 1, 4), right, 0.045, 1.0,
+            date(2020, 1, 2), date(2021, 1, 4), right, rate, years,
         )
 
     def test_a_put_can_be_flagged_with_no_dividend_in_the_window(self):
@@ -272,6 +306,23 @@ class TestTheChainReachesBothCases:
         is exercised early to capture a dividend, and there is none."""
         assert self._flags(Right.CALL, 120.0) == [""]
 
-    def test_a_call_is_flagged_when_a_dividend_exceeds_its_time_value(self):
-        """The case the early return was guarding, still reachable."""
-        assert self._flags(Right.CALL, 120.0, dividend=0.5) == ["early_exercise_value"]
+    def test_a_call_is_flagged_when_a_dividend_exceeds_the_time_value_and_the_carry(self):
+        """The case the early return was guarding, still reachable.
+
+        The figures changed when the call's carry was added, because the old ones only
+        worked without it: 0.20 of time value against a 0.50 dividend reads as worth
+        exercising until the 4.40 of interest given up over a year is counted, and then
+        it plainly is not. A quarter out the carry is 1.12, and a 2.00 dividend clears
+        both -- 0.20 < 2.00 - 1.12.
+        """
+        assert self._flags(Right.CALL, 120.0, dividend=2.0,
+                           years=0.25) == ["early_exercise_value"]
+
+    def test_a_dividend_below_the_carry_does_not_flag_a_call(self):
+        """The half that was missing, at the chain's own call site.
+
+        0.20 of time value against a 0.50 dividend and 4.40 of carry: exercising hands
+        over the strike a year early to collect fifty cents. The old test asserted this
+        case was flagged.
+        """
+        assert self._flags(Right.CALL, 120.0, dividend=0.5) == [""]

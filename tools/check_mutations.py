@@ -135,6 +135,31 @@ MUTATIONS: tuple[Mutation, ...] = (
          "test_the_day_loop_disposes_of_delivered_shares",),
     ),
     Mutation(
+        # Publishing the event before the fill is exactly how the two records forked the
+        # first time: `_execute` has four paths that fill nothing, and a carried intent
+        # republished one every day it was retried.
+        "a FILL event is published where the fill is, not where it is attempted",
+        "backtest/engine/loop.py",
+        "            EventType.FILL, day, \"broker\", caused_by=intent.order_event,",
+        "            EventType.FILL, day, \"broker\", caused_by=0,",
+        ("tests/test_chain.py::TestEveryFillIsExplainable",),
+    ),
+    Mutation(
+        "the two records of a fill are held one to one",
+        "backtest/engine/loop.py",
+        "        actions.append(TradeAction(",
+        "        [].append(TradeAction(",
+        ("tests/test_chain.py::TestTheTwoRecordsOfAFillAgree",),
+    ),
+    Mutation(
+        "a call early-exercise test subtracts the carry it gives up",
+        "backtest/data/options/pricing.py",
+        "        return dividend_in_window > 0 and time_value < dividend_in_window - carry",
+        "        return dividend_in_window > 0 and time_value < dividend_in_window",
+        ("tests/test_pricing.py::TestEarlyExercise",
+         "tests/test_pricing.py::TestTheChainReachesBothCases"),
+    ),
+    Mutation(
         "the carry is the interest on the strike, not on the intrinsic",
         "backtest/data/options/pricing.py",
         "    return strike * (1.0 - math.exp(-rate * years))",

@@ -52,6 +52,7 @@ def _bus_recording() -> tuple[EventBus, list[EventType]]:
 class TestTheOrderWithinATimestamp:
     """The document's order, which is the whole reason a bus exists here."""
 
+    @pytest.mark.req("0.1.order")
     def test_the_document_order_is_what_phase_says(self):
         """The order read off the table, against the document's sentence.
 
@@ -93,6 +94,7 @@ class TestTheOrderWithinATimestamp:
             f"delivered in {[t.value for t in seen]}, which is not the document's order"
         )
 
+    @pytest.mark.req("0.1.order")
     def test_accounting_is_delivered_after_fills(self):
         """The specific divergence the audit found, named in its own test.
 

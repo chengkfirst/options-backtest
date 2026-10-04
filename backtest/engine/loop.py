@@ -393,14 +393,6 @@ class EventDrivenEngine:
                         str(intent.contract))
                     queue.append(intent)
                     continue
-                fill_event = self.bus.emit(
-                    EventType.FILL, day, "broker", caused_by=intent.order_event,
-                    trade_id=intent.trade_id, component_id=intent.component_id,
-                    reason=f"{intent.kind.value} {intent.quantity} "
-                           f"{intent.contract}: {intent.reason}",
-                    data={"contract": str(intent.contract), "side": intent.side.value,
-                          "quantity": intent.quantity,
-                          "decided_on": intent.created.isoformat()})
                 closed = self._execute(intent, ledger, open_trades, day, actions)
                 if closed is not None:
                     records.append(closed)
@@ -1296,6 +1288,26 @@ class EventDrivenEngine:
         )
         ledger.apply_fill(contract=intent.contract, side=intent.side, quantity=intent.quantity,
                           price=price, fees=fees, when=day, trade_id=intent.trade_id)
+        # **The FILL event goes where the fill is**, on the line after it, beside the
+        # decision log's own row. It was published by the caller, before this method ran,
+        # and `_execute` has four paths that fill nothing -- no quote, the position gone
+        # by the fill day, a reduction that would take all of it, an untradable quote.
+        # Each of those left a FILL event with no fill behind it, and an intent that is
+        # carried forward published one again every day it was retried: one close of one
+        # trade produced five.
+        #
+        # Nothing failed. The trade table was right, the ledger was right, and the event
+        # stream said twelve things had happened that had not. Two records of the same
+        # fact, written in two places, is the whole mechanism of that failure -- so they
+        # are written in one place now, and a test holds them one to one.
+        self.bus.emit(
+            EventType.FILL, day, "broker", caused_by=intent.order_event,
+            trade_id=intent.trade_id, component_id=intent.component_id,
+            reason=f"{intent.kind.value} {intent.quantity} {intent.contract}: "
+                   f"{intent.reason}",
+            data={"contract": str(intent.contract), "side": intent.side.value,
+                  "quantity": intent.quantity, "price": price, "fees": fees.total,
+                  "decided_on": intent.created.isoformat()})
         # The decision log: one TradeAction per fill, carrying the slot that asked for it
         # and the values it acted on. This is what turns "which slot closed this trade"
         # from unanswerable into a lookup, and it is the prerequisite for attribution by

@@ -63,10 +63,8 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         "0.1.order", "0.1",
         "Processing order within a timestamp: corporate actions -> market data -> "
         "signals -> portfolio -> orders -> fills -> expiry -> accounting",
-        "accounting running before something that changes the portfolio",
-        not_built="the engine marks at step 5, before the strategy runs. Equivalent "
-                  "under a one-day lag; wrong the moment an intraday fill lands on its "
-                  "signal's day",
+        "accounting running before something that changes the portfolio, or a day's "
+        "events reading in an order that is not the document's",
     ),
     # ── 0.2 Component protocol ────────────────────────────────────────────
     Requirement(

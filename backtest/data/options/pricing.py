@@ -191,29 +191,50 @@ def has_early_exercise_value(
     **Two cases, not one.** This used to answer ``False`` for every put, which is not true
     and is not conservative:
 
-    - **a call before an ex-dividend date**, when its time value is below the dividend:
-      exercising captures the dividend, which the European price does not allow for
+    - **a call before an ex-dividend date**: exercising captures the dividend, which the
+      European price does not allow for
     - **a deep in-the-money put when rates are above zero**: exercising hands over the
       stock now and receives the strike now, and the strike earns interest for the
-      remaining life. The carry on the strike is what makes it worth doing, so the test is
-      whether the time value is below that carry.
+      remaining life
 
-    The put case needs ``rate`` and ``years_to_expiry``; without them it cannot be
-    assessed and this returns ``False`` **because there is nothing to test against**, not
-    because the answer is no. The caller that has those figures should pass them -- which
-    is why they are arguments rather than a constant read from somewhere.
+    **Both tests carry the interest on the strike, with opposite signs**, and the call's
+    was missing. Exercising a call early pays the strike today instead of at expiry, so
+    the interest that money would have earned is given up -- the mirror of what exercising
+    a put collects. The condition is therefore the dividend against the time value *and*
+    that lost interest:
+
+        call:  time value  <  dividend - carry
+        put:   time value  <  carry - dividend
+
+    One line, and leaving it out mattered in the direction that matters: it flagged calls
+    as worth exercising when they were not. At a $400 strike and 4.5% a quarter out the
+    carry is about $4.45, which is larger than most quarterly dividends on an index ETF --
+    so the omission was not a rounding difference, it inverted the usual answer.
+
+    The two rights differ in what a missing rate does, and it is worth being exact:
+
+    - **the put** cannot be assessed at all without ``rate`` and ``years_to_expiry``,
+      because the carry *is* the case. It returns ``False`` there **because there is
+      nothing to test against**, not because the answer is no.
+    - **the call** still answers: at zero rates nothing is given up by paying the strike
+      early, so the dividend test stands alone and is correct. Which means an omitted
+      rate is indistinguishable here from a genuine zero, and the answer it gives is the
+      permissive one. That is the argument for the caller always passing them rather than
+      relying on the defaults.
 
     It also needs the ``strike``, for the reason given at ``_strike_carry``.
     """
     time_value = option_price - intrinsic
     if intrinsic <= 0:
         return False
+    carry = _strike_carry(strike, rate, years_to_expiry)
     if right is Right.CALL:
-        return dividend_in_window > 0 and time_value < dividend_in_window
+        # A dividend is the only reason to exercise a call early, so no dividend is no
+        # case. The carry is what exercising gives up, and it is subtracted.
+        return dividend_in_window > 0 and time_value < dividend_in_window - carry
     # The interest earned on the strike over the remaining life, which is what early
     # exercise of a put buys. A dividend works the other way for a put -- it lowers the
     # stock and so makes holding more attractive -- so it is subtracted.
-    carry = _strike_carry(strike, rate, years_to_expiry)
     if carry <= 0:
         return False
     return time_value < carry - dividend_in_window
