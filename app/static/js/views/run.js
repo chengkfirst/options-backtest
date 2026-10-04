@@ -36,11 +36,13 @@ let MARK = "mid";      // which mark the curve is drawn on (display only)
 
 /** The tabs of section 6, and what each one is waiting on where it cannot be built. */
 const TABS = [
-  {key: "overview", name: "overview"},
-  {key: "attribution", name: "attribution"},
-  {key: "trades", name: "trades"},
-  {key: "execution", name: "execution"},
-  {key: "robustness", name: "robustness"},
+  {key: "overview", name: "the curve"},
+  {key: "attribution", name: "where the money came from"},
+  // Not "trades": the table at the bottom of the page is the trades, and one word for two
+  // different things is how a reader stops trusting the labels.
+  {key: "trades", name: "what closed them"},
+  {key: "execution", name: "what it cost"},
+  {key: "robustness", name: "does it hold up"},
   {key: "exposure", name: "exposure",
    pending: "daily portfolio greeks and premium at risk against the book's limits. The "
           + "engine computes them; they are not yet kept with the run, so this tab has "
@@ -77,21 +79,48 @@ function realismStrip(){
   const cfg = m.config || {};
   const ex = m.execution || {};
   const prov = m.provenance || {};
+  // Each chip carries what it is **for**. A reader who does not already know what λ is
+  // learns nothing from "λ 1.00", and these are the assumptions that decide whether the
+  // numbers below mean anything — the least useful place in the interface to be terse.
   const chips = [
-    ["period", `${RUN.start_date} → ${RUN.end_date}`],
-    ["capital", money(cfg.notional_capital)],
-    ["engine", RUN.engine === "event_driven" ? "event driven" : "trade table"],
+    ["period", `${RUN.start_date} → ${RUN.end_date}`,
+     "the range the strategy was run over"],
+    ["capital", money(cfg.notional_capital),
+     "the account the position sizes were worked out against"],
+    ["engine", RUN.engine === "event_driven" ? "event driven" : "trade table",
+     RUN.engine === "event_driven"
+       ? "steps day by day with real portfolio state, so there is an equity curve"
+       : "computes each trade independently and builds no equity curve, so no drawdown "
+         + "and no Sharpe"],
     ["fill latency", ex.execution_lag_days != null
-      ? `${ex.execution_lag_days} session${ex.execution_lag_days === 1 ? "" : "s"}` : "—"],
-    ["λ (adverse fill)", num(cfg.costs?.adverse_fraction)],
-    ["shadow", ex.shadow_days != null ? `${ex.shadow_days} days` : "—"],
+      ? `${ex.execution_lag_days} session${ex.execution_lag_days === 1 ? "" : "s"}` : "—",
+     "how long between the decision and the fill. The signal is read on one close and "
+     + "filled on a later one, so nothing is filled on the bar that decided it"],
+    ["fill price (λ)", num(cfg.costs?.adverse_fraction),
+     "how far across the bid/ask the fill lands. 1.00 is the whole spread paid — the "
+     + "pessimistic end. It is tested by a robustness run, never tuned to flatter a result"],
+    ["shadow", ex.shadow_days != null ? `${ex.shadow_days} days` : "—",
+     "how long a contract keeps being quoted after its trade closed. It is what lets "
+     + "\"would a wider stop have worked\" be answered instead of guessed"],
     ["data", prov.all_synthetic ? "synthetic chain"
-      : prov.mixed ? `${pct(prov.synthetic_share)} synthetic` : "real"],
-    ["commit", m.code || "—"],
-    ["result hash", m.run_id || "—"],
+      : prov.mixed ? `${pct(prov.synthetic_share)} synthetic` : "real",
+     prov.all_synthetic
+       ? "the underlying's prices are real; the option prices come from Black-Scholes "
+         + "with no skew, so option-side conclusions describe the formula, not the market"
+       : "where the option prices came from"],
+    ["code", m.code || "—",
+     "the commit this ran on. A run cannot be reproduced without it"],
+    ["result id", m.run_id || "—",
+     "the hash of everything that determines this result — config, code and data. Two "
+     + "runs sharing it are the same run; two differing in any input cannot share it"],
   ];
-  return `<div class="realism">${chips.map(([k, v]) =>
-    `<span class="realism-chip"><b>${esc(k)}</b>${esc(v)}</span>`).join("")}</div>`;
+  return `<div class="realism">
+    <span class="realism-lead" title="These describe what produced the result. They are
+      facts about this run, not controls: a realism assumption is changed by launching
+      another run, never by editing it here.">what produced this result</span>
+    ${chips.map(([k, v, why]) =>
+      `<span class="realism-chip" title="${esc(why)}"><b>${esc(k)}</b>${esc(v)}</span>`
+    ).join("")}</div>`;
 }
 
 /** What the research protocol wants said before any number is read.
@@ -151,10 +180,17 @@ function protocolFlags(){
             + "as a scan that found nothing."});
 
   if(!flags.length)
-    return `<p class="flags-none">Nothing the research protocol flags on this run.</p>`;
-  return `<div class="flags">${flags.map((f, i) => `
+    return `<p class="flags-none">Nothing the research protocol flags on this run. The
+      numbers below still carry whatever their sample size allows.</p>`;
+  const bad = flags.filter(f => f.level !== "ok").length;
+  // A heading that says what these are and that they come first, and a visible marker so
+  // they read as openable. They were chips with no affordance, which made a page of
+  // warnings look like a page of labels.
+  return `<p class="flags-lead">${bad} thing${bad === 1 ? "" : "s"} to know before
+    reading the numbers <span class="flags-hint">— click any one for what it means</span></p>
+    <div class="flags">${flags.map(f => `
     <details class="flag ${f.level}">
-      <summary>${esc(f.short)}</summary>
+      <summary><span class="flag-mark" aria-hidden="true">+</span>${esc(f.short)}</summary>
       <p>${mark(f.detail)}</p>
     </details>`).join("")}</div>`;
 }
@@ -172,33 +208,60 @@ function metricCards(){
   const floor = t.bootstrap_min_observations?.value ?? 0;
   const thin = RUN.n_trades < floor;
 
+  // Every card carries a definition and, where it has one, the direction that is better.
+  // A reader who meets "Calmar -0.44" with no explanation has been given a number and no
+  // way to use it, which is worse than giving nothing.
   const cards = [
-    {name: "annualised", value: eq && pct(eq.annualised),
-     missing: "needs an equity curve, which only the event-driven engine builds"},
-    {name: "max drawdown", value: eq && pct(eq.max_drawdown),
+    {name: "annualised", value: eq && pct(eq.annualised), better: "higher",
+     means: "the compound yearly rate this equity curve grew at over the period",
+     missing: "needs an equity curve, which only the event-driven engine builds. Rerun on "
+            + "the event-driven engine for this one"},
+    {name: "max drawdown", value: eq && pct(eq.max_drawdown), better: "closer to zero",
+     means: "the deepest fall from a peak of the account, at any point in the run. It is "
+          + "what a person would actually have had to sit through",
      note: eq && `at the bid: ${pct(eq.max_drawdown_liq)}`,
-     missing: "needs an equity curve"},
-    {name: "Sortino", value: inv && num(inv.Sortino),
+     missing: "needs an equity curve, which only the event-driven engine builds"},
+    {name: "Sortino", value: inv && num(inv.Sortino), better: "higher",
+     means: "return per unit of **downside** volatility. Unlike a Sharpe it does not "
+          + "penalise upside swings, which matters for an option buyer whose good days "
+          + "are large by design",
      note: inv && inv.downside_vol != null ? `downside vol ${pct(inv.downside_vol)}` : "",
-     missing: "needs an equity curve"},
-    {name: "Calmar", value: inv && num(inv.Calmar), missing: "needs an equity curve"},
-    {name: "net P&L", value: money(RUN.net_pnl), interval: a.intervals?.net_pnl},
+     missing: "needs an equity curve, which only the event-driven engine builds"},
+    {name: "Calmar", value: inv && num(inv.Calmar), better: "higher",
+     means: "the annual return divided by the worst drawdown — how much was earned per "
+          + "unit of the deepest pain",
+     missing: "needs an equity curve, which only the event-driven engine builds"},
+    {name: "net P&L", value: money(RUN.net_pnl), interval: a.intervals?.net_pnl,
+     means: "what the whole run made or lost after costs"},
     {name: "mean per trade", value: RUN.n_trades ? money(RUN.net_pnl / RUN.n_trades) : "—",
      interval: a.intervals?.mean_pnl,
-     // The division is the one arithmetic left in this file and it is a presentation of
-     // two stored numbers, not a statistic: the interval beside it is the backend's.
+     means: "the net P&L spread over the trades. The interval beneath it is the backend's "
+          + "bootstrap, not an average of averages",
+     // The division is the one arithmetic left in this file, and it is the presentation of
+     // two stored numbers rather than a statistic of its own.
      note: `over ${RUN.n_trades} trades`},
-    {name: "win rate", value: pct(RUN.win_rate)},
-    {name: "top 5 trades' share", value: inv && pct(inv.top5_share),
+    {name: "win rate", value: pct(RUN.win_rate),
+     means: "the share of trades that finished above zero. It says nothing about size — a "
+          + "strategy can win often and still lose money"},
+    {name: "top 5 trades' share", value: inv && pct(inv.top5_share), better: "lower",
+     means: "how much of the total profit came from the five best trades. A high share "
+          + "means the result rests on a handful of outcomes rather than on the rule",
      note: inv && inv.without_top5 != null ? `without them ${money(inv.without_top5)}` : "",
-     missing: "the investor view did not report one for this run"},
+     missing: "the run was profitable in too few trades for this to be meaningful, or the "
+            + "total was negative, in which case a share of it would not mean anything"},
   ];
 
   return `<dl class="cards">${cards.map(c => {
     const absentCard = c.value == null || c.value === "—" || c.value === false;
+    const tip = [c.means ? c.means.replace(/\*\*/g, "") : "",
+                 c.better ? `${c.better} is better.` : "",
+                 thin ? `Fewer than ${floor} trades, so this number is shown but cannot `
+                      + `carry weight.` : ""].filter(Boolean).join(" ");
     return `<div class="card${thin ? " thin" : ""}${absentCard ? " empty" : ""}"
-       ${thin ? `title="fewer than ${floor} trades, so this is shown but not to be relied on"` : ""}>
-      <dt>${esc(c.name)}</dt>
+       title="${esc(tip)}">
+      <dt>${esc(c.name)}${c.better
+        ? `<span class="card-dir" aria-hidden="true">${
+            c.better === "higher" ? "↑" : c.better === "lower" ? "↓" : "→0"}</span>` : ""}</dt>
       <dd>${absentCard ? "—" : esc(c.value)}</dd>
       ${absentCard && c.missing ? `<p class="card-why">${esc(c.missing)}</p>` : ""}
       ${!absentCard && c.note ? `<p class="card-note">${esc(c.note)}</p>` : ""}
@@ -214,12 +277,17 @@ function intervalBar(interval){
   const crosses = interval.low <= 0 && 0 <= interval.high;
   const span = interval.high - interval.low || 1;
   const zeroAt = Math.max(0, Math.min(100, ((0 - interval.low) / span) * 100));
-  return `<div class="interval${crosses ? " crosses" : ""}"
-       title="${esc(interval.name)} ${num(interval.estimate, 0)} — the ${pct(interval.level)} interval is [${num(interval.low, 0)}, ${num(interval.high, 0)}]${interval.caveat ? ". " + interval.caveat.replace(/\*\*/g, "") : ""}">
+  // Money formatting and a whole-number level. "95.0% interval -88048 … -36070" wrapped
+  // onto a second line and read as four unrelated numbers; the grouped form fits.
+  const level = `${Math.round(interval.level * 100)}%`;
+  const why = `What a different sample of the same trades would plausibly have given. `
+    + `${crosses ? "It contains zero, so the sign of this result is not established. " : ""}`
+    + `${(interval.caveat || "").replace(/\*\*/g, "")}`;
+  return `<div class="interval${crosses ? " crosses" : ""}" title="${esc(why)}">
     <span class="interval-bar">${crosses
       ? `<i class="interval-zero" style="left:${zeroAt.toFixed(1)}%"></i>` : ""}</span>
-    <span class="interval-text">${num(interval.low, 0)} … ${num(interval.high, 0)}${
-      crosses ? " · crosses zero" : ""}</span>
+    <span class="interval-text">${level} ${money(interval.low)} … ${money(interval.high)}${
+      crosses ? " · contains zero" : ""}</span>
   </div>`;
 }
 
@@ -357,31 +425,39 @@ function render(query){
   $("view-run").innerHTML = `
     <section class="tier-top">
       <header class="run-head">
-        <h2>run ${RUN.id}<span class="run-idea">${esc(RUN.strategy_name || "")} v${
+        <h2>run ${RUN.id}<span class="run-idea"
+          title="the strategy this run belongs to, and which version of it. Editing the strategy makes a new version; running it again makes a new run."
+          >${esc(RUN.strategy_name || "untitled")} · version ${
           RUN.strategy_ver ?? "?"}</span></h2>
-        <p class="run-cfg">${esc(typeof RUN.config?.entry === "string"
-          ? RUN.config.entry : "a plan function")}</p>
+        <p class="run-cfg" title="the entry condition this run used">enters when ${
+          esc(typeof RUN.config?.entry === "string"
+            ? RUN.config.entry : "a plan function decides")}</p>
         <div class="run-actions">
           <button type="button" class="chip" id="markToggle"
-            title="display only: the metrics and the stop triggers were computed on the run's configured mark"
-            >marked at the ${MARK === "liq" ? "bid" : "mid"}</button>
-          <a class="chip" href="#/compose">back to the bench</a>
+            title="Display only. An option can be marked at the mid price or at the bid — what it could actually be sold for. Switching this redraws the curve; it does not recompute the metrics, which were worked out on the mark the run was configured with."
+            >showing the ${MARK === "liq" ? "bid" : "mid"} mark</button>
+          <a class="chip" href="#/bench"
+             title="the bench is where a configuration is written and run">compose a run</a>
         </div>
       </header>
+      <p class="run-lead">What this run did, and whether its numbers can be trusted.
+        Read the flags first — they are the reasons a number here might not mean what it
+        appears to.</p>
       ${realismStrip()}
       ${protocolFlags()}
       ${metricCards()}
     </section>
 
-    <nav class="tabs" role="tablist">${TABS.map(t =>
+    <nav class="run-tabs" role="tablist">${TABS.map(t =>
       `<button type="button" class="tab${t.key === tab ? " on" : ""}" role="tab"
          data-tab="${t.key}">${esc(t.name)}</button>`).join("")}</nav>
 
     <section class="tier-mid" id="tierMid"></section>
 
     <section class="tier-detail">
-      <header class="tier-head"><h3>trades</h3>
-        <p class="hint" id="runDetailNote"></p></header>
+      <header class="tier-head"><h3>every trade</h3>
+        <p class="hint">one row per closed trade, in the order they opened</p>
+        <p class="hint tier-count" id="runDetailNote"></p></header>
       <div class="scroll" id="runDetail"></div>
     </section>`;
 
@@ -407,15 +483,24 @@ function render(query){
  * unpolished: the tier is about 500 px of sticky header, so the chart stack it sits above
  * has no room left and reads as missing.
  */
+let onScroll = null;
+
 function watchScroll(){
   const top = $("view-run")?.querySelector(".tier-top");
   if(!top) return;
-  const apply = () => top.classList.toggle("compact", window.scrollY > 48);
+  // **Two thresholds, not one.** Shrinking the header makes the page shorter, which can
+  // drop the scroll position back under a single threshold, which expands the header,
+  // which lengthens the page again — an oscillation that shows up as the whole page
+  // flickering while scrolling. Compacting at 96 and expanding only below 24 leaves a gap
+  // that no single scroll step can cross in both directions.
+  const apply = () => {
+    const y = window.scrollY;
+    if(y > 96) top.classList.add("compact");
+    else if(y < 24) top.classList.remove("compact");
+  };
   apply();
-  // One listener for the page, replaced on each render rather than accumulating: a
-  // listener per render would fire a dozen times per scroll by the end of a session.
-  window.removeEventListener("scroll", watchScroll._on || (() => {}));
-  watchScroll._on = apply;
+  if(onScroll) window.removeEventListener("scroll", onScroll);
+  onScroll = apply;
   window.addEventListener("scroll", apply, {passive: true});
 }
 
@@ -429,8 +514,11 @@ function renderTab(tab, query){
     return;
   }
   if(tab === "overview"){
+    host.innerHTML = `<p class="hint stack-lead">Every layer shares one time axis. Hover
+      to read them all at one date; <b>drag across a chart to select a period</b> — the
+      trade table below narrows to it and the link in the address bar carries it. Click
+      once to clear. The triangles on the axis mark days the run logged something.</p>`;
     const box = document.createElement("div");
-    host.innerHTML = "";
     host.append(box);
     if(STACK) STACK.destroy();
     STACK = buildStack(box);
@@ -534,4 +622,7 @@ function robustnessTab(){
 
 export function leave(){
   if(STACK){ STACK.destroy(); STACK = null; }
+  // The scroll listener belongs to this surface. Left behind it would go on toggling a
+  // class on an element another surface replaced.
+  if(onScroll){ window.removeEventListener("scroll", onScroll); onScroll = null; }
 }

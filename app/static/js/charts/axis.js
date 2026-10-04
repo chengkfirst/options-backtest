@@ -263,8 +263,18 @@ export function chartStack(root, spec){
     draw();
   });
 
-  // The container's width decides the coordinate space, so a resize has to redraw.
-  const observer = new ResizeObserver(() => draw());
+  // The container's **width** decides the coordinate space, so only a width change has to
+  // redraw. Redrawing on any resize is a loop: `draw` rewrites the markup, which changes
+  // the element's height, which notifies the observer, which draws again — visible as a
+  // flicker whenever anything on the page moved, and worst while scrolling, when the
+  // sticky header above was also changing size.
+  let lastWidth = 0;
+  const observer = new ResizeObserver(entries => {
+    const now = Math.round(entries[0].contentRect.width);
+    if(now === lastWidth) return;
+    lastWidth = now;
+    draw();
+  });
   observer.observe(root);
 
   draw();

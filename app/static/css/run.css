@@ -199,8 +199,11 @@
   color: var(--text-muted);
 }
 
-/* ── the tabs ── */
-.tabs {
+/* ── the tabs ──
+   `.run-tabs`, not `.tabs`: the bench already has a `.tabs` for choosing how a strategy is
+   written, and a shared class name here silently restyled it from another surface's
+   stylesheet. */
+.run-tabs {
   display: flex;
   gap: var(--space-1);
   padding: 0 var(--space-5);
@@ -208,7 +211,7 @@
   background: var(--surface-0);
 }
 
-.tabs .tab {
+.run-tabs .tab {
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -218,9 +221,9 @@
   padding: var(--space-2) var(--space-3);
 }
 
-.tabs .tab:hover { color: var(--text-primary); }
+.run-tabs .tab:hover { color: var(--text-primary); }
 
-.tabs .tab.on {
+.run-tabs .tab.on {
   color: var(--text-primary);
   border-bottom-color: var(--accent);
 }
@@ -484,3 +487,63 @@ td.bar span {
 }
 
 .run-link:hover { border-bottom-color: var(--accent); }
+
+/* ── saying what things are ──
+   The first version of this page was a dense instrument with no labels: nine jargon chips
+   above eight bare numbers. Density is right for a page read every day; silence is not.
+   These are the lines that let a reader who has not built it work out what they are
+   looking at. */
+.run-lead {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  max-width: 76ch;
+}
+
+.realism-lead, .flags-lead {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.realism-lead {
+  font-family: var(--sans);
+  border-right: 1px solid var(--border);
+  padding-right: var(--space-3);
+  cursor: help;
+}
+
+.flags-lead {
+  margin: var(--space-4) 0 var(--space-2);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.flags-hint { color: var(--text-muted); }
+
+/* A marker, so a flag reads as something that opens. Without it the flags were chips
+   that happened to be clickable, which nobody discovers. */
+.flag-mark {
+  display: inline-block;
+  width: 1em;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+.flag[open] .flag-mark::after { content: "−"; }
+.flag[open] .flag-mark { font-size: 0; }
+.flag[open] .flag-mark::after { font-size: var(--font-sm); }
+
+.card { cursor: help; }
+
+.card-dir {
+  margin-left: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+}
+
+.stack-lead { margin: 0 0 var(--space-3); max-width: 78ch; }
+.tier-count { margin-left: auto; }
