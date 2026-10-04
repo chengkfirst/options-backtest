@@ -162,6 +162,18 @@ def imports(src: str) -> list[tuple[set[str], str]]:
     return out
 
 
+def namespace_imports(src: str) -> list[tuple[str, str]]:
+    """``import * as name from "path"`` — the local name and the path.
+
+    A separate form, and the one the shell uses to reach a view. Its names cannot be
+    checked against the target's exports (the whole module is bound), but its **path**
+    can, and a path that does not resolve is the failure that matters: the browser logs
+    one line and the surface never appears.
+    """
+    return re.findall(r"import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*[\"']([^\"']+)[\"']",
+                      src)
+
+
 def defined(src: str) -> set[str]:
     clean = strip_noise(src)
     names = set(re.findall(
@@ -220,6 +232,11 @@ def main() -> int:
                     f"does not export {'it' if len(missing) == 1 else 'them'}"
                 )
             got |= names
+        for local, path in namespace_imports(src):
+            if not (f.parent / path).resolve().exists():
+                problems.append(f"{here} imports * as {local} from {path}, and there is "
+                                f"no such file")
+            own.add(local)
         # The import statements themselves are removed first. Left in, every imported name
         # counts as a mention of itself, and the unused-import rule below can never fire —
         # it was written that way at first and was quietly dead.

@@ -1,0 +1,175 @@
+/* states.css — the gallery's own layout.
+ *
+ * Only the gallery's scaffolding lives here. The components inside it are styled by the
+ * stylesheets that ship, or the gallery would be reviewing something else.
+ */
+
+body {
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: var(--font-base);
+  line-height: var(--line-body);
+  margin: 0;
+}
+
+.g-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.g-top h1 {
+  font-family: var(--display);
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
+  margin: 0;
+}
+
+.g-top p {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  margin: 0;
+}
+
+.g-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.g-actions .chip {
+  text-decoration: none;
+  line-height: 1.8;
+}
+
+.g-main {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  max-width: 1180px;
+}
+
+.g-sec > h2 {
+  font-family: var(--display);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  margin: 0 0 var(--space-1);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.g-sec > p {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  margin: 0 0 var(--space-4);
+  max-width: 76ch;
+}
+
+/* One state of one component, labelled. The label is part of the review: a state nobody
+   can name is a state nobody checks. */
+.g-case {
+  margin: var(--space-4) 0 0;
+}
+
+.g-case > h3 {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-regular);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 var(--space-2);
+}
+
+.g-frame {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.g-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+/* ── the token palette ── */
+.g-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-2);
+}
+
+.g-swatch {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  font-size: var(--font-xs);
+}
+
+.g-chip-colour {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+}
+
+.g-swatch dl {
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--surface-2);
+}
+
+.g-swatch dt {
+  font-family: var(--mono);
+  color: var(--text-primary);
+}
+
+.g-swatch dd {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+/* ── a loading skeleton ──
+   Shaped like the content it replaces, and shown only after 300 ms (section 11). The
+   animation is a slow sweep rather than a pulse: a pulsing block reads as a control. */
+.g-skeleton, .skeleton {
+  background: linear-gradient(90deg,
+    var(--surface-2) 0%,
+    color-mix(in srgb, var(--text-muted) 12%, var(--surface-2)) 50%,
+    var(--surface-2) 100%);
+  background-size: 200% 100%;
+  animation: sweep 1.4s linear infinite;
+  border-radius: var(--radius-sm);
+  height: 14px;
+}
+
+@keyframes sweep {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .g-skeleton, .skeleton { animation: none; }
+}
+
+/* ── the hold-out hatch, so the token can be seen ── */
+.g-holdout {
+  height: 44px;
+  background: var(--holdout-fill);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+}

@@ -31,16 +31,10 @@ export const CONTRACT = {
         // assumed, because the counterfactual needs the shadow prices only the
         // event-driven engine keeps.
         "validations",
-        // What `describeConfig` reads to say what ran. The selection fields are a
-        // feasible region, not one pinned point, so the guard's sample run fills every
-        // one of them in — otherwise "absent because nobody asked for it" and "absent
-        // because it was renamed" look the same and neither fails.
+        // What `describeConfig` reads to say what ran.
         "config.symbol", "config.start", "config.end", "config.entry", "config.engine",
-        "config.select.right", "config.select.dte_lo", "config.select.dte_hi",
-        "config.select.delta_lo", "config.select.delta_hi", "config.select.delta",
-        "config.select.max_spread", "config.select.min_open_interest",
-        "config.exit.take_profit", "config.exit.stop_loss", "config.exit.hold_days",
-        "config.exit.dte_floor", "config.sizing.method",
+        "config.select.right", "config.exit.take_profit", "config.exit.stop_loss",
+        "config.exit.hold_days", "config.exit.dte_floor", "config.sizing.method",
         // The trade columns every chart and table reads. The column allowlist in
         // runner.py has dropped one of these before, and every group then came out empty.
         "rows.*.net_pnl", "rows.*.gross_pnl", "rows.*.fees", "rows.*.entry_date",
@@ -49,6 +43,23 @@ export const CONTRACT = {
         "rows.*.entry_iv", "rows.*.entry_delta",
         "diagnostics.*.kind", "diagnostics.*.count", "diagnostics.*.first",
         "diagnostics.*.last", "diagnostics.*.reasons"],
+  /* Read defensively, and genuinely absent when nobody asked for one.
+   *
+   * Selection is a feasible region, not a pinned point, and "blank means no limit" — the
+   * runner only passes on the fields that were filled in, so a configuration without an
+   * open-interest floor has no `min_open_interest` key at all. The interface renders each
+   * of these only when it is there.
+   *
+   * They are still declared, because a **rename** has to fail somewhere: `check_wiring`
+   * checks them against a sample run that fills every one in, which it can do because it
+   * writes its own payload. The runtime check cannot — it sees whatever was configured,
+   * and demanding these there reported a missing field on every ordinary run, which is
+   * how a notice strip gets ignored.
+   */
+  run_when_set: ["config.select.dte_lo", "config.select.dte_hi",
+                 "config.select.delta_lo", "config.select.delta_hi",
+                 "config.select.delta", "config.select.max_spread",
+                 "config.select.min_open_interest"],
   // Only the event-driven engine has these; their absence under the trade table is normal
   run_optional: ["equity", "equity_metrics", "scenarios", "attribution",
                  "equity.*.date", "equity.*.equity_mid", "equity.*.equity_liq",

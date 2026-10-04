@@ -117,6 +117,19 @@ def main() -> int:
                             f"record does not contain (it stops at {where})")
         elif state is EMPTY:
             unchecked.append(f"run.{path}")
+    # Declared as read-when-present. The interface handles their absence, so the runtime
+    # check lets them go; here the sample payload filled every one of them in, which is
+    # exactly what makes a rename fail rather than pass as "nobody asked for it".
+    for path in spec.get("run_when_set", []):
+        state, where = resolve(record, path)
+        if state is MISSING:
+            problems.append(
+                f"the interface reads run.{path} when it is set, and this run set it and "
+                f"the record does not contain it (it stops at {where}). Either it was "
+                f"renamed, or the sample payload below no longer fills it in"
+            )
+        elif state is EMPTY:
+            unchecked.append(f"run.{path}")
     for path in spec.get("run_optional", []):
         # A path under an absent root is the normal trade-table case; only the root itself
         # is required of an event-driven run.

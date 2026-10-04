@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Options Bench · component states</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="bench.css">
+<link rel="stylesheet" href="css/shell.css">
+<link rel="stylesheet" href="css/states.css">
+
+<!--
+  The component and state gallery.
+
+  The design plan (section 13) asks for Storybook: every component shipped with all of its
+  states, and design review done on the running interface rather than on mockups. This
+  project has no npm and no build step — the service is the Python standard library and
+  the page loads its modules directly — so Storybook is replaced by this page, which keeps
+  the part that matters: **it imports the real modules and renders the real components**,
+  so what is reviewed here is what ships. The deviation is recorded in the frontend plan.
+
+  What belongs here: every component, in every state from the plan's section 11, plus the
+  token palette with the contrast decisions visible. What does not: a second
+  implementation of anything. If something can only be shown here by reimplementing it,
+  the component is too entangled with its page and that is the finding.
+-->
+
+<header class="g-top">
+  <h1>component states</h1>
+  <p>The real modules, rendered. Review this page, not a mockup.</p>
+  <div class="g-actions">
+    <button class="chip" id="theme" type="button"></button>
+    <a class="chip" href="index.html">the bench</a>
+  </div>
+</header>
+
+<main class="g-main" id="gallery">
+  <p class="hint">loading the modules…</p>
+</main>
+
+<script type="module" src="js/states.js"></script>

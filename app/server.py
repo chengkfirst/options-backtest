@@ -19,6 +19,7 @@ The standard library is the only dependency. The core endpoints:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import traceback
@@ -40,7 +41,9 @@ from runner import (  # noqa: E402
 )
 from store import VERDICTS  # noqa: E402
 
-PORT = 8765
+#: The port, overridable so a second instance can run beside the first — reviewing an
+#: interface change while a long backtest holds the usual port is the case that wanted it.
+PORT = int(os.environ.get("BENCH_PORT", "8765"))
 STATIC = ROOT / "static"
 
 #: The columns sent to the front end. All of them would be heavy (1,700 trades x 44

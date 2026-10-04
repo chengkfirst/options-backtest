@@ -214,3 +214,11 @@ body.rail-open .rail-name {
   top: var(--topbar-height);
   height: calc(100vh - var(--topbar-height));
 }
+
+/* The mode badge, in the top bar. bench.css styles `.mode` for the panel it used to sit
+   in; inside the bar it needs no top margin and sits beside the title. */
+.topbar .mode {
+  margin: 0;
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+}

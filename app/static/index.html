@@ -24,6 +24,10 @@
     <button class="icon-btn" id="railToggle" type="button" title="widen the rail"
             aria-label="widen the rail">&#9776;</button>
     <h1>Options Bench</h1>
+    <!-- The mode badge belongs in the top context bar (the design plan's section 4), not
+         in the panel: it describes the service, not the strategy being composed. It was
+         in the panel head beneath a second copy of the page title. -->
+    <p class="mode" id="mode">connecting…</p>
     <div class="topbar-right">
       <span class="job-strip" id="jobStrip" hidden></span>
       <button class="chip" id="theme" type="button"></button>
@@ -39,11 +43,6 @@
 
 <!-- ══ left: parameters, organised by the seven components ══ -->
 <aside class="panel">
-  <div class="panel-head">
-    <h1>Options Bench</h1>
-    <p class="mode" id="mode">connecting…</p>
-  </div>
-
   <form id="form" class="panel-body">
 
     <!-- What to run: symbol, range, engine. Boilerplate, kept to two rows so it does
