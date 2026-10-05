@@ -392,15 +392,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "one slot overwriting another's value, or a reader unable to say which "
                 "slot produced a field"),
     Requirement("S.namespaces_candidate", "S",
-                "The setup and entry slots write to their namespaces too, as the "
-                "candidate's own record",
-                "a trade whose candidate namespace cannot say which regime armed it",
-                not_built="setup and entry are still bare callables rather than "
-                          "components, so there is nothing to hand a writer to. Their "
-                          "namespaces exist and stay empty, which is honest: an empty "
-                          "namespace is not a claim. `hedge` is absent entirely. This "
-                          "arrives with the component protocol reaching those two slots, "
-                          "which is also what S.lifecycle's Armed state needs"),
+                "The setup and entry slots write to their namespaces too, and the "
+                "candidate's record is copied into the trade when it opens",
+                "a trade carrying a candidate record from a later arming rather than "
+                "from the session it opened on"),
     Requirement("S.view", "S",
                 "Every slot reads through the DataView, so the availability cut applies "
                 "to all of them",

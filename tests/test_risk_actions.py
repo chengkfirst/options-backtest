@@ -53,11 +53,42 @@ class TestVocabulary:
     def test_every_action_says_whether_it_is_built(self):
         assert set(BUILT) == set(RiskAction)
 
-    def test_an_unbuilt_action_is_refused_with_its_reason(self):
-        """Absent from the enum would give an attribute error somewhere unhelpful;
-        present and silently ignored would be a risk rule that appears to fire."""
-        with pytest.raises(StartupError, match="not built"):
-            require_built(RiskAction.PAUSE)
+    def test_every_action_in_the_vocabulary_is_built(self):
+        """This asserted the opposite until `pause` landed.
+
+        It required an unbuilt action to be refused **with its reason**, which was the
+        right test while one of the four was declared and not executable. All four are
+        built now, so the mechanism to check is the other one: that `BUILT` and the
+        vocabulary have not drifted apart, and that `require_built` is still the gate a
+        future unbuilt action would go through.
+        """
+        from backtest.portfolio.risk_actions import BUILT, RiskAction, require_built
+
+        # Every action, `none` included: it is in the vocabulary, so a reader asking
+        # "is this one built" has to get an answer for it too.
+        assert set(BUILT) == set(RiskAction), (
+            f"BUILT and the action vocabulary have drifted. Only in the vocabulary: "
+            f"{sorted(a.value for a in set(RiskAction) - set(BUILT))}; only in BUILT: "
+            f"{sorted(str(k) for k in set(BUILT) - set(RiskAction))}"
+        )
+        for action in RiskAction:
+            require_built(action)
+
+    def test_an_action_declared_unbuilt_is_still_refused_with_its_reason(self,
+                                                                        monkeypatch):
+        """The gate itself, exercised on a planted entry.
+
+        The four are all built, so without this the refusal path has no test at all --
+        and it is the path that keeps a future declared-but-absent action from running
+        as a silent no-op.
+        """
+        import backtest.portfolio.risk_actions as actions
+
+        monkeypatch.setitem(actions.BUILT, actions.RiskAction.LIQUIDATE,
+                            "planted: not built in this test")
+        with pytest.raises(StartupError) as caught:
+            actions.require_built(actions.RiskAction.LIQUIDATE)
+        assert "planted" in str(caught.value)
 
     def test_scale_down_needs_a_ratio(self):
         """How hard to cut is a risk decision. A platform-chosen ratio would size the

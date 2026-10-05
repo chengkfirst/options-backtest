@@ -324,6 +324,13 @@ class TestEachSlotsRecordIsItsOwn:
         assert record.slot_record, "no slot recorded anything"
         for key in record.slot_record:
             slot = key.split(".")[0]
-            assert slot in ("take_profit", "stop_loss", "time_exit", "candidate"), (
-                f"{key!r} is not attributable to a slot"
+            # The slot list comes from the registry rather than being written out here:
+            # it was a literal, and it went stale the day `setup` and `entry` got their
+            # namespaces -- the test then failed for a slot that had correctly started
+            # recording.
+            from backtest.core.component import SLOTS
+
+            assert slot in set(SLOTS) | {"candidate"}, (
+                f"{key!r} is not attributable to a slot. Known: "
+                f"{sorted(set(SLOTS) | {'candidate'})}"
             )

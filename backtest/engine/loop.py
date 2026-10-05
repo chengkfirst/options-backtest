@@ -416,6 +416,14 @@ class EventDrivenEngine:
             # The stream follows on, so an order in flight still names a real event.
             self.bus.resume(held.events, held.next_event_id)
 
+        #: symbol -> that candidate's context, so the setup slot's record can be copied
+        #: into a trade when one opens. Held on the instance rather than passed through
+        #: `_execute`'s signature: the fill is a day or more after the arming, and
+        #: threading it through would put a decision's record in an execution argument.
+        candidates_ctx = {}
+        self._candidate_context = candidates_ctx
+        paused_on: "date | None" = None
+        paused_why = ""
         sessions = [d for d in self.market.sessions()
                     if (held is None or d > held.through)
                     and (until is None or d <= until)]
@@ -613,6 +621,26 @@ class EventDrivenEngine:
                     f"{self.brake.ref}: {self._brake_state} -> "
                     f"{self._risk.action.value} ({self._risk.reason})")
                 self._brake_state = self._risk.action.value
+            # **Pause stops the run.** That is what makes it a fourth action rather than
+            # a second name for `no_new_positions`: the run ends here, the result says it
+            # paused, and the checkpoint is on it so resuming is a separate deliberate
+            # act. A pause that let the loop continue would be indistinguishable from the
+            # other three; one that ended the run with nothing saying so would be a
+            # backtest that stopped early, reported as though it had run to the end.
+            #
+            # The day's bookkeeping above has already run -- the mark, the invariants --
+            # so the checkpoint is taken at a session boundary like any other and a
+            # resumed run continues from the next session.
+            if self._risk.action is RiskAction.PAUSE:
+                self.events.record(
+                    EventKind.CANDIDATE_DROPPED, day,
+                    f"paused: {self._risk.reason}. The run stops here with a checkpoint; "
+                    f"resume it with resume_from= once the reason no longer holds")
+                paused_on, paused_why = day, self._risk.reason
+                self._track_excursions(ledger, open_trades, quotes, day, paths)
+                self._track_shadow(shadowing, day, shadow)
+                self.bus.drain(day)
+                break
             self._track_excursions(ledger, open_trades, quotes, day, paths)
             self._track_shadow(shadowing, day, shadow)
 
@@ -748,7 +776,18 @@ class EventDrivenEngine:
                 candidate.arm("no setup slot, so every session is armed")
             else:
                 note = candidate.state
-                armed = bool(strategy.setup(self._market_ctx(day, ledger)))
+                # **The setup slot writes to its own namespace**, through a writer bound
+                # to `setup` exactly as the exit slots get theirs. The candidate's
+                # context is rebuilt each session rather than accumulated: what a trade
+                # wants is what the candidate saw **when it opened**, and a context
+                # carrying three months of arming decisions would answer a different
+                # question. Sessions it spent armed are the candidate's own counters.
+                candidate_ctx = market_only({})
+                setup_note = candidate_ctx.writer("setup")
+                armed = bool(strategy.setup(
+                    replace(self._market_ctx(day, ledger), write=setup_note)))
+                setup_note.update({"armed": armed, "session": day.isoformat()})
+                candidates_ctx[self.config.symbol] = candidate_ctx
                 if armed:
                     candidate.arm("the setup slot armed this session")
                 else:
@@ -900,13 +939,14 @@ class EventDrivenEngine:
                      "scenarios": list(self.scenario_limit.scenarios)}
                     if self.scenario_limit is not None else None),
             },
+            paused_on=paused_on, paused_reason=paused_why,
             checkpoint=(self._checkpoint(
-                strategy, sessions[-1], ledger=ledger, queue=queue,
+                strategy, paused_on or sessions[-1], ledger=ledger, queue=queue,
                 open_trades=open_trades, records=records, snapshots=snapshots,
                 greeks=greeks_daily, paths=paths, shadow=shadow, actions=actions,
                 shadowing=shadowing, deliveries=deliveries, candidates=candidates,
                 next_trade_id=next_trade_id)
-                if until is not None else None),
+                if (until is not None or paused_on is not None) else None),
         )
 
     def _checkpoint(self, strategy, through: date, **state) -> "Checkpoint":
@@ -1704,6 +1744,24 @@ class EventDrivenEngine:
         ))
 
         if intent.kind is Action.OPEN:
+            # **The candidate's record, copied in when the trade opens** -- the document's
+            # own words. A copy and not a reference: the candidate arms again later with
+            # different values, and a trade holding a live reference would silently
+            # acquire the state of a later arming. What is worth keeping is what the
+            # candidate saw *when this trade opened*, and that is only worth keeping if
+            # it cannot change afterwards.
+            born = market_only({})
+            from_candidate = self._candidate_context.get(intent.contract.symbol)
+            if from_candidate is not None:
+                born = born.opened_from(dict(from_candidate.of("setup")))
+            entry_note = born.writer("entry")
+            entry_note.update({
+                "trigger": intent.reason or "entry",
+                "decided_on": intent.created.isoformat(),
+                "filled_on": day.isoformat(),
+                "contract": str(intent.contract),
+                "quantity": intent.quantity,
+            })
             open_trades[intent.trade_id] = OpenTrade(
                 trade_id=intent.trade_id, contract=intent.contract, entry_date=day,
                 entry_price=price, quantity=intent.quantity, side=intent.side,
@@ -1718,6 +1776,7 @@ class EventDrivenEngine:
                 # long call and a short put, down for a long put and a short call.
                 direction=(1 if intent.contract.right is Right.CALL else -1)
                           * (1 if intent.side is Side.BUY else -1),
+                slot_record=born,
             )
             return None
 

@@ -152,6 +152,13 @@ class EventDrivenResult:
     #: None for a whole run: a checkpoint of a finished run is a thing nobody can
     #: continue, and offering one would invite the attempt.
     checkpoint: Any = None
+    #: The session a risk rule paused the run on, or None.
+    #:
+    #: **A result that stopped early has to say so.** Without this a paused run and a
+    #: completed one look alike -- the same shape with fewer trades -- and every figure
+    #: computed from it would be over a period nobody chose.
+    paused_on: Any = None
+    paused_reason: str = ""
 
     @property
     def actions_frame(self):

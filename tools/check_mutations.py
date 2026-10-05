@@ -317,6 +317,31 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
     ),
     Mutation(
+        # A pause that lets the loop continue is a second name for no_new_positions.
+        "pause stops the run",
+        "backtest/engine/loop.py",
+        "            if self._risk.action is RiskAction.PAUSE:",
+        "            if False:",
+        ("tests/test_pause.py::TestAPausedRunSaysSo",),
+    ),
+    Mutation(
+        "a paused run carries a checkpoint",
+        "backtest/engine/loop.py",
+        "                if (until is not None or paused_on is not None) else None),",
+        "                if until is not None else None),",
+        ("tests/test_pause.py::TestAPausedRunSaysSo",
+         "tests/test_pause.py::TestResumingAPausedRun"),
+    ),
+    Mutation(
+        # A reference rather than a copy shows a trade closed in February a regime
+        # from June.
+        "the candidate's record is copied into the trade that opens",
+        "backtest/engine/loop.py",
+        "                born = born.opened_from(dict(from_candidate.of(\"setup\")))",
+        "                pass  # born = born.opened_from(...)",
+        ("tests/test_trade_context.py::TestTheCandidateAndEntrySlots",),
+    ),
+    Mutation(
         # A buy placed before the sell that pays for it is a rejected order in a cash
         # account, on a day the strategy intended to trade.
         "sells are ordered before buys",
