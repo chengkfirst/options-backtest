@@ -260,11 +260,11 @@ textarea.code {
 .layer { margin: 14px 0 0; }
 .layer-head { padding: 0 0 5px; border-bottom: 1px solid var(--line); }
 .layer-n { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; color: var(--ink-3);
-           text-transform: uppercase; cursor: help; }
+           text-transform: uppercase; }
 .comp { padding: 8px 0 4px; border-bottom: 1px solid var(--line-soft); }
 .comp:last-child { border-bottom: 0; }
 .comp-h { margin: 0 0 5px; font-size: 12px; font-weight: 600; color: var(--ink);
-          display: flex; align-items: baseline; gap: 6px; cursor: help; }
+          display: flex; align-items: baseline; gap: 6px; }
 .comp-badge { font-size: 9.5px; font-weight: 400; padding: 0 4px; border-radius: 2px;
               background: var(--sunk); color: var(--ink-3); }
 .comp-badge.missing { background: var(--warn-soft); color: var(--warn); }

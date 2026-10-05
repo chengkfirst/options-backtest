@@ -41,98 +41,74 @@
   <!-- ══ the bench ══ -->
   <section class="bench" id="view-bench">
 
+<!-- ══ left: the rule itself ══
 
-<!-- ══ left: parameters, organised by the seven components ══ -->
+     This was a form: seven slot cards, a variant picker per slot and a generated control
+     per parameter. It is a text document now, and the document is the exact payload the
+     engine receives — no field is translated on the way out and none is filled in when
+     omitted, so what is on screen is what ran.
+
+     The form was the wrong shape for the work. A researcher who already knows what rule
+     they want to test does not want to be walked through seven dropdowns to say it, and a
+     dropdown can only offer the rules someone anticipated: the engine orders contracts by
+     target delta, so a delta slider quietly answers "which contract" with the only answer
+     it has, whatever rule was actually intended. A document can hold the rule as written
+     and the interface can say where the engine falls short of it, which is the honest
+     version of the same screen. -->
 <aside class="panel">
-  <form id="form" class="panel-body">
+  <div class="panel-body">
+    <label class="sb grow rule-name">name
+      <input type="text" id="ruleName" value="untitled" spellcheck="false"
+             autocomplete="off"></label>
 
-    <!-- What to run: symbol, range, engine. Boilerplate, kept to two rows so it does
-         not compete with the strategy for space. -->
-    <div class="setup-bar">
-      <label class="sb narrow">symbol<select name="symbol" id="symbol"></select></label>
-      <label class="sb">from<input type="date" name="start" value="2020-01-01"></label>
-      <label class="sb">to<input type="date" name="end" value="2024-12-31"></label>
+    <div class="rule-wrap">
+      <textarea id="ruleText" class="code rule-text" spellcheck="false"
+                autocomplete="off" autocapitalize="off"></textarea>
     </div>
-    <div class="setup-bar">
-      <label class="sb grow">engine<select name="engine" id="engine">
-        <option value="trade_table">trade table — fast, for sweeps</option>
-        <option value="event_driven" selected>event driven — has portfolio state</option>
-      </select></label>
-      <label class="sb narrow" id="concurrentWrap">max concurrent<input type="number" name="max_concurrent" value="5" min="1" max="50"></label>
-    </div>
-    <p class="hint setup-note"><span id="spanHint"></span>
-      <span id="engineLock" hidden>In plan mode the engine is locked to event driven.</span></p>
-
-    <!-- How the strategy is written: rule by rule, or one function for all of it. -->
-    <div class="tabs mode-tabs" role="tablist">
-      <button type="button" class="tab on" data-strat="params" role="tab">rule by rule</button>
-      <button type="button" class="tab" data-strat="plan" role="tab">one plan function</button>
-    </div>
-
-    <!-- The code box, shown only in plan mode -->
-    <div id="planWrap" hidden>
-      <textarea name="plan_code" id="planCode" spellcheck="false" rows="20" class="code"></textarea>
-      <p class="hint"><button type="button" class="link" id="planHelp">what is in ctx</button></p>
-      <pre class="help" id="planHelpBody" hidden></pre>
-    </div>
-
-    <!-- The seven components, **generated from the backend definition**, not written
-         by hand. Hand-written HTML drifts from components.py. -->
-    <div id="comps"></div>
-
-    <details class="ref" id="tradeoffRef">
-      <summary>contract selection reference<span class="ref-n" id="toWhen"></span></summary>
-      <p class="hint">Spread over <b>moneyness x tenor</b>. The numbers come from <b>that
-        day's real chain</b>, not a formula — with your own data they reflect the real
-        skew automatically.</p>
-      <div id="tradeoffBody" class="to-body"></div>
-    </details>
+    <p class="rule-state" id="ruleState"></p>
 
     <details class="ref">
-      <summary>custom signals<span class="ref-n">optional</span></summary>
-      <textarea name="signals_code" id="signalsCode" spellcheck="false" rows="7" class="code"
-        title="Define a SIGNALS dict. Always use adjusted(), or ex-dividend days produce false gaps."></textarea>
-    </details>
-
-    <details class="ref">
-      <summary>signal reference<span class="ref-n" id="sigCount"></span></summary>
-      <input type="search" id="sigSearch" placeholder="search a name or a meaning…" class="ref-search">
+      <summary>signals available to the entry expression<span class="ref-n" id="sigCount"></span></summary>
+      <input type="search" id="sigSearch" placeholder="name or meaning" class="ref-search">
       <div id="sigRef" class="sig-ref"></div>
     </details>
 
-    <details class="ref">
-      <summary>how the two engines differ</summary>
-      <p class="hint" id="engineHint"></p>
+    <details class="ref" id="tradeoffRef">
+      <summary>contract selection, that day's real chain<span class="ref-n" id="toWhen"></span></summary>
+      <div id="tradeoffBody" class="to-body"></div>
     </details>
-
-  </form>
+  </div>
 
   <div class="panel-foot">
     <button class="run" id="run">run</button>
-    <p class="hint" id="runHint">About 40 seconds over ten years; a shorter range is much faster.</p>
+    <p class="hint" id="runHint"></p>
   </div>
 </aside>
 
-<!-- ══ right: results ══ -->
+<!-- ══ right: the rules that have been saved, and the runs made from them ══ -->
 <main class="stage">
 
-  <!-- The bench composes a run and lists what has been run. **Reading a result happens on
-       the analysis surface**, not here: the design plan separates composing (section 4)
-       from analysing (section 6), and one page doing both was a single endless scroll of
-       every chart at once, with no way to tell which question each answered. -->
+  <!-- What the document asks for that the engine cannot do. Derived from the document,
+       not a fixed list: silence here means nothing was detected, not that nothing is
+       wrong. It sits here rather than under the editor because a rule of any size is
+       taller than the panel, and this is the part that has to be read before pressing
+       run, not after scrolling to find it. -->
+  <section class="runs rule-gaps" id="ruleGaps" hidden></section>
+
+  <section class="runs" id="savedSec" hidden>
+    <div class="runs-head"><h2>saved rules</h2></div>
+    <div class="scroll"><table id="saved"></table></div>
+  </section>
+
   <section class="runs" id="runsSec" hidden>
-    <div class="runs-head">
-      <h2>runs in this session</h2>
-      <p>Click a run's number to open it on the analysis page. Pin one as the baseline and
-         the others show their change against it.</p>
-    </div>
+    <div class="runs-head"><h2>runs in this session</h2></div>
     <div class="scroll"><table id="runs"></table></div>
   </section>
 
   <div class="placeholder" id="placeholder">
     <h2>nothing run yet</h2>
-    <p>Fill in the components on the left, then press run.<br>
-       The result opens on its own page, where it can be read, brushed and linked to.</p>
+    <p>Write the rule on the left and press run, or click a saved rule to load it.<br>
+       The result opens on its own page.</p>
     <p class="hint" id="gapList" hidden></p>
   </div>
 </main>

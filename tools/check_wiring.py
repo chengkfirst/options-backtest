@@ -21,8 +21,10 @@ declaration at runtime and reports anything missing at once.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -80,6 +82,12 @@ def resolve(obj: object, path: str) -> tuple[str, str]:
 
 
 def main() -> int:
+    # This guard runs a real backtest, and a real backtest is saved. Send it somewhere
+    # temporary: for a while every invocation wrote a run into the researcher's own
+    # store under the default name, so their run history filled up with this guard's
+    # take-profit and delta band next to their own work under the same name. Two
+    # records of different things in one list reads as one strategy behaving randomly.
+    os.environ["BENCH_STORE"] = tempfile.mkdtemp(prefix="check_wiring-")
     sys.path.insert(0, str(ROOT))
     from app.server import _meta_payload, run_backtest
 

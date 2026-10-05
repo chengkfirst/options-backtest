@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import sys
 from dataclasses import dataclass, field
@@ -37,7 +38,22 @@ from typing import Any, Iterable
 from backtest.core.errors import StartupError
 
 ROOT = Path(__file__).resolve().parent.parent
-HOME = ROOT / "research"
+
+# Where the research record lives. The default is the researcher's own store, under the
+# project, and that is what the server uses.
+#
+# BENCH_STORE exists because a guard must not write into it. `tools/check_wiring.py`
+# runs a real backtest to check the interface's declared fields against a real response,
+# and for a while every invocation of it saved that run into `research/` under the
+# default strategy name — twenty-seven of them, interleaved with real runs under the same
+# name "untitled", each with the guard's own take-profit and delta band. Opening the run
+# history then showed runs that looked like the same strategy producing wildly different
+# numbers, which reads exactly like a non-deterministic engine. The engine was
+# deterministic the whole time; the record had someone else's runs in it.
+#
+# So: anything that runs a backtest for its own verification points this at a temporary
+# directory. Nothing but the server and the CLI writes to the real store.
+HOME = Path(os.environ.get("BENCH_STORE") or ROOT / "research")
 DB_PATH = HOME / "research.db"
 TRADES_DIR = HOME / "trades"
 

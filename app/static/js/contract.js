@@ -47,6 +47,12 @@ export const CONTRACT = {
         // backend computed; the page renders them and derives none of its own.
         "analysis", "analysis.intervals", "analysis.investor", "analysis.costs",
         "analysis.by_exit_reason", "analysis.excursion",
+        // The headline comparison: the same first-order exposure held in shares. A list,
+        // so the element fields are declared with `*`.
+        "analysis.baselines", "analysis.baselines.*.name",
+        "analysis.baselines.*.strategy", "analysis.baselines.*.baseline",
+        "analysis.baselines.*.excess", "analysis.baselines.*.note",
+        "analysis.baselines.*.valid_on_synthetic",
         "analysis.intervals.net_pnl.estimate", "analysis.intervals.net_pnl.low",
         "analysis.intervals.net_pnl.high", "analysis.intervals.net_pnl.level",
         "analysis.intervals.net_pnl.caveat",

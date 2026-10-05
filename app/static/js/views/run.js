@@ -92,31 +92,47 @@ export async function enter({params, query}){
  * most change the answer.
  */
 function verdict(){
-  const inv = RUN.analysis?.investor || {};
-  const beat = inv.strategy_total != null && inv.buy_and_hold != null
-    ? inv.strategy_total - inv.buy_and_hold : null;
   const made = RUN.net_pnl;
-  const tone = beat != null ? (beat > 0 ? "good" : "bad") : (made > 0 ? "good" : "bad");
+  const verb = made >= 0 ? "made" : "lost";
 
-  const verb = made >= 0 ? "Made" : "Lost";
-  const headline = beat != null
-    ? `${verb} ${size(made)} — a ${pct(Math.abs(inv.strategy_total))}
-       ${inv.strategy_total >= 0 ? "gain" : "loss"} where holding
-       ${esc(RUN.config?.symbol || "the underlying")} returned ${pct(inv.buy_and_hold)}.`
-    : `${verb} ${size(made)} over ${RUN.n_trades} trades.`;
+  // The comparison that answers the question. Buy-and-hold was the old headline and it
+  // flatters or punishes an option strategy for the wrong reason: it judges a position
+  // held for days against the underlying's whole-period drift. `delta_equivalent` holds
+  // the same first-order exposure in shares over the same dates, so the excess is what
+  // the option itself added — convexity and a capped loss, net of decay and the spread.
+  const base = (RUN.analysis?.baselines || [])
+    .find(b => b.name && b.name.includes("delta-equivalent"));
+  const inv = RUN.analysis?.investor || {};
 
-  // The one caveat most likely to change the reading, named here rather than left for the
-  // reader to find among the others.
-  const worst = (RUN.anomalies || []).find(f => f.severity === "high");
+  let line, tone;
+  if(base && !absent(base.excess)){
+    const under = esc(RUN.config?.symbol || "the underlying");
+    tone = base.excess > 0 ? "good" : "bad";
+    line = `${verb} ${size(made)}; the same exposure in ${under} shares would have
+      ${base.baseline >= 0 ? "made" : "lost"} ${size(base.baseline)}.
+      <b>The options ${base.excess > 0 ? "added" : "cost"} ${size(base.excess)}.</b>`;
+  } else if(!absent(inv.buy_and_hold) && !absent(inv.strategy_total)){
+    tone = inv.strategy_total > inv.buy_and_hold ? "good" : "bad";
+    line = `${verb} ${size(made)} — ${pct(inv.strategy_total)} where holding
+      ${esc(RUN.config?.symbol || "the underlying")} returned ${pct(inv.buy_and_hold)}.`;
+  } else {
+    tone = made > 0 ? "good" : "bad";
+    line = `${verb} ${size(made)} over ${RUN.n_trades} trades.`;
+  }
+
+  // One caveat, the one most likely to change the reading. The rest are in the tabs.
   const thin = RUN.n_trades < (META?.thresholds?.bootstrap_min_observations?.value ?? 0);
-  const caveat = thin
-    ? `On ${RUN.n_trades} trades, too few for any of this to carry an interval.`
+  const worst = (RUN.anomalies || []).find(f => f.severity === "high");
+  const caveat = thin ? `${RUN.n_trades} trades — too few to carry an interval.`
+    : base && base.valid_on_synthetic === false && RUN.boundary
+      ? "Synthetic chain: the shares are priced from real closes and the options are not, "
+        + "so read the direction of this comparison, not its size."
     : worst ? worst.headline
-    : (RUN.boundary ? "On a synthetic option chain: the option-side numbers describe "
-                    + "Black-Scholes, not the market." : "");
+    : RUN.boundary ? "Synthetic option chain: the option-side numbers are Black-Scholes."
+    : "";
 
   return `<div class="verdict ${tone}">
-    <p class="verdict-line">${headline}</p>
+    <p class="verdict-line">${line}</p>
     ${caveat ? `<p class="verdict-caveat">${esc(caveat)}</p>` : ""}
   </div>`;
 }
@@ -603,19 +619,15 @@ function render(query){
   $("view-run").innerHTML = `
     <section class="tier-top">
       <header class="run-head">
-        <h2>run ${RUN.id}<span class="run-idea"
-          data-tip="The strategy this run belongs to, and which version of it. Editing the strategy makes a new version; running it again makes a new run."
-          >${esc(RUN.strategy_name || "untitled")} · version ${
+        <h2>run ${RUN.id}<span class="run-idea">${esc(RUN.strategy_name || "untitled")} · version ${
           RUN.strategy_ver ?? "?"}</span></h2>
-        <p class="run-cfg" data-tip="The entry condition this run used.">enters when ${
+        <p class="run-cfg">enters when ${
           esc(typeof RUN.config?.entry === "string"
             ? RUN.config.entry : "a plan function decides")}</p>
         <div class="run-actions">
           <button type="button" class="chip" id="markToggle"
-            data-tip="Display only. An option can be marked at the mid price or at the bid — what it could actually be sold for. Switching this redraws the curve; it does not recompute the metrics, which were worked out on the mark the run was configured with."
             >showing the ${MARK === "liq" ? "bid" : "mid"} mark</button>
-          <a class="chip" href="#/bench"
-             data-tip="The bench is where a configuration is written and run.">compose a run</a>
+          <a class="chip" href="#/bench">compose a run</a>
         </div>
       </header>
       ${verdict()}

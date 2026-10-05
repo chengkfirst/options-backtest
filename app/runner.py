@@ -381,6 +381,31 @@ def _analysis(result, record: dict[str, Any]) -> dict[str, Any]:
         result.by_exit_reason().reset_index().to_json(orient="records")))
     attempt("investor", lambda: result.investor_view())
 
+    # The baseline that answers the question actually being asked. `investor_view` carries
+    # buy-and-hold, which for an option strategy is the weakest comparison there is: it
+    # compares a leveraged, time-decaying position against one unit of the underlying held
+    # throughout, so a strategy that was only ever in the market for days is judged against
+    # a year of drift. `delta_equivalent` instead holds **the same first-order exposure in
+    # shares over the same dates**, which isolates the one thing the option was bought for:
+    # convexity and a capped loss, against time decay and the spread.
+    #
+    # draws=0 keeps this free. It is arithmetic over the trade log and the underlying's
+    # closes, no second backtest. The random-entry baseline in the same module does need a
+    # full run per draw and stays a validation that has to be asked for.
+    attempt("baselines", lambda: [
+        {
+            "name": c.name,
+            "strategy": _finite(c.strategy),
+            "baseline": _finite(c.baseline),
+            "excess": _finite(c.excess),
+            "percentile": _finite(c.percentile),
+            "spread": [_finite(v) for v in c.baseline_spread] if c.baseline_spread else None,
+            "note": c.note,
+            "valid_on_synthetic": c.valid_on_synthetic,
+        }
+        for c in result.baselines(draws=0)
+    ])
+
     # The excursion study carries its distribution as a DataFrame, which JSON cannot hold —
     # the server's serialisation guard caught that rather than dropping the connection.
     # What the conclusion tier needs from it is the count and the censoring warning; the

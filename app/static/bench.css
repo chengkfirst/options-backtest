@@ -146,3 +146,54 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
   font:11.5px/1.65 var(--mono);white-space:pre-wrap;overflow-x:auto;
   max-height:640px;overflow-y:auto}
 .valid-out b{color:var(--warn)}
+
+/* ── the rule document ──────────────────────────────────────────────────────────
+ *
+ * The panel is one text area and the state of what is in it. Monospace, because this is a
+ * document whose alignment carries meaning, and sized so a whole rule is on screen at
+ * once: scrolling to see the exit levels while editing the entry is how a rule gets
+ * contradicted without noticing.
+ */
+.rule-name { margin: 0 0 var(--space-3); }
+.rule-name input {
+  font-family: var(--mono); font-size: var(--font-sm); font-weight: 600;
+  padding: 6px 8px; width: 100%;
+  background: var(--surface-2); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.rule-name input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.rule-wrap { position: relative; }
+.rule-text {
+  width: 100%; min-height: 420px; resize: vertical;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
+  padding: var(--space-3); tab-size: 2;
+  background: var(--surface-2); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.rule-text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.rule-state {
+  margin: 6px 0 0; font-family: var(--mono); font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+.rule-state.ok b { color: var(--text-secondary); }
+.rule-state.bad { color: var(--danger); }
+
+/* What the engine cannot do with this rule. Weighted below the document and above the
+ * references: it is about the rule on screen, so it is not a reference, but it is not an
+ * error either — most of these are facts about the engine the reader has to work around. */
+.gap-list { padding: var(--space-4) var(--space-5) var(--space-5); }
+.gap {
+  padding: var(--space-2) 0 var(--space-2) var(--space-3);
+  border-left: 2px solid var(--border-strong);
+}
+.gap + .gap { margin-top: var(--space-2); }
+.gap b { display: block; font-size: var(--font-sm); color: var(--text-primary); }
+.gap p {
+  margin: 3px 0 0; font-size: var(--font-xs); line-height: 1.5;
+  color: var(--text-secondary);
+}
+/* Blocking means the engine will refuse the run, not that the rule is approximate. */
+.gap.blocking { border-left-color: var(--danger); }
+.gap.blocking b { color: var(--danger); }
