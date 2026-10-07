@@ -1109,13 +1109,17 @@ function settingsTab(){
   const groups = form.flatMap(layer => layer.components.map(comp => {
     const chosen = byForm[comp.key];
     const rows = [];
+    // "form" is the registry's own word for a slot's registered implementation, and on
+    // screen it means nothing: a reader sees "decided by the trailing form" and has to
+    // guess whether a form is a shape, a document or a setting. The slot is decided by a
+    // **rule**, and the rule has a name.
     if(chosen)
-      rows.push([`decided by the ${chosen.variant} form`,
-                 chosen.version != null ? `version ${chosen.version}` : "yes",
-                 "a registered form decides this slot in place of the setting below"],
+      rows.push([`rule`,
+                 `${chosen.variant}${chosen.version != null ? ` v${chosen.version}` : ""}`,
+                 "this slot was decided by a named rule rather than by the level below"],
                 ...Object.entries(chosen.params || {}).map(([k, v]) => [`　${k}`, v, ""]));
     for(const field of comp.inputs || []){
-      // The field a chosen form replaced is not missing, it is superseded, and the row
+      // The field a chosen rule replaced is not missing, it is superseded, and the row
       // above already says so.
       if(chosen && field.name === comp.key) continue;
       const v = valueOf(field.name);

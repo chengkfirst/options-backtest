@@ -17,8 +17,7 @@ body{background:var(--ground)}
 .panel{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;
   background:var(--panel);border-right:1px solid var(--line)}
 @media(max-width:980px){.panel{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line)}}
-.panel-head{padding:18px 20px 14px;border-bottom:1px solid var(--line-soft)}
-.panel-head h1{font-family:var(--display);font-size:18px;font-weight:700;letter-spacing:-.015em;margin:0}
+
 .mode{margin:4px 0 0;font-size:11.5px;color:var(--ink-3)}
 .mode.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
   background:var(--gain);margin-right:6px;vertical-align:middle}
@@ -26,15 +25,6 @@ body{background:var(--ground)}
   background:var(--warn);margin-right:6px;vertical-align:middle}
 
 .panel-body{flex:1;overflow-y:auto;padding:4px 20px 16px;display:flex;flex-direction:column;gap:2px}
-
-.grp{border:none;border-bottom:1px solid var(--line-soft);margin:0;padding:14px 0}
-.grp:last-child{border-bottom:none}
-.grp legend{font-family:var(--display);font-size:11px;font-weight:600;letter-spacing:.05em;
-  text-transform:uppercase;color:var(--ink-2);padding:0;margin-bottom:9px;display:flex;
-  align-items:center;gap:7px;width:100%}
-.grp legend b{font-size:11.5px;color:var(--accent);font-weight:700}
-.grp legend .opt{margin-left:auto;font-size:10px;font-weight:400;color:var(--ink-3);
-  text-transform:none;letter-spacing:0}
 
 /* Component status: what does not stand up has to be visible at a glance */
 .comp[data-state="partial"] legend b,.comp[data-state="missing"] legend b{color:var(--ink-3)}
@@ -45,12 +35,7 @@ body{background:var(--ground)}
 
 .row{display:flex;gap:10px;margin-bottom:9px}
 .row:last-child{margin-bottom:0}
-.grp label{flex:1;display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--ink-2);min-width:0}
-.grp label.full{width:100%}
-.grp input,.grp select,.grp textarea{background:var(--ground);border:1px solid var(--line);
-  border-radius:2px;padding:6px 8px;font-size:13px;width:100%;min-width:0}
-.grp input:focus,.grp select:focus,.grp textarea:focus{border-color:var(--accent);outline:none}
-.grp input.mono{font-family:var(--mono);font-size:12px}
+
 .unit{position:absolute;opacity:0}          /* the unit goes in the label text instead */
 .hint{margin:7px 0 0;font-size:11px;line-height:1.55;color:var(--ink-3)}
 .hint code{font-family:var(--mono);font-size:10.5px;background:var(--sunk);padding:1px 4px;border-radius:2px}
@@ -74,8 +59,6 @@ textarea.code{font-family:var(--mono);font-size:11.5px;line-height:1.6;resize:ve
 pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2px;
   font-family:var(--mono);font-size:10.5px;line-height:1.6;color:var(--ink-2);
   white-space:pre-wrap;border-left:2px solid var(--line)}
-.grp details summary{font-size:11.5px;color:var(--ink-2);cursor:pointer;margin-bottom:8px}
-.grp details summary:hover{color:var(--accent)}
 
 /* The run button */
 .panel-foot{padding:14px 20px 18px;border-top:1px solid var(--line-soft);background:var(--panel)}
@@ -92,8 +75,6 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
 .placeholder h2{font-size:17px;font-weight:600;margin-bottom:10px}
 .placeholder p{margin:0 auto;max-width:56ch;font-size:13px;color:var(--ink-2);line-height:1.7}
 .placeholder b{color:var(--ink);font-weight:600}
-.gap-list{margin-top:18px!important;font-size:11.5px!important;color:var(--ink-3)!important;
-  text-align:left;display:inline-block;white-space:pre-line;border-left:2px solid var(--line);padding-left:12px}
 
 /* Run history: comparison is the substance of research, so it sits at the top and
    stands out */
@@ -114,7 +95,6 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
 .more summary{padding:11px 16px;font-family:var(--display);font-size:13px;font-weight:600;cursor:pointer}
 .more summary:hover{color:var(--accent)}
 .more[open] summary{border-bottom:1px solid var(--line-soft)}
-.more-body{padding:16px;display:flex;flex-direction:column;gap:18px}
 
 /* An overlay while it runs, so it does not look frozen */
 .busy-note{display:flex;align-items:center;gap:10px;padding:13px 16px;background:var(--accent-soft);
@@ -124,66 +104,12 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
 @keyframes sp{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.spin{animation:none}}
 
-/* ── validate this run ──────────────────────────────────── */
-.valid-tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(216px,1fr));
-  gap:10px;margin:4px 0 14px}
-.valid-tool{display:flex;flex-direction:column;border:1px solid var(--line);
-  border-radius:var(--radius);padding:11px 13px;background:var(--panel)}
-.valid-tool h4{margin:0 0 5px;font:600 12.5px/1.3 var(--sans)}
-.valid-tool p{margin:0 0 10px;font-size:11.5px;line-height:1.55;color:var(--ink-2);flex:1}
-.valid-tool .vrow{display:grid;grid-template-columns:auto 1fr;gap:5px 7px;
-  align-items:center}
-.valid-tool .vrow button{grid-column:1/-1;justify-self:start;margin-top:4px}
-/* Wide enough for a list of levels ("0.5, 1.0, 1.5"); a truncated list reads as a
-   shorter one, and the user then wonders why a level is missing from the grid. */
-.valid-tool input{width:100%;min-width:0;font:11.5px/1 var(--mono);padding:4px 6px;
-  border:1px solid var(--line);border-radius:var(--radius);background:var(--ground);
-  color:var(--ink)}
-.valid-tool label{font-size:10.5px;color:var(--ink-3);letter-spacing:.02em}
-.valid-tool .unavail{font-size:11px;color:var(--ink-3);font-style:italic}
 .valid-out{margin:0;padding:15px 17px;border:1px solid var(--line);
   border-radius:var(--radius);background:var(--panel);color:var(--ink);
   font:11.5px/1.65 var(--mono);white-space:pre-wrap;overflow-x:auto;
   max-height:640px;overflow-y:auto}
 .valid-out b{color:var(--warn)}
 
-/* ── the rule document ──────────────────────────────────────────────────────────
- *
- * The panel is one text area and the state of what is in it. Monospace, because this is a
- * document whose alignment carries meaning, and sized so a whole rule is on screen at
- * once: scrolling to see the exit levels while editing the entry is how a rule gets
- * contradicted without noticing.
- */
-.rule-name { margin: 0 0 var(--space-3); }
-.rule-name input {
-  font-family: var(--mono); font-size: var(--font-sm); font-weight: 600;
-  padding: 6px 8px; width: 100%;
-  background: var(--surface-2); color: var(--text-primary);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-}
-.rule-name input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-
-.rule-wrap { position: relative; }
-.rule-text {
-  width: 100%; min-height: 420px; resize: vertical;
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
-  padding: var(--space-3); tab-size: 2;
-  background: var(--surface-2); color: var(--text-primary);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-}
-.rule-text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-
-.rule-state {
-  margin: 6px 0 0; font-family: var(--mono); font-size: var(--font-xs);
-  color: var(--text-muted);
-}
-.rule-state.ok b { color: var(--text-secondary); }
-.rule-state.bad { color: var(--danger); }
-
-/* What the engine cannot do with this rule. Weighted below the document and above the
- * references: it is about the rule on screen, so it is not a reference, but it is not an
- * error either — most of these are facts about the engine the reader has to work around. */
-.gap-list { padding: var(--space-4) var(--space-5) var(--space-5); }
 .gap {
   padding: var(--space-2) 0 var(--space-2) var(--space-3);
   border-left: 2px solid var(--border-strong);
@@ -216,8 +142,6 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
 .slots > summary::before { content: "▸"; color: var(--text-muted); font-size: 10px; }
 .slots[open] > summary::before { content: "▾"; }
 
-.slots-body { padding: 0 var(--space-4) var(--space-4); }
-
 .layer + .layer { margin-top: var(--space-5); }
 .layer > h4 {
   margin: 0 0 var(--space-2);
@@ -232,13 +156,6 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
   align-items: baseline;
   gap: var(--space-3);
 }
-.layer-what {
-  font-size: var(--font-xs);
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--text-muted);
-}
 
 .slot { padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
 .slot:last-child { border-bottom: 0; }
@@ -250,62 +167,7 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
   align-items: baseline;
   gap: var(--space-2);
 }
-/* A slot that is not fully built says so on its own line, which is criterion 2.7 applied
-   to a component rather than to a page. */
-.slot-mark {
-  font-size: 10px;
-  font-weight: 500;
-  padding: 1px 6px;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--warning) 16%, transparent);
-  color: var(--warning);
-}
-.slot.missing .slot-mark { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
-.slot-role { margin: 0; font-size: var(--font-xs); line-height: 1.5; color: var(--text-secondary); }
-.slot-role b { color: var(--text-primary); font-weight: 600; }
-.slot-gap {
-  margin: var(--space-2) 0 0;
-  padding-left: var(--space-3);
-  border-left: 2px solid var(--warning);
-  font-size: var(--font-xs);
-  line-height: 1.5;
-  color: var(--text-muted);
-}
 
-/* A registered variant. Clicking one writes it into the document in the shape run()
-   accepts, which is the only place its name and version are correct by construction. */
-.slot-forms { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
-.form-chip {
-  flex: 1 1 260px;
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  cursor: pointer;
-}
-.form-chip:hover { border-color: var(--accent); }
-.form-chip code {
-  display: block;
-  font-family: var(--mono);
-  font-size: var(--font-xs);
-  color: var(--accent);
-}
-.form-chip span {
-  display: block;
-  margin-top: 2px;
-  font-size: var(--font-xs);
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-
-.slot-fields { width: 100%; border-collapse: collapse; margin-top: var(--space-2); }
-.slot-fields th, .slot-fields td {
-  padding: 3px var(--space-3) 3px 0;
-  text-align: left;
-  vertical-align: baseline;
-  font-weight: 400;
-}
 .key {
   font-family: var(--mono);
   font-size: var(--font-xs);
@@ -317,14 +179,40 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
   white-space: nowrap;
 }
 .key:hover { text-decoration: underline; }
-.key-kind {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.key-help { font-size: var(--font-xs); line-height: 1.45; color: var(--text-secondary); }
 
-.couplings { margin: 0; padding-left: var(--space-4); }
-.couplings li { font-size: var(--font-xs); line-height: 1.6; color: var(--text-secondary); }
-.couplings code { font-family: var(--mono); color: var(--accent); }
+
+/* ── which rule decides a slot ──────────────────────────────────────────────────
+ *
+ * A list, not a dropdown. These are two or three options that each need a line to be
+ * understood, and the sentence that explains one used to appear only once it had been
+ * chosen — so finding out what `premium` meant required picking it. */
+.rule-opts { display: grid; gap: 4px; margin: 6px 0 8px; }
+
+.rule-opt {
+  display: grid;
+  grid-template-columns: 14px auto 1fr;
+  align-items: baseline;
+  gap: 2px 7px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.rule-opt:hover { border-color: var(--accent); }
+.rule-opt.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.rule-opt input { margin: 0; }
+
+.rule-name { font-family: var(--mono); font-size: 11.5px; color: var(--ink); white-space: nowrap; }
+.rule-opt.on .rule-name { color: var(--accent); font-weight: 600; }
+.rule-why { font-size: 11px; line-height: 1.45; color: var(--ink-2); }
+/* A stateful rule carries something from one day to the next, which is the difference
+   between a trailing stop and a fixed one and worth saying beside the name. */
+.rule-tag {
+  font-family: var(--sans);
+  font-size: 9.5px;
+  padding: 0 4px;
+  margin-left: 4px;
+  border-radius: 2px;
+  background: var(--sunk);
+  color: var(--ink-3);
+}
