@@ -58,6 +58,8 @@ GUARDS: tuple[tuple[str, list[str], bool], ...] = (
     ("test suite",   [sys.executable, "-m", "pytest", "tests", "-q"], True),
     ("plan parts",   [sys.executable, "-m", "pytest",
                       "tests/test_plan_components.py", "-q"], False),
+    ("plan details", [sys.executable, "-m", "pytest",
+                      "tests/test_plan_details.py", "-q"], False),
     ("doc claims",   [sys.executable, "tools/check_doc_claims.py"], False),
     ("doc examples", [sys.executable, "tools/check_docs.py"], True),
 )
