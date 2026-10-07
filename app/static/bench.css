@@ -197,3 +197,134 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
 /* Blocking means the engine will refuse the run, not that the rule is approximate. */
 .gap.blocking { border-left-color: var(--danger); }
 .gap.blocking b { color: var(--danger); }
+
+/* ── the seven components, as reference ─────────────────────────────────────────
+ *
+ * Not a form. Every control here writes into the rule document rather than holding a value
+ * of its own, so the rule lives in one place — the text — and there is no second copy in
+ * the DOM to drift from it. */
+.slots > summary {
+  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.slots > summary::-webkit-details-marker { display: none; }
+.slots > summary::before { content: "▸"; color: var(--text-muted); font-size: 10px; }
+.slots[open] > summary::before { content: "▾"; }
+
+.slots-body { padding: 0 var(--space-4) var(--space-4); }
+
+.layer + .layer { margin-top: var(--space-5); }
+.layer > h4 {
+  margin: 0 0 var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.layer-what {
+  font-size: var(--font-xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+.slot { padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
+.slot:last-child { border-bottom: 0; }
+.slot > h5 {
+  margin: 0 0 3px;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+/* A slot that is not fully built says so on its own line, which is criterion 2.7 applied
+   to a component rather than to a page. */
+.slot-mark {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+.slot.missing .slot-mark { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+.slot-role { margin: 0; font-size: var(--font-xs); line-height: 1.5; color: var(--text-secondary); }
+.slot-role b { color: var(--text-primary); font-weight: 600; }
+.slot-gap {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--warning);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* A registered variant. Clicking one writes it into the document in the shape run()
+   accepts, which is the only place its name and version are correct by construction. */
+.slot-forms { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.form-chip {
+  flex: 1 1 260px;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.form-chip:hover { border-color: var(--accent); }
+.form-chip code {
+  display: block;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--accent);
+}
+.form-chip span {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--font-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.slot-fields { width: 100%; border-collapse: collapse; margin-top: var(--space-2); }
+.slot-fields th, .slot-fields td {
+  padding: 3px var(--space-3) 3px 0;
+  text-align: left;
+  vertical-align: baseline;
+  font-weight: 400;
+}
+.key {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.key:hover { text-decoration: underline; }
+.key-kind {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.key-help { font-size: var(--font-xs); line-height: 1.45; color: var(--text-secondary); }
+
+.couplings { margin: 0; padding-left: var(--space-4); }
+.couplings li { font-size: var(--font-xs); line-height: 1.6; color: var(--text-secondary); }
+.couplings code { font-family: var(--mono); color: var(--accent); }

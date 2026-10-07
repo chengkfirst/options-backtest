@@ -25,7 +25,7 @@
  */
 "use strict";
 
-import {$, esc} from "./../dom.js";
+import {$, esc, mark} from "./../dom.js";
 import {API, clearIssues, getJSON, notice, postJSON} from "./../net.js";
 import {checkContract, checkMeta} from "./../contract.js";
 import {money, num, pct, sgn} from "./../fmt.js";
@@ -73,6 +73,8 @@ async function loadMeta(){
   $("sigCount").textContent = `${(META.signal_docs || []).length}`;
   $("sigSearch").addEventListener("input", renderSignalRef);
   renderSignalRef();
+  $("slotHost").innerHTML = slotBoard();
+  bindSlotBoard();
   $("ruleText").value = asText(startingRule());
   $("ruleText").addEventListener("input", checkRule);
   $("ruleName").addEventListener("input", checkRule);
@@ -189,6 +191,35 @@ function gaps(rule){
         + "and bb_width_20 — none of them is a running high. A fall can be written against "
         + "a moving average (close < sma_20 * 0.95) or over a fixed window "
         + "(mom_20 < -0.05); a fall from a peak needs a signal of your own.",
+    });
+  }
+
+  // A top-level field put in from the board that the backend has no starting value for.
+  // Null reaches the engine as a value rather than as an absence, so it is stopped here —
+  // and the honest reading is the same as for a component parameter: the platform does not
+  // have a number for this, which is why it is asking.
+  const unset = Object.entries(rule)
+    .filter(([, v]) => v === null).map(([k]) => k);
+  if(unset.length) out.push({
+    what: `${unset.join(", ")} ${unset.length > 1 ? "have" : "has"} no value`,
+    detail: `The backend has no starting value for ${unset.length > 1 ? "these" : "this"}, `
+      + `so there is nothing to fall back on. Give a value or remove the line — sent as `
+      + `null it reaches the engine as a value rather than as an absence.`,
+    blocking: true,
+  });
+
+  // A parameter the board wrote in and nobody filled. The engine refuses it by name, but
+  // eighty seconds later; saying it here costs nothing.
+  for(const [slot, spec] of Object.entries({...(rule.components || {}),
+                                            ...(rule.risk ? {risk: rule.risk} : {})})){
+    const empty = Object.entries(spec?.params || {})
+      .filter(([, v]) => v === null || v === "").map(([k]) => k);
+    if(empty.length) out.push({
+      what: `${slot} is missing ${empty.join(", ")}`,
+      detail: `The ${spec.variant} form needs ${empty.length > 1 ? "these" : "this"}, and `
+        + `the platform does not pick a value: what to set it to is a question about the `
+        + `strategy, not about the software.`,
+      blocking: true,
     });
   }
 
@@ -384,6 +415,146 @@ function loadRule(saved){
   $("ruleText").scrollIntoView({block: "nearest"});
 }
 
+
+
+/* ── the seven components, as reference for the document ─────────────────────────
+ *
+ * This was a form: a card per slot, a variant picker, and a generated control per
+ * parameter. Replacing it with a text document was right — a control can only offer the
+ * rules someone anticipated — but taking the board out with it was not. Two things went
+ * that were never form:
+ *
+ *   the board    what the seven components are, which lifecycle layer each sits in, and
+ *                **which are not built** with the reason. Criterion 2.7 lived here.
+ *   the registry what variants are registered for a slot, what each decides, and what
+ *                parameters it takes.
+ *
+ * Without the second, the document is JSON with nothing on screen saying what may go in
+ * it. `gaps()` says what the engine cannot do; this says what it can. A researcher writing
+ * `stop_loss: {variant: "trailing"}` had to read /api/meta by hand to learn that
+ * "trailing" exists.
+ *
+ * So the board is back as **reference**, not as input. Clicking a field or a variant writes
+ * it into the document rather than holding a value of its own, which keeps one place where
+ * the rule lives — the text — and no second copy of it in the DOM to drift.
+ */
+
+/** Set one key in the rule document and re-serialise.
+ *
+ * Writing into the text at the cursor would be easier and can produce invalid JSON from a
+ * valid document, which is a bad trade for a reference that exists to help. This parses,
+ * sets, and writes back, so the document is valid before and after or the click is refused
+ * with the reason. */
+function putInRule(key, value){
+  const p = parseRule();
+  if(!p.ok){
+    notice(`the rule document has to parse before a field can be written into it`
+      + `${p.where ? ` (${p.where})` : ""}: ${p.why}`);
+    return;
+  }
+  p.rule[key] = value;
+  $("ruleText").value = asText(p.rule);
+  checkRule();
+  $("ruleText").focus();
+}
+
+/** Fill a slot with a registered variant, in the shape `run()` accepts. */
+function putVariant(slot, form){
+  const p = parseRule();
+  if(!p.ok){ notice(`the rule document has to parse first: ${p.why}`); return; }
+  // Required parameters go in as `null`, not as a plausible number. A component parameter
+  // is a strategy choice: the backend refuses a missing one by name rather than running on
+  // a value nobody chose, and writing `q.lo` here would have put a trailing stop in at
+  // fraction 0 — "give back nothing", which exits the moment it opens — and called it a
+  // default. Null is visibly unfilled, and gaps() says so before the run is sent.
+  const params = {};
+  for(const q of form.params) if(q.required) params[q.name] = null;
+  const spec = {variant: form.name, version: form.version, params};
+  // Where a form goes is the backend's to say. `sends_to` is how it says it, and reading
+  // it here is what keeps this file from knowing what any slot means.
+  if(form.sends_to === "risk") p.rule.risk = spec;
+  else p.rule.components = {...(p.rule.components || {}), [slot]: spec};
+  $("ruleText").value = asText(p.rule);
+  checkRule();
+  $("ruleText").focus();
+}
+
+const STATUS_WORD = {done: "", partial: "partly built", missing: "not built"};
+
+function slotBoard(){
+  const layers = META?.form || [];
+  if(!layers.length) return "";
+  const registry = META?.components || {};
+
+  const body = layers.map(layer => `
+    <div class="layer">
+      <h4>${esc(layer.layer)}<span class="layer-what">${esc(layer.what || "")}</span></h4>
+      ${(layer.components || []).map(c => {
+        const forms = registry[c.key] || [];
+        const badge = STATUS_WORD[c.status] || "";
+        return `<section class="slot ${c.status}">
+          <h5>${esc(c.name)}${badge ? `<span class="slot-mark">${badge}</span>` : ""}</h5>
+          <p class="slot-role">${mark(c.role)}</p>
+          ${c.status !== "done" && c.gap
+            ? `<p class="slot-gap">${mark(c.gap)}</p>` : ""}
+
+          ${forms.length ? `<div class="slot-forms">${forms.map(f => `
+            <button type="button" class="form-chip" data-slot="${esc(c.key)}"
+                    data-form="${esc(f.name)}">
+              <code>${esc(f.name)}</code>
+              <span>${mark(f.describes || "")}</span>
+            </button>`).join("")}</div>` : ""}
+
+          ${(c.inputs || []).length ? `<table class="slot-fields"><tbody>${
+            c.inputs.map(i => `<tr>
+              <th><button type="button" class="key" data-key="${esc(i.name)}"
+                          data-default="${esc(JSON.stringify(i.default ?? null))}"
+                >${esc(i.name)}</button></th>
+              <td class="key-kind">${esc(i.kind)}${
+                i.lo != null || i.hi != null
+                  ? ` ${i.lo ?? "−∞"}…${i.hi ?? "∞"}` : ""}${
+                i.unit ? ` ${esc(i.unit)}` : ""}</td>
+              <td class="key-help">${mark(i.help || i.label || "")}</td>
+            </tr>`).join("")}</tbody></table>` : ""}
+        </section>`;
+      }).join("")}
+    </div>`).join("");
+
+  // Which slots cannot be set independently. Fixing two of a coupled three fixes the
+  // third, and a document that sets all three contradicts itself — worth saying once,
+  // where the slots are, rather than leaving it to the engine's refusal.
+  const couplings = (META?.couplings || []).map(c =>
+    `<li><code>${esc(c.a)}</code> + <code>${esc(c.b)}</code> — ${mark(c.why)}</li>`).join("");
+
+  return `<details class="runs slots" id="slotBoard">
+    <summary>the seven components<span class="ev-why">what each decides, what is
+      registered for it, and what is not built</span></summary>
+    <div class="slots-body">
+      ${body}
+      ${couplings ? `<div class="layer"><h4>coupled slots</h4>
+        <ul class="couplings">${couplings}</ul></div>` : ""}
+    </div>
+  </details>`;
+}
+
+/** Wire the board's buttons. Called after it is written into the stage. */
+function bindSlotBoard(){
+  const host = $("slotBoard");
+  if(!host) return;
+  for(const b of host.querySelectorAll(".key"))
+    b.addEventListener("click", () => {
+      let value;
+      try{ value = JSON.parse(b.dataset.default); }
+      catch{ value = null; }
+      putInRule(b.dataset.key, value);
+    });
+  for(const b of host.querySelectorAll(".form-chip"))
+    b.addEventListener("click", () => {
+      const form = (META.components[b.dataset.slot] || [])
+        .find(f => f.name === b.dataset.form);
+      if(form) putVariant(b.dataset.slot, form);
+    });
+}
 
 /* ── the signal reference ──────────────────────────────
    Grouped by family, with meanings and units, searchable, and a click inserts at the
