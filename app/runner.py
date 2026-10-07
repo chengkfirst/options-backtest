@@ -684,12 +684,21 @@ def _serialisable(kwargs: dict[str, Any], payload: dict[str, Any]) -> dict[str, 
     return out
 
 
+def _blank(v) -> bool:
+    """Whether a submitted value means "not given".
+
+    Stripped first: a box the user cleared can come back as a space, and `float("  ")` raises
+    where the whole point of these two is that an empty box is **absent**, not invalid.
+    """
+    return v is None or (isinstance(v, str) and v.strip().lower() in ("", "none"))
+
+
 def _opt_int(v):
-    return None if v in (None, "", "none") else int(v)
+    return None if _blank(v) else int(str(v).strip())
 
 
 def _opt_float(v):
-    return None if v in (None, "", "none") else float(v)
+    return None if _blank(v) else float(str(v).strip())
 
 
 #: These types must carry a charset. Without one the browser guesses with its own

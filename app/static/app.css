@@ -59,8 +59,12 @@ h1{font-size:var(--font-xl);font-weight:var(--weight-medium);letter-spacing:-.01
 .controls{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;padding:14px 16px;
   background:var(--sunk);border:1px solid var(--line-soft);border-radius:var(--radius)}
 .field{display:flex;flex-direction:column;gap:5px}
-.field label{font-family:var(--display);font-size:var(--font-xs);font-weight:var(--weight-medium);letter-spacing:.07em;
-  text-transform:uppercase;color:var(--ink-3)}
+/* Sentence case, which is the addendum's rule for every piece of text in the interface and
+   the reason these fit their column now: uppercase with .07em of tracking made "days to
+   expiry from" a third wider than the box under it, so the unit that follows wrapped onto a
+   line of its own and read as a second, nameless field. */
+.field label{font-family:var(--sans);font-size:var(--font-sm);font-weight:var(--weight-regular);
+  color:var(--ink-2)}
 .field select,.field input{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-sm);
   padding:6px 9px;font-size:var(--font-base);min-width:130px}
 .spacer{flex:1}
@@ -276,8 +280,11 @@ textarea.code {
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
 .field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .field.wide { grid-column: 1 / -1; }
-.field > label { font-size:var(--font-xs); color: var(--ink-3); display: flex; gap: 4px;
-                 align-items: baseline; }
+/* The label and its unit on one line, wrapping together rather than the unit dropping to a
+   line of its own where it reads as another field's name. */
+.field > label { font-size:var(--font-sm); color: var(--ink-2); display: flex; gap: 4px;
+                 align-items: baseline; flex-wrap: wrap; text-transform: none;
+                 letter-spacing: 0; font-family: var(--sans); }
 /* bench.css has a global .unit{position:absolute;opacity:0}. Overriding only opacity
    makes the unit visible while still absolutely positioned, so it floats elsewhere on
    the page. `position` has to be restored with it. */

@@ -39,36 +39,30 @@
   <!-- The problem strip: every error and every skipped thing, for every surface. -->
   <div class="issues" id="issues" hidden></div>
 
-  <!-- ══ the bench ══ -->
+  <!-- ══ the composer: the design plan's section 4 and the addendum's wireframe ══
+     A slot board in three lifecycle columns, a settings column beside it, and a panel
+     along the foot. It was a 520 px form in the left third of the page with every slot
+     stacked vertically and the other two thirds empty — the shape made a rule's own
+     description wrap to five lines and put the seventh slot four screens below the first.
+     The results moved to their own surface, so the width is free. -->
   <section class="bench" id="view-bench">
+  <form id="form" class="composer">
 
-
-<!-- ══ left: parameters, organised by the seven components ══ -->
-<aside class="panel">
-  <form id="form" class="panel-body">
-
-    <!-- What to run: symbol, range, engine. Boilerplate, kept to two rows so it does
-         not compete with the strategy for space. -->
-    <div class="setup-bar">
-      <label class="sb narrow">symbol<select name="symbol" id="symbol"></select></label>
-      <label class="sb">from<input type="date" name="start" value="2020-01-01"></label>
-      <label class="sb">to<input type="date" name="end" value="2024-12-31"></label>
-    </div>
-    <div class="setup-bar">
-      <label class="sb grow">engine<select name="engine" id="engine">
-        <option value="trade_table">trade table — fast, for sweeps</option>
-        <option value="event_driven" selected>event driven — has portfolio state</option>
-      </select></label>
-      <label class="sb narrow" id="concurrentWrap">max concurrent<input type="number" name="max_concurrent" value="5" min="1" max="50"></label>
-    </div>
-    <p class="changed-line" id="changedLine" hidden></p>
-    <p class="hint setup-note"><span id="spanHint"></span>
-      <span id="engineLock" hidden>In plan mode the engine is locked to event driven.</span></p>
+    <header class="composer-bar">
+      <span class="composer-where" id="composerWhere">a new configuration</span>
+      <p class="changed-line" id="changedLine" hidden></p>
+      <div class="composer-actions">
+        <span class="hint" id="spanHint"></span>
+        <button class="run" id="run" type="button">run</button>
+      </div>
+    </header>
 
     <!-- How the strategy is written: rule by rule, or one function for all of it. -->
     <div class="tabs mode-tabs" role="tablist">
       <button type="button" class="tab on" data-strat="params" role="tab">rule by rule</button>
       <button type="button" class="tab" data-strat="plan" role="tab">one plan function</button>
+      <span class="hint" id="engineLock" hidden>In plan mode the engine is locked to event
+        driven.</span>
     </div>
 
     <!-- The code box, shown only in plan mode -->
@@ -78,71 +72,103 @@
       <pre class="help" id="planHelpBody" hidden></pre>
     </div>
 
-    <!-- The seven components, **generated from the backend definition**, not written
-         by hand. Hand-written HTML drifts from components.py. -->
-    <div id="comps"></div>
+    <div class="board">
+      <!-- The seven slots, **generated from the backend definition** and placed in the
+           lifecycle column they act in. Hand-written HTML drifts from the definition. -->
+      <div id="comps" class="slots"></div>
 
-    <details class="ref" id="tradeoffRef">
-      <summary>contract selection reference<span class="ref-n" id="toWhen"></span></summary>
-      <p class="hint">Spread over <b>moneyness x tenor</b>. The numbers come from <b>that
-        day's real chain</b>, not a formula — with your own data they reflect the real
-        skew automatically.</p>
-      <div id="tradeoffBody" class="to-body"></div>
-    </details>
+      <aside class="settings-col">
+        <h3 class="col-head">Settings</h3>
 
-    <details class="ref">
-      <summary>custom signals<span class="ref-n">optional</span></summary>
-      <textarea name="signals_code" id="signalsCode" spellcheck="false" rows="7" class="code"
-        title="Define a SIGNALS dict. Always use adjusted(), or ex-dividend days produce false gaps."></textarea>
-    </details>
+        <details class="setting" open>
+          <summary>Run settings<span class="setting-sum" id="runSum"></span></summary>
+          <div class="setting-body">
+            <label class="sb narrow">symbol<select name="symbol" id="symbol"></select></label>
+            <label class="sb">from<input type="date" name="start" value="2020-01-01"></label>
+            <label class="sb">to<input type="date" name="end" value="2024-12-31"></label>
+            <label class="sb grow">engine<select name="engine" id="engine">
+              <option value="trade_table">trade table — fast, for sweeps</option>
+              <option value="event_driven" selected>event driven — has portfolio state</option>
+            </select></label>
+            <label class="sb narrow" id="concurrentWrap">max concurrent<input type="number"
+              name="max_concurrent" value="5" min="1" max="50"></label>
+            <p class="hint" id="engineHint"></p>
+          </div>
+        </details>
 
-    <details class="ref">
-      <summary>signal reference<span class="ref-n" id="sigCount"></span></summary>
-      <input type="search" id="sigSearch" placeholder="search a name or a meaning…" class="ref-search">
-      <div id="sigRef" class="sig-ref"></div>
-    </details>
+        <details class="setting">
+          <summary>Lifecycle<span class="setting-sum">not configurable yet</span></summary>
+          <div class="setting-body"><p class="hint" id="lifecycleGap"></p></div>
+        </details>
 
-    <details class="ref">
-      <summary>how the two engines differ</summary>
-      <p class="hint" id="engineHint"></p>
-    </details>
+        <details class="setting">
+          <summary>Timing<span class="setting-sum">fixed</span></summary>
+          <div class="setting-body"><p class="hint" id="timingGap"></p></div>
+        </details>
 
-  </form>
+        <details class="setting">
+          <summary>Data snapshot<span class="setting-sum" id="dataSum"></span></summary>
+          <div class="setting-body"><p class="hint" id="dataGap"></p></div>
+        </details>
 
-  <div class="panel-foot">
-    <button class="run" id="run">run</button>
-    <p class="hint" id="runHint">About 40 seconds over ten years; a shorter range is much faster.</p>
-  </div>
-</aside>
+        <details class="setting">
+          <summary>Book limits<span class="setting-sum">not wired</span></summary>
+          <div class="setting-body"><p class="hint" id="bookGap"></p></div>
+        </details>
 
-<!-- ══ right: results ══ -->
-<main class="stage">
-
-  <!-- The bench composes a run and lists what has been run. **Reading a result happens on
-       the analysis surface**, not here: the design plan separates composing (section 4)
-       from analysing (section 6), and one page doing both was a single endless scroll of
-       every chart at once, with no way to tell which question each answered. -->
-  <section class="runs" id="runsSec" hidden>
-    <div class="runs-head">
-      <h2>runs in this session</h2>
-      <p>Click a run's number to open it on the analysis page. Pin one as the baseline and
-         the others show their change against it.</p>
+        <details class="setting">
+          <summary>custom signals<span class="setting-sum">optional</span></summary>
+          <div class="setting-body">
+            <textarea name="signals_code" id="signalsCode" spellcheck="false" rows="7"
+              class="code"
+              title="Define a SIGNALS dict. Always use adjusted(), or ex-dividend days produce false gaps."></textarea>
+          </div>
+        </details>
+      </aside>
     </div>
-    <div class="scroll"><table id="runs"></table></div>
-  </section>
 
-  <!-- The empty state says what will appear and offers one way on, which is the design
-       plan's rule for it. "Nothing run yet" is true of this session and false of the
-       record — 172 runs are in the store — so it says which, and points at them. -->
-  <div class="placeholder" id="placeholder">
-    <h2>nothing run yet in this session</h2>
-    <p>Fill in the slots on the left, then press run. The result opens on its own page and
-       the run appears here.</p>
-    <p><a class="btn" href="#/log">open the experiment log</a></p>
-    <p class="hint">Every earlier run is there, grouped by the idea that owns it.</p>
+    <!-- The foot panel: the addendum's Preview / Validation / YAML. -->
+    <div class="composer-foot">
+      <nav class="tabs foot-tabs" role="tablist">
+        <button type="button" class="tab on" data-foot="validation" role="tab">validation</button>
+        <button type="button" class="tab" data-foot="payload" role="tab">what will be sent</button>
+        <button type="button" class="tab" data-foot="contracts" role="tab">contract reference</button>
+        <button type="button" class="tab" data-foot="signals" role="tab">signal reference</button>
+        <button type="button" class="tab" data-foot="preview" role="tab">preview</button>
+      </nav>
+
+      <div class="foot-body" data-panel="validation" id="footValidation"></div>
+
+      <div class="foot-body" data-panel="payload" hidden>
+        <p class="hint">The exact body of the <code>POST /api/run</code> this will send.
+          Nothing is added on the way.</p>
+        <pre class="code payload" id="payloadView"></pre>
+      </div>
+
+      <div class="foot-body" data-panel="contracts" hidden id="tradeoffRef">
+        <p class="hint">Spread over <b>moneyness x tenor</b>, from <b>that day's chain</b>
+          rather than a formula<span id="toWhen"></span>.</p>
+        <div id="tradeoffBody" class="to-body"></div>
+      </div>
+
+      <div class="foot-body" data-panel="signals" hidden>
+        <input type="search" id="sigSearch" placeholder="search a name or a meaning…"
+          class="ref-search">
+        <span class="ref-n" id="sigCount"></span>
+        <div id="sigRef" class="sig-ref"></div>
+      </div>
+
+      <div class="foot-body" data-panel="preview" hidden>
+        <p class="hint"><b>Not built yet.</b> The addendum's preview runs a short engine pass
+          around a chosen date and returns the candidate states, the contracts Entry would
+          select and an action log, within ten seconds. It needs <code>POST /preview</code>,
+          which the service does not have.</p>
+      </div>
+    </div>
+
+    <p class="hint" id="runHint"></p>
     <p class="hint" id="gapList" hidden></p>
-  </div>
-</main>
+  </form>
   </section>
 
   <!-- ══ run analysis: the design plan's section 6, in three tiers ══ -->

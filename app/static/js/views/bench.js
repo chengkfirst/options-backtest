@@ -23,16 +23,12 @@
 import {$, esc, mark} from "./../dom.js";
 import {API, clearIssues, getJSON, notice, postJSON} from "./../net.js";
 import {CONTRACT, checkContract, checkMeta} from "./../contract.js";
-import {money, num, pct, sgn} from "./../fmt.js";
-import {stats} from "./../stats.js";
+import {num} from "./../fmt.js";
 import {go} from "./../router.js";
 import {bind} from "./../ui/keys.js";
 
 let META = null;          // the contents of /api/meta
 let LIVE = false;         // is the service up
-let RUNS = [];            // the runs submitted in this session
-let CURRENT = null;       // the most recent, highlighted in the list
-let BASE = null;          // the pinned baseline run id (the server's `id` field)
 
 /* Which registered form fills each slot, and the parameters typed into it. Held here
    rather than read back off the DOM, because the component forms are regenerated whenever
@@ -82,6 +78,7 @@ async function loadMeta(){
   switchMode();                     // generate the seven components' forms
   fillDefaults();
   updateSpanHint();
+  paintSettingGaps();
 }
 
 /* Fill the generated controls with the backend's defaults. The code fields
@@ -225,16 +222,59 @@ function insertSignal(name){
    definitions always drift. */
 const STATUS_MARK = { done: "", partial: "partial", missing: "not built" };
 
+/* ── where each slot sits on the board ──────────────────────────────────────────
+ *
+ * The addendum's wireframe puts the slot board in three lifecycle columns, "so the card order
+ * reads like a trade's life": Idle, Armed, Open. The backend's `form` groups them by layer,
+ * which is a different cut — it answers "when does the engine call this" — so the mapping is
+ * written here, once, with the column each slot acts in.
+ *
+ * The Open column's cards carry a number, which is `open_state_order`: the order the engine
+ * asks them in while a position is on. It is fixed in the engine today, so the numbers are
+ * shown and not yet dragged.
+ */
+const COLUMNS_BY_SLOT = {
+  setup: {column: "idle"},
+  entry: {column: "armed"},
+  select: {column: "armed"},
+  position: {column: "armed", tag: "book"},
+  take_profit: {column: "open", order: 1},
+  stop_loss: {column: "open", order: 2},
+  headwind: {column: "open", order: 3, tag: "book"},
+  hedge: {column: "open", order: 4, tag: "book"},
+};
+
+const COLUMN_HEAD = {
+  idle: {name: "Idle", what: "nothing is open; these decide whether to look at all"},
+  armed: {name: "Armed", what: "a setup has fired; these decide what is bought and how much"},
+  open: {name: "Open", what: "a position is on; these are asked in this order, every day"},
+};
+
 function renderComponents(){
   const planMode = strategyMode() === "plan";
-  $("comps").innerHTML = (META.form || []).map(L => `
-    <section class="layer">
-      <header class="layer-head">
-        <span class="layer-n" data-tip="${esc(L.what)}">${L.layer}</span>
-      </header>
-      ${L.components.map(c => compBlock(c, planMode)).join("")}
-    </section>`).join("");
+  const all = (META.form || []).flatMap(L => L.components);
+  $("comps").innerHTML = ["idle", "armed", "open"].map(column => {
+    const here = all
+      .filter(c => (COLUMNS_BY_SLOT[c.key] || {}).column === column)
+      .sort((a, b) => ((COLUMNS_BY_SLOT[a.key] || {}).order || 0)
+                    - ((COLUMNS_BY_SLOT[b.key] || {}).order || 0));
+    const head = COLUMN_HEAD[column];
+    return `<section class="col" data-col="${column}">
+      <h3 class="col-head" data-tip="${esc(head.what)}">${head.name}</h3>
+      ${here.map(c => compBlock(c, planMode)).join("")
+        || `<p class="hint col-empty">no slot acts here yet</p>`}
+    </section>`;
+  }).join("");
+  // A slot the mapping does not place would vanish silently, which is the one way a
+  // generated board can lie about the strategy.
+  const placed = new Set(Object.keys(COLUMNS_BY_SLOT));
+  const stray = all.filter(c => !placed.has(c.key));
+  if(stray.length)
+    notice(`the board has no column for ${stray.map(c => c.key).join(", ")}, so ${
+      stray.length === 1 ? "it is" : "they are"} not on screen. The lifecycle mapping in `
+      + `views/bench.js needs the new slot.`);
   bindFields();
+  paintFoot();
 }
 
 function compBlock(c, planMode){
@@ -247,26 +287,38 @@ function compBlock(c, planMode){
   // refuses the pair, because a configuration where both are present cannot be resolved by
   // reading it. So picking a form replaces the field rather than sitting above it, and
   // says which field it replaced.
-  const byForm = !taken && PICKED[c.key];
-  // Only the field the form actually decides is replaced — the one named after the slot.
-  // The others in the same component stay: slot 4's holding cap and days-to-expiry floor
-  // are a safety net that applies whichever way the stop is expressed, and a rule written
-  // wrong must not be able to drag a position into expiry.
-  const replaced = byForm ? c.inputs.filter(i => i.name === c.key) : [];
-  const kept = byForm ? c.inputs.filter(i => i.name !== c.key) : c.inputs;
+  const choice = PICKED[c.key];
+  const off = !taken && choice === OFF;
+  const byForm = !taken && choice && choice !== OFF;
+  // Only the field the slot itself decides is replaced or switched off — the one named after
+  // it. The others in the same card stay: slot 4's holding cap and days-to-expiry floor are a
+  // safety net that applies whichever way the stop is expressed, and a rule written wrong — or
+  // a stop switched off — must not be able to drag a position into expiry.
+  const own = c.inputs.filter(i => i.name === c.key);
+  const kept = off || byForm ? c.inputs.filter(i => i.name !== c.key) : c.inputs;
   const body = taken
     ? `<p class="comp-note">→ <code>${c.in_plan}</code></p>`
-    : !c.inputs.length && !byForm
+    : !c.inputs.length && !byForm && !off
       ? `<p class="comp-note">${gapHtml(c)}</p>`
-      : `${byForm ? `<p class="comp-note">the <b>${esc(PICKED[c.key])}</b> rule decides this${
-            replaced.length ? `, in place of ${replaced.map(i => esc(i.label)).join(" and ")}`
-                            : ""}</p>` : ""}
+      : `${off ? `<p class="comp-note off">the engine is given no ${
+            own.map(i => esc(i.label)).join(" or ") || esc(c.name)} at all${kept.length
+              ? `. The settings below still apply` : ""}</p>` : ""}
+         ${byForm ? `<p class="comp-note">the <b>${esc(choice)}</b> rule decides this${
+            own.length ? `, in place of ${own.map(i => esc(i.label)).join(" and ")}`
+                       : ""}</p>` : ""}
          ${kept.length ? `<div class="fields">${kept.map(fieldHtml).join("")}</div>` : ""}`;
   const badge = STATUS_MARK[c.status]
     ? `<span class="comp-badge ${c.status}">${STATUS_MARK[c.status]}</span>` : "";
-  return `<article class="comp ${taken ? "by-plan" : ""}" data-comp="${c.key}">
-      <h4 class="comp-h" data-tip="${esc(c.role)}">${c.name}${badge}</h4>
-      ${taken ? "" : variantPicker(c.key)}
+  const place = COLUMNS_BY_SLOT[c.key] || {};
+  return `<article class="comp ${taken ? "by-plan" : ""}${off ? " is-off" : ""}"
+      data-comp="${c.key}">
+      <h4 class="comp-h" data-tip="${esc(c.role)}">${place.order
+        ? `<span class="comp-order" data-tip="The order the engine asks the open-state slots
+             in, every day a position is on. Fixed in the engine today.">${place.order}</span>`
+        : ""}${c.name}${place.tag
+        ? `<span class="comp-tag" data-tip="Acts on the whole book rather than on one
+             trade.">${esc(place.tag)}</span>` : ""}${badge}</h4>
+      ${taken ? "" : variantPicker(c.key, own)}
       ${body}
     </article>`;
 }
@@ -291,24 +343,67 @@ function compBlock(c, planMode){
 
    A list rather than a select for the same reason. Two or three options that each need a
    line to be understood are not a dropdown's shape. */
-function variantPicker(slot){
+/** The value that means "this slot does nothing". Not the empty string, which already means
+ *  "the plain setting in this card decides it". */
+const OFF = "__off__";
+
+/** The slots the engine accepts **nothing** for.
+ *
+ * `ExitRule` says it in its own words: "`None` means no such exit, which is a real
+ * configuration rather than a stand-in" — of take profit and stop loss. Entry is not on the
+ * list and must not be: a strategy with no entry condition is not an ablation, it is a
+ * strategy that has been deleted, and offering it would be the composer inventing a
+ * configuration the engine will refuse.
+ *
+ * Declared here rather than read from the slot definition because the definition does not
+ * carry it. If it grows an `optional` flag this should read that instead, and this comment is
+ * the note to do it. */
+const CAN_BE_OFF = new Set(["take_profit", "stop_loss"]);
+
+/* ── what decides a slot: nothing, a level, or a rule ────────────────────────────
+ *
+ * Three kinds, one choice. The card used to offer two — the plain setting, or a registered
+ * rule — and **no way to switch the slot off**, which is the design plan's neutral variant:
+ * "A neutral variant is always available, so any slot can be switched off for an ablation
+ * from the card itself."
+ *
+ * The engine has taken `stop_loss: float | None` all along. A researcher who wanted to ask
+ * "what does this strategy do with no stop at all" had to work out that clearing a number box
+ * means something, and nothing on screen said so — so the question could not be asked, and it
+ * is one of the first questions there is.
+ *
+ * The rules come before the level deliberately. A level is one rule — "exit at this fraction
+ * of premium" — and listing it first made the registered rules read as an advanced option on
+ * top of the real control, when they are the thing a researcher is actually choosing between.
+ */
+function variantPicker(slot, own){
   const forms = (META.components || {})[slot] || [];
-  if(!forms.length) return "";
-  const chosen = PICKED[slot];
+  const canSwitchOff = own.length > 0 && CAN_BE_OFF.has(slot);
+  if(!forms.length && !canSwitchOff) return "";
+  const chosen = PICKED[slot] ?? "";
   const option = (value, name, why, extra = "") => `
-    <label class="rule-opt${value === (chosen || "") ? " on" : ""}">
+    <label class="rule-opt${value === chosen ? " on" : ""}">
       <input type="radio" name="pick_${slot}" value="${esc(value)}" data-pick="${slot}"
-             ${value === (chosen || "") ? "checked" : ""}>
+             ${value === chosen ? "checked" : ""}>
       <span class="rule-name">${esc(name)}${extra}</span>
       <span class="rule-why">${mark(why)}</span>
     </label>`;
+  const level = own.map(i => i.label).join(" and ");
   return `<div class="variant" data-slot="${slot}">
     <div class="rule-opts">
-      ${option("", "the level below", "decided by the setting in this card, as configured")}
       ${forms.map(f => option(f.name, f.name, f.describes || "",
         f.stateful ? ` <span class="rule-tag">keeps state</span>` : "")).join("")}
+      ${own.length
+        ? option("", `a level`, `a single ${esc(level)}, set below — the simplest rule there is`)
+        : ""}
+      ${canSwitchOff
+        ? option(OFF, "not used",
+                 `the engine is given no ${esc(level)}. **This is a research question, not a `
+                 + `blank**: what the strategy does with nothing holding it`)
+        : ""}
     </div>
-    ${chosen ? variantParams(slot, forms.find(f => f.name === chosen)) : ""}
+    ${chosen && chosen !== OFF
+      ? variantParams(slot, forms.find(f => f.name === chosen)) : ""}
   </div>`;
 }
 
@@ -357,7 +452,7 @@ function gapHtml(c){
   // The whole sentence **replaces** the opening clause rather than following it; appending
   // printed the first clause twice, once on its own and once inside the rest.
   return `<span class="gap-first" id="gapfirst_${esc(c.key)}">${esc(first)}.</span>
-    <button type="button" class="gap-more" data-gap="${esc(c.key)}">the rest</button>
+    <button type="button" class="gap-more" data-gap="${esc(c.key)}">more</button>
     <span class="gap-rest" id="gap_${esc(c.key)}" hidden>${esc(whole)}</span>`;
 }
 
@@ -402,6 +497,10 @@ function bindFields(){
     if(!el.name) continue;
     el.addEventListener("input", markChanged);
     el.addEventListener("change", markChanged);
+    // The foot shows what will be sent and what is blocking it; both are wrong the moment
+    // anything changes, and a payload that lags the form is worse than none.
+    el.addEventListener("input", paintFoot);
+    el.addEventListener("change", paintFoot);
   }
 
   // Choosing a form rebuilds that slot so its parameters appear. Only the components are
@@ -410,6 +509,8 @@ function bindFields(){
     input.addEventListener("change", () => {
       if(!input.checked) return;
       const slot = input.dataset.pick;
+      // The empty string is "a level", which is the absence of a choice and so is stored as
+      // one; `OFF` is a choice and is stored.
       if(input.value) PICKED[slot] = input.value;
       else delete PICKED[slot];
       renderComponents();
@@ -449,6 +550,17 @@ function switchMode(){
   }
   renderComponents();
 }
+for(const tab of document.querySelectorAll("[data-foot]"))
+  tab.addEventListener("click", () => {
+    for(const t of document.querySelectorAll("[data-foot]"))
+      t.classList.toggle("on", t === tab);
+    for(const body of document.querySelectorAll("[data-panel]"))
+      body.hidden = body.dataset.panel !== tab.dataset.foot;
+    // The contract reference is the one that costs a request, so it is fetched when it is
+    // first looked at rather than on every page load.
+    if(tab.dataset.foot === "contracts" && !$("toWhen").textContent) loadTradeoff();
+  });
+
 document.querySelectorAll("[data-strat]").forEach(tab =>
   tab.addEventListener("click", () => {
     document.querySelectorAll("[data-strat]").forEach(t => t.classList.toggle("on", t === tab));
@@ -486,12 +598,14 @@ function updateSpanHint(){
     $("spanHint").textContent = "the start is after the end, so this cannot run.";
     return;
   }
-  const span = `about ${e.years.toFixed(1)} years`;
-  $("spanHint").textContent = e.middle
-    ? `${span} — around ${e.middle}s, and the slowest tenth of runs this long have taken `
-      + `over ${e.high}s. A configuration that opens many positions takes much longer; the `
-      + `cost is in valuing them, not in the span.`
-    : `${span}. How long it takes has not been measured on this machine yet.`;
+  const span = `${e.years.toFixed(1)} years`;
+  const hint = $("spanHint");
+  hint.textContent = e.middle ? `${span} · about ${e.middle}s` : `${span}`;
+  hint.dataset.tip = e.middle
+    ? `Measured from the runs on this machine: half of the runs this long finish by ${e.middle
+      } seconds and the slowest tenth take over ${e.high}. What drives it is how many `
+      + `positions are open at once, not the span — the cost is in valuing them.`
+    : "How long a run of this length takes has not been measured on this machine yet.";
 }
 ["start","end"].forEach(n => $("form")[n].addEventListener("change", updateSpanHint));
 
@@ -526,6 +640,11 @@ function formPayload(){
   const f = $("form"), o = {};
   for(const el of f.elements) if(el.name) o[el.name] = el.value;
   o.strategy_mode = strategyMode();
+  // A slot switched off sends **nothing** for the field it decides, whatever a hidden box
+  // still holds. The backend reads an absent value as "no rule of this kind", which is what
+  // the choice means, and what the engine has always accepted.
+  for(const [slot, choice] of Object.entries(PICKED))
+    if(choice === OFF) o[slot] = "";
   // entry_mode is a real field on the form, so this no longer guesses from whether the
   // code box is empty.
   // Sizing: send only the parameters the current method uses. Sending all of them leaves
@@ -542,6 +661,7 @@ function formPayload(){
   // to the book rather than to one trade.
   const components = {};
   for(const [slot, variant] of Object.entries(PICKED)){
+    if(variant === OFF) continue;
     const form = ((META.components || {})[slot] || []).find(f => f.name === variant);
     if(!form) continue;
     const params = {};
@@ -571,7 +691,18 @@ function formPayload(){
  * after a round trip — but the backend still refuses, because this check can only see the
  * form and the backend sees the run. */
 function blockingReason(){
+  // **At least one time exit, always.** `ExitRule` refuses a configuration without one —
+  // "a position left to drag into expiry is a mechanism failure rather than a choice" — and
+  // with the stop switched off it is the only thing left closing a trade. Checked here so the
+  // answer arrives on the control rather than after a backtest.
+  const f = $("form");
+  const blank = name => !f.elements[name] || !String(f.elements[name].value).trim();
+  if(blank("hold_days") && blank("dte_floor"))
+    return "a holding cap or a days-to-expiry floor is required — with neither, a position "
+         + "that nothing else closes is dragged into expiry, which the engine refuses as a "
+         + "mechanism failure rather than a choice.";
   for(const [slot, variant] of Object.entries(PICKED)){
+    if(variant === OFF) continue;
     const form = ((META.components || {})[slot] || []).find(f => f.name === variant);
     if(!form) continue;
     for(const p of form.params){
@@ -636,10 +767,6 @@ async function runBacktest(){
   try{
     const data = await postJSON(API.run, formPayload());
     checkContract(data);
-    RUNS.push(data);
-    BASE = BASE ?? data.id;
-    CURRENT = data.id;
-    paintRuns();
     if(!data.rows.length){
       // No trades is a fact about the configuration, read here where the configuration
       // is. Sending the reader to an analysis page with nothing on it would be a worse
@@ -665,6 +792,61 @@ async function runBacktest(){
     $("runHint").textContent = `that run took ${took.toFixed(1)}s`
       + (e2 && e2.middle ? ` against about ${e2.middle}s expected.` : ".");
   }
+}
+
+/* ── the panel along the foot ────────────────────────────────────────────────────
+ *
+ * The addendum's composer has one: Preview, Validation, YAML. Two of the three are
+ * answerable now and the third is not — the preview needs a `POST /preview` the service does
+ * not have, so that tab says what it would show and what it is waiting on rather than being
+ * absent, which would leave the reader thinking the plan asked for less than it did.
+ *
+ * "What will be sent" rather than YAML: the thing a researcher needs to see is the exact body
+ * of the request, and this service takes JSON. A YAML rendering would be a second format to
+ * keep true for no gain.
+ */
+function paintFoot(){
+  const blocked = blockingReason();
+  const host = $("footValidation");
+  if(host)
+    host.innerHTML = blocked
+      ? `<p class="validation bad">${mark(blocked)}</p>`
+      : `<p class="validation ok">Nothing is blocking this run. The backend checks again
+         when it arrives — this side can only see the form.</p>`;
+  const payload = $("payloadView");
+  if(payload) payload.textContent = JSON.stringify(formPayload(), null, 2);
+  const run = $("runSum");
+  if(run){
+    const f = $("form");
+    run.textContent = `${f.symbol.value} · ${f.start.value} → ${f.end.value} · ${
+      f.engine.value === "event_driven" ? "event driven" : "trade table"}`;
+  }
+}
+
+/** The gaps the settings column names, each from the backend's own list rather than written
+ *  here — a sentence about what is not built goes stale the moment it is. */
+function paintSettingGaps(){
+  const gaps = META.gaps || [];
+  const find = (...words) => gaps.find(g =>
+    words.every(w => String(g).toLowerCase().includes(w))) || "";
+  const put = (id, text, fallback) => {
+    const el = $(id);
+    if(el) el.innerHTML = mark(text || fallback);
+  };
+  put("lifecycleGap", find("lifecycle"),
+      "the open-state order, the conflict policy and the re-entry policy are settings the "
+      + "architecture names; the engine fixes them, so there is nothing here to set.");
+  put("timingGap", find("timing"),
+      "the signal snapshot time and the fill latency are set once per configuration. The "
+      + "engine decides at the close and fills on the next session.");
+  put("dataGap", find("data"),
+      "there is one chain and no snapshot id to choose between, so there is nothing to "
+      + "pick. The run's own page says which data it stood on.");
+  put("bookGap", find("hedge") || find("portfolio"),
+      "premium budgets, Greek limits and a scenario loss limit exist in the engine and are "
+      + "not wired to this form.");
+  const data = $("dataSum");
+  if(data) data.textContent = "one chain";
 }
 
 /* ── the contract-selection reference ─────────────────────
@@ -724,98 +906,9 @@ function gridTable(meta, g){
     }</tr>`).join("")}</tbody></table></div>`;
 }
 
-$("tradeoffRef").addEventListener("toggle", e => {
-  if(e.target.open && !$("toWhen").textContent) loadTradeoff();
-});
 
-/* ── describing a configuration ───────────────────────────
-   **One reading of the stored config, used by every place that describes a run.**
 
-   There were two, and both had gone stale: each read `select.dte` and `select.moneyness`,
-   neither of which the backend writes — selection has been a feasible region
-   (`dte_lo`/`dte_hi`, a delta band, a ranking target) for some time. The run history
-   printed "undefinedDTE" and the same string was handed to Claude as the strategy's
-   description. Nothing raised, because reading an absent field is not an error in JS; it
-   just renders.
-
-   Absence shows as "—" and never as `undefined`, and the field names are declared in
-   CONTRACT so that check_wiring fails on the next rename instead of the screen. */
-function describeConfig(c){
-  const s = c.select || {}, x = c.exit || {};
-  const band = (lo, hi, fmt = v => v) =>
-    lo != null && hi != null ? `${fmt(lo)}–${fmt(hi)}`
-      : lo != null ? `≥${fmt(lo)}` : hi != null ? `≤${fmt(hi)}` : null;
-  // The target delta is the ranking objective inside the band; both can be present, and
-  // showing only one of them hides half of how the contract was chosen.
-  const deltaBand = band(s.delta_lo, s.delta_hi, v => Number(v).toFixed(2));
-  const strike = [deltaBand ? `Δ${deltaBand}` : null,
-                  s.delta != null ? `→Δ${Number(s.delta).toFixed(2)}` : null,
-                  s.moneyness != null ? `${(s.moneyness*100).toFixed(0)}% OTM` : null]
-                 .filter(Boolean).join(" ") || "any strike";
-  return {
-    engine: c.engine === "event_driven" ? "event driven" : "trade table",
-    entry: typeof c.entry === "string" ? c.entry
-      : c.plan_code ? "(a plan function)" : "(custom code)",
-    right: s.right || "—",
-    dte: band(s.dte_lo, s.dte_hi) ? `${band(s.dte_lo, s.dte_hi)} DTE` : "any tenor",
-    strike,
-    // Both are real constraints on what could be bought, and in live trading the spread
-    // is often the binding one — worth a place in the one-line summary.
-    spread: s.max_spread != null ? `spread ≤${s.max_spread}` : null,
-    openInterest: s.min_open_interest != null ? `OI ≥${s.min_open_interest}` : null,
-    takeProfit: x.take_profit ?? null,
-    stopLoss: x.stop_loss ?? null,
-    holdDays: x.hold_days ?? null,
-    dteFloor: x.dte_floor ?? null,
-    sizing: c.sizing?.method || null,
-    // A slot filled by a registered form decides that slot instead of the matching exit
-    // field, so a summary that omits it describes a different run from the one that ran.
-    components: Object.entries(c.components || {}).map(([slot, one]) =>
-      `${slot}=${one.variant}${one.version != null ? "@" + one.version : ""}`),
-    risk: c.risk?.variant ? `risk=${c.risk.variant}` : null,
-  };
-}
-
-/* ── the run history ── */
-function cfgLine(c){
-  const d = describeConfig(c);
-  const num = v => v == null ? "—" : v;
-  return [`[${d.engine}] ${d.entry}`,
-          `${d.right} ${d.dte} ${d.strike}`,
-          d.spread, d.openInterest,
-          `TP${num(d.takeProfit)} SL${num(d.stopLoss)} hold${num(d.holdDays)}`,
-          ...d.components, d.risk].filter(Boolean).join(" · ");
-}
-function paintRuns(){
-  $("runsSec").hidden = RUNS.length === 0;
-  const base = RUNS.find(r => r.id === BASE);
-  const baseSum = base ? stats(base.rows).sum : null;
-  $("runs").innerHTML = `<thead><tr>
-      <th>#</th><th style="text-align:left">configuration</th><th>trades</th><th>win rate</th>
-      <th>net P&L</th><th>mean</th><th>baseline</th></tr></thead><tbody>` +
-    RUNS.map(r => {
-      const s = stats(r.rows);
-      const d = (baseSum !== null && r.id !== BASE) ? s.sum - baseSum : null;
-      return `<tr data-run="${r.id}" class="${r.id === CURRENT ? "on" : ""}">
-        <td class="n"><a class="run-link" href="#/runs/${r.id}"
-          data-tip="Open run ${r.id} on the analysis page.">${r.id}</a></td>
-        <td><span class="cfg" data-tip="${esc(cfgLine(r.config))}">${cfgLine(r.config)}</span></td>
-        <td class="n">${s.n}</td>
-        <td class="n">${s.n ? pct(s.win) : "—"}</td>
-        <td class="n ${sgn(s.sum)}">${s.n ? money(s.sum) : "—"}
-          ${d !== null ? `<span class="delta ${sgn(d)}">${money(d)} vs baseline</span>` : ""}</td>
-        <td class="n ${sgn(s.mean)}">${s.n ? money(s.mean) : "—"}</td>
-        <td><button class="pin ${r.id === BASE ? "on" : ""}" data-pin="${r.id}">
-          ${r.id === BASE ? "baseline" : "set as baseline"}</button></td></tr>`;
-    }).join("") + `</tbody>`;
-  // The whole row opens the run, not only its number: a table of results where most of
-  // each row is dead is a table people click twice before learning where to aim.
-  $("runs").querySelectorAll("tbody tr").forEach(tr =>
-    tr.addEventListener("click", e => {
-      if(e.target.closest("[data-pin]")) return;      // pinning is not navigating
-      if(e.target.closest(".run-link")) return;       // the link does it itself
-      go(`/runs/${tr.dataset.run}`);
-    }));
-  $("runs").querySelectorAll(".pin").forEach(b =>
-    b.addEventListener("click", e => { e.stopPropagation(); BASE = +b.dataset.pin; paintRuns(); }));
-}
+/* The list of runs made in this session is gone from here. It was a second, smaller
+   experiment log — the same rows, grouped by nothing, lost on reload — and the real one now
+   exists and holds every run under the idea that owns it. A composer that also lists results
+   is the shape the design plan separates in its sections 4 and 5. */

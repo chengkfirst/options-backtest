@@ -5,18 +5,90 @@
  * panel on the left, the run history, and the code editor.
  */
 
-/* ── the two-column skeleton ── */
+/* ── the composer, as the addendum's wireframe draws it ──────────────────────────
+   A slot board in three lifecycle columns with the settings beside it, and a panel along the
+   foot. It was a 520 px form in the left third with the other two thirds empty: a rule's own
+   description wrapped to five lines, and the seventh slot sat four screens below the first.
+   The results moved to their own surface, so the width was there to take. */
 body{background:var(--ground)}
-/* The plan editor is the main surface, and writing Python at 340px clips the right of
-   every line. Wide enough for about 60 characters; wider starts squeezing the
-   results. */
-.bench{display:grid;grid-template-columns:clamp(400px,32vw,520px) 1fr;min-height:100vh;align-items:start}
-@media(max-width:980px){.bench{grid-template-columns:1fr}}
+.bench{display:block;min-height:100vh}
 
-/* ── left: the parameter panel ── */
-.panel{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;
-  background:var(--panel);border-right:1px solid var(--line)}
-@media(max-width:980px){.panel{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line)}}
+.composer{display:flex;flex-direction:column;min-height:calc(100vh - var(--topbar-height))}
+
+/* The context bar: where you are, what differs, and the one primary action. */
+.composer-bar{
+  display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;
+  padding:var(--space-3) var(--space-5);
+  border-bottom:1px solid var(--line);background:var(--panel);
+  position:sticky;top:0;z-index:3;
+}
+.composer-where{font-family:var(--display);font-size:var(--font-md);
+  font-weight:var(--weight-medium)}
+.composer-actions{margin-left:auto;display:flex;align-items:center;gap:var(--space-3)}
+.composer-actions .hint{margin:0;max-width:52ch;text-align:right}
+
+/* 60 / 25 by the plan's ratio, with the slot board taking the larger share. */
+.board{
+  display:grid;
+  grid-template-columns:minmax(0,3fr) minmax(260px,1fr);
+  gap:var(--space-5);
+  padding:var(--space-4) var(--space-5);
+  align-items:start;flex:1;
+}
+.slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-4)}
+@media(max-width:1200px){
+  .board{grid-template-columns:1fr}
+  .slots{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:820px){.slots{grid-template-columns:1fr}}
+
+.col{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
+.col-head{
+  margin:0;font-size:var(--font-xs);font-weight:var(--weight-medium);
+  letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);
+  padding-bottom:var(--space-1);border-bottom:1px solid var(--line);
+}
+.col-empty{margin:0}
+
+/* The open-state order, which is the order the engine asks these in every day. */
+.comp-order{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:17px;height:17px;margin-right:6px;
+  border:1px solid var(--line);border-radius:var(--radius-sm);
+  font-family:var(--mono);font-size:var(--font-xs);color:var(--ink-3);
+}
+.comp-tag{
+  margin-left:6px;padding:0 5px;border-radius:var(--radius-sm);
+  background:var(--sunk);color:var(--ink-3);
+  font-family:var(--sans);font-size:var(--font-xs);font-weight:var(--weight-regular);
+}
+.comp.is-off{opacity:.82}
+
+/* ── the settings column ── */
+.settings-col{display:flex;flex-direction:column;gap:var(--space-2);position:sticky;
+  top:calc(var(--topbar-height) + 56px)}
+.setting{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--panel)}
+.setting summary{
+  display:flex;align-items:baseline;gap:var(--space-2);
+  padding:var(--space-2) var(--space-3);cursor:pointer;
+  font-size:var(--font-sm);font-weight:var(--weight-medium);
+}
+.setting-sum{margin-left:auto;font-weight:var(--weight-regular);font-size:var(--font-xs);
+  color:var(--ink-3);text-align:right}
+.setting-body{padding:0 var(--space-3) var(--space-3);display:flex;flex-wrap:wrap;
+  gap:var(--space-3)}
+.setting-body .hint{margin:0}
+
+/* ── the foot panel ── */
+.composer-foot{border-top:1px solid var(--line);background:var(--panel)}
+.foot-tabs{margin:0;padding:0 var(--space-5);background:none;border-radius:0;width:auto;
+  border-bottom:1px solid var(--line-soft)}
+.foot-body{padding:var(--space-3) var(--space-5) var(--space-4);max-height:38vh;overflow:auto}
+.validation{margin:0;font-size:var(--font-sm);line-height:1.55}
+.validation.ok{color:var(--ink-2)}
+.validation.bad{color:var(--warn)}
+.payload{margin:var(--space-2) 0 0;max-height:30vh;overflow:auto;white-space:pre;
+  font-size:var(--font-xs);line-height:1.5}
 
 .mode{margin:4px 0 0;font-size:var(--font-sm);color:var(--ink-3)}
 .mode.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
@@ -254,3 +326,11 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:v
 }
 .gap-more:hover { color: var(--accent); border-bottom-color: var(--accent); }
 .gap-rest { display: block; margin-top: 3px; }
+
+/* A slot switched off. Stated, not left blank: "no stop loss" is a research choice and has to
+   read as one — the card says what the engine is not being given. */
+.comp-note.off {
+  color: var(--warn);
+  border-left: 2px solid var(--warn);
+  padding-left: 9px;
+}
