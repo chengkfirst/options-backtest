@@ -290,6 +290,10 @@
   padding: var(--space-2) var(--space-3);
   vertical-align: top;
   font-size: var(--font-sm);
+  /* `app.css` right-aligns every `td`, which is right for a column of figures and wrong for
+     a card: with two runs it left the second column's name hard against the window and a
+     hand's width of empty table between them. */
+  text-align: left;
 }
 
 .cmp-col.base { background: var(--surface-2); }
@@ -368,3 +372,30 @@
 
 .cmp-prov th, .cmp-prov td { border-top: 1px solid var(--border-strong); }
 .cmp-trades { width: 100%; }
+
+/* ── nothing to show ──
+   What will appear, and one way on. Never a filter bar above blank space, which is what a
+   fresh store used to get. */
+.log-blank {
+  padding: var(--space-6);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  text-align: center;
+  max-width: 70ch;
+  margin: var(--space-4) auto;
+}
+
+.log-blank h3 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--display);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+}
+
+.log-blank p {
+  margin: 0 auto var(--space-3);
+  max-width: 56ch;
+  color: var(--text-secondary);
+  font-size: var(--font-base);
+  line-height: 1.6;
+}

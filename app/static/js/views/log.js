@@ -363,10 +363,12 @@ function render(){
     <header class="log-head">
       <h2>experiment log</h2>
       <p class="hint">Every run, under the idea that owns it. The count in each header is the
-        size of the search, archived runs included — ${esc(String(RUNS.length))} runs are
-        loaded${FILTERS.archived ? ", archived ones among them" : "; archived ones are hidden"}.</p>
+        size of the search, archived runs included.${RUNS.length
+          ? ` ${esc(String(RUNS.length))} runs are loaded${FILTERS.archived
+              ? ", archived ones among them" : "; archived ones are hidden"}.` : ""}</p>
     </header>
-    ${filterBar()}
+    ${IDEAS.length ? filterBar() : ""}
+    ${emptyState(rows.length)}
     <div class="log-groups">${groups.map(idea => {
       const mine = byIdea.get(idea.idea) || [];
       return `<section class="idea${OPEN.has(idea.idea) ? " open" : ""}">
@@ -381,6 +383,30 @@ function render(){
   </div>`;
   wire();
   paintCompareBar();
+}
+
+/** Nothing to show, and which kind of nothing it is.
+ *
+ * The design plan's state table: an empty state says what will appear and offers one button
+ * to the next step, and never leaves the words "no data" alone — or, as this page did on a
+ * fresh store, a filter bar above blank space. The two kinds of nothing need different
+ * sentences and different buttons: a store with no runs in it wants the composer, and a
+ * filter that hides all of them wants the filter cleared.
+ */
+function emptyState(shown){
+  if(IDEAS.length && shown) return "";
+  if(!IDEAS.length)
+    return `<div class="log-blank">
+      <h3>No run has been made yet</h3>
+      <p>Every backtest that finishes is recorded here, grouped by the idea that owns it,
+         with the size of the search under each one. Compose a configuration and run it, and
+         the first idea appears.</p>
+      <a class="btn" href="#/bench">compose a configuration</a></div>`;
+  return `<div class="log-blank">
+    <h3>No run matches these filters</h3>
+    <p>${RUNS.length} runs are loaded${FILTERS.archived ? "" : " and archived ones are hidden"}.
+       Clearing the filters brings them back.</p>
+    <button class="btn" type="button" id="clearFiltersEmpty">clear the filters</button></div>`;
 }
 
 /** The bar that appears once two runs are ticked. The plan: "Ticking 2 to 4 rows raises a
@@ -466,14 +492,10 @@ function wire(){
       else render();
     });
 
-  $("clearFilters")?.addEventListener("click", () => {
-    const empty = {};
-    for(const spec of FILTERS_SPEC) empty[spec.key] = null;
-    empty.text = null;
-    FILTERS = {};
-    replace(empty);
-    enter({query: {}});
-  });
+  // Both ways out of a filtered list run the same thing: the bar's own button, and the one in
+  // the empty state that explains why the list is empty.
+  for(const id of ["clearFilters", "clearFiltersEmpty"])
+    $(id)?.addEventListener("click", clearFilters);
 
   // Metadata is the one thing the plan allows an optimistic update for: the row shows the
   // new verdict at once and the write is reported only if it fails.
@@ -487,6 +509,16 @@ function wire(){
       input.value = "";
       input.placeholder = "written";
     });
+}
+
+/** Every filter off, in the URL as well as in memory. */
+function clearFilters(){
+  const empty = {};
+  for(const spec of FILTERS_SPEC) empty[spec.key] = null;
+  empty.text = null;
+  FILTERS = {};
+  replace(empty);
+  enter({query: {}});
 }
 
 async function saveNote(id, body, verdict){
