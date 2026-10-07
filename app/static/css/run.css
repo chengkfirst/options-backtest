@@ -118,7 +118,25 @@
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
 }
+/* The whole block folds. It carried six lines on every visit whatever the run said, and a
+   section that is always open is one the eye learns to step over — which is the opposite
+   of what this is for. Closed it is its own summary line. */
+.ev-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.ev-toggle h3 { margin: 0; font-size: var(--font-sm); font-weight: 600; }
+.ev-toggle:hover h3 { color: var(--accent); }
+.evidence.open .ev-toggle .subj-caret { transform: rotate(90deg) translateX(1px); }
 .ev-head h3 { margin: 0; font-size: var(--font-sm); font-weight: 600; }
+.evidence:not(.open) .ev-head { border-bottom: 0; }
 .ev-why { font-size: var(--font-xs); color: var(--text-muted); }
 .ev-all {
   margin-left: auto;

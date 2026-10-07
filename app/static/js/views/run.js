@@ -532,6 +532,13 @@ const SHEET = [
  */
 const OPEN_SUBJECTS = new Set();
 
+/* Whether the whole block is open. `null` means nobody has said, and then it opens only
+   when there is something serious in it — the block exists to put a bad finding in front
+   of the reader, and a run with none does not need six lines of it sitting open on every
+   visit. Once it is toggled by hand that choice sticks, including across tab switches,
+   which is the design plan's "tab switches keep collapsed state". */
+let SHEET_OPEN = null;
+
 const SEVERITY = {bad: 0, warn: 1, ok: 2};
 
 function evidence(){
@@ -589,20 +596,36 @@ function evidence(){
       </table>
     </div>`;
 
-  return `<section class="evidence">
+  const open = SHEET_OPEN === null ? tally.bad > 0 : SHEET_OPEN;
+  return `<section class="evidence${open ? " open" : ""}">
     <header class="ev-head">
-      <h3>What this run stands on</h3>
+      <button type="button" class="ev-toggle" data-sheet="toggle" aria-expanded="${open}">
+        <span class="subj-caret" aria-hidden="true"></span>
+        <h3>What this run stands on</h3>
+      </button>
       <span class="ev-why">${tally.bad} serious · ${tally.warn} noted · ${tally.ok} clear</span>
-      <button type="button" class="ev-all" data-subject="*">${
-        OPEN_SUBJECTS.size >= SHEET.length ? "close all" : "open all"}</button>
+      ${open ? `<button type="button" class="ev-all" data-subject="*">${
+        OPEN_SUBJECTS.size >= SHEET.length ? "close all" : "open all"}</button>` : ""}
     </header>
-    <div class="subjects">${subjects.map(line).join("")}${stands}</div>
+    ${open ? `<div class="subjects">${subjects.map(line).join("")}${stands}</div>` : ""}
   </section>`;
 }
 
 /** Opening and closing subjects. Bound after each paint, because the tier is rewritten
  *  whole and a listener on a replaced node goes with it. */
 function bindEvidence(){
+  const repaint = () => {
+    const host = document.querySelector(".evidence");
+    host.outerHTML = evidence();
+    bindEvidence();
+  };
+  for(const b of document.querySelectorAll("[data-sheet]"))
+    b.addEventListener("click", () => {
+      const tally = SHEET.flatMap(sec => sec.rows.map(r => r.limits(RUN).level))
+        .filter(l => l === "bad").length;
+      SHEET_OPEN = !(SHEET_OPEN === null ? tally > 0 : SHEET_OPEN);
+      repaint();
+    });
   for(const b of document.querySelectorAll("[data-subject]"))
     b.addEventListener("click", () => {
       const key = b.dataset.subject;
