@@ -194,6 +194,14 @@ class Handler(SimpleHTTPRequestHandler):
             for key in ("equity_metrics", "scenarios", "attribution"):
                 if isinstance(record.get("analysis"), dict) and key in record["analysis"]:
                     record[key] = record["analysis"][key]
+            # A run stored before a part of the analysis existed has no key for it, and an
+            # absent key is not the same thing as a recorded `null`: the first makes the
+            # interface's contract check report the backend as out of step, the second says
+            # "this run does not have that" and lets the page fall back. Every part the
+            # contract declares is present, so only one of those two can happen.
+            if isinstance(record.get("analysis"), dict):
+                for key in ("baselines",):
+                    record["analysis"].setdefault(key, None)
             return self._json(record)
         if url.path == "/api/strategies":
             name = q.get("name")

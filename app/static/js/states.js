@@ -16,7 +16,7 @@ import {notice, paintIssues} from "./net.js";
 import {blankChart} from "./charts/svg.js";
 import {startTips} from "./ui/tip.js";
 import {renderEquity, renderEquityStrip} from "./charts/equity.js";
-import {renderHist, renderScatter, renderYears} from "./charts/distribution.js";
+import {renderHist, renderPeriods, renderScatter} from "./charts/distribution.js";
 import {renderDetail, renderRobust, renderStrip} from "./charts/tables.js";
 import {renderAttribution} from "./charts/attribution.js";
 
@@ -268,7 +268,7 @@ section("results", "The renderers that ship, on fabricated data shaped like a re
       <div class="chart"><svg id="hist" viewBox="0 0 520 250"></svg></div>
       <div class="chart"><svg id="years" viewBox="0 0 520 220"></svg></div>
       </div></div>`,
-      () => { renderHist(TRADES); renderYears(TRADES); }),
+      () => { renderHist(TRADES); renderPeriods(TRADES); }),
     one("a dimension against P&L", `<div class="g-frame">
       <div class="chart"><svg id="scatter" viewBox="0 0 520 250"></svg></div>
       <p class="hint" id="scatNote"></p></div>`,

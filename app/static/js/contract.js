@@ -111,11 +111,20 @@ export const CONTRACT = {
  * Returns "ok", "missing" or "empty" — and "empty" is **not** a failure: a list with no
  * elements (no anomaly fired, no scenario covered) cannot show whether its fields are
  * there, and reporting that as missing would cry wolf on every quiet run.
+ *
+ * A key that is present and holds `null` is "empty" for the same reason. `null` is the
+ * store's word for **not recorded** — a run saved before a part of the analysis existed
+ * keeps the column and leaves it null — and that is a fact about one old run, not a sign
+ * that the two sides have drifted. Treating it as missing put a red "the backend response
+ * is missing fields" banner above every stored run the moment a new analysis part shipped.
+ * A rename or a removal still fails, because then the key itself is gone.
  */
 export function resolvePath(obj, path){
   let node = obj;
   for(const part of path.split(".")){
-    if(node == null) return "missing";
+    // Reaching here with a null node means some earlier key existed and held null; an
+    // absent key returns "missing" below, before the walk can continue.
+    if(node == null) return "empty";
     if(part === "*"){
       if(!Array.isArray(node)) return "missing";
       if(!node.length) return "empty";

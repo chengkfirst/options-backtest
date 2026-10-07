@@ -27,8 +27,9 @@ import {checkContract} from "../contract.js";
 import {EXCLUDE, REASON, absent, fmtVal, label, money, moneyShort, num, pct, size}
   from "../fmt.js";
 import {areaLayer, chartStack, lineLayer, underwaterLayer} from "../charts/axis.js";
-import {renderAB, renderHist, renderScatter, renderYears} from "../charts/distribution.js";
+import {renderAB, renderHist, renderPeriods, renderScatter} from "../charts/distribution.js";
 import {renderCurve} from "../charts/equity.js";
+import {renderAttribution} from "../charts/attribution.js";
 import {renderBuckets, renderCross, renderRobust} from "../charts/tables.js";
 import {replace} from "../router.js";
 
@@ -714,30 +715,25 @@ function renderTab(tab, query){
 
 function spreadTab(host){
   host.innerHTML = `<div class="pad">
-    <p class="hint">Where the outcomes sit, and whether a few of them carry the result.
-      ${VIEW.length === (RUN.rows || []).length ? ""
-        : `<b>Showing the ${VIEW.length} trades in the brushed period.</b>`}</p>
+    ${VIEW.length === (RUN.rows || []).length ? ""
+      : `<p class="hint"><b>Showing the ${VIEW.length} trades in the brushed
+         period.</b></p>`}
     <h4>cumulative P&amp;L, trade by trade</h4>
-    <p class="hint">The equity curve above marks the book every day; this adds up the
-      closed trades in the order they closed. A staircase with one tall step is a result
-      resting on one trade.</p>
     <div class="chart"><svg id="curve" role="img" aria-label="cumulative P&amp;L"></svg></div>
     <p class="hint" id="curveNote"></p>
     <div class="two-up">
       <section><h4>per-trade P&amp;L</h4>
         <div class="chart"><svg id="hist" role="img"
           aria-label="per-trade P&amp;L distribution"></svg></div></section>
-      <section><h4>by year</h4>
-        <div class="chart"><svg id="years" role="img" aria-label="P&amp;L by year"></svg></div>
+      <section><h4 id="periodHead">by period</h4>
+        <div class="chart"><svg id="years" role="img" aria-label="P&amp;L by period"></svg></div>
       </section>
     </div>
     <h4>does it hold without the best few trades</h4>
-    <p class="hint">A sign flip means the result rests on a handful of outcomes rather
-      than on the rule.</p>
     <table class="plain" id="robust"></table></div>`;
   renderCurve(VIEW, false);
   renderHist(VIEW);
-  renderYears(VIEW);
+  renderPeriods(VIEW);
   renderRobust(VIEW);
 }
 
@@ -893,28 +889,27 @@ function shortGap(g){
   return first.length > 90 ? first.slice(0, 90) + "…" : first;
 }
 
+/* The attribution tab.
+ *
+ * It was a five-row table of numbers with a proportional bar beside each. Attribution is
+ * an identity — the Greeks and the residual add up to the result — and neither a table
+ * nor a bar scaled against the sum of absolute values can show that. The waterfall does,
+ * and it makes the shape of this particular run readable at a glance: theta took more
+ * than the whole loss and gamma gave a third of it back.
+ *
+ * Returns markup and then paints, because the tab's host is written in one go. */
 function attributionTab(){
   const attr = RUN.attribution || RUN.analysis?.attribution;
   if(!attr || !attr.totals)
     return `<p class="hint">No attribution for this run.</p>`;
-  const names = ["delta", "gamma", "vega", "theta", "residual"];
-  const meaning = {delta: "direction", gamma: "movement", vega: "implied volatility",
-                   theta: "time", residual: "what the approximation could not place"};
-  const total = names.reduce((a, n) => a + Math.abs(attr.totals[n] || 0), 0) || 1;
+  // Painted after the host has the element to draw into.
+  requestAnimationFrame(() => renderAttribution(attr, RUN.net_pnl ?? null));
+  const bad = attr.high_residual;
   return `<div class="pad">
-    <p class="hint">Where the money came from. A large residual means the second-order
-      approximation failed and those trades' attribution cannot be trusted.</p>
-    <table class="plain"><tbody>${names.map(n => {
-      const v = attr.totals[n] || 0;
-      const w = (Math.abs(v) / total * 100).toFixed(1);
-      return `<tr>
-        <th class="left">${n}<span class="sub">${meaning[n]}</span></th>
-        <td class="bar"><span style="width:${w}%;background:var(--greek-${n})"></span></td>
-        <td class="n ${v >= 0 ? "pos" : "neg"}">${money(v)}</td></tr>`;
-    }).join("")}</tbody></table>
-    ${attr.high_residual
-      ? `<p class="hint warn-text">${attr.high_residual} trade(s) have too large a
-         residual to trust.</p>` : ""}</div>`;
+    <div class="chart"><svg id="attr" role="img"
+      aria-label="P&amp;L attribution by Greek"></svg></div>
+    ${bad ? `<p class="hint warn-text">${bad} ${bad === 1 ? "trade has" : "trades have"} a
+       residual too large to place, so that much of this is unattributed.</p>` : ""}</div>`;
 }
 
 function exitReasonTab(){
@@ -932,19 +927,44 @@ function exitReasonTab(){
     }).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
+/* The costs the engine charged, as money rather than as field names.
+ *
+ * `label()` falls back to the key when it has no entry for it, which put GROSS_PNL,
+ * FEES_PCT_OF_GROSS and EATEN_BY_COSTS on screen as themselves, and printed the last of
+ * them as the word "false". A reader should not have to know the backend's identifiers to
+ * read their own costs, and a boolean is a sentence, not a value. */
+const COST_LABEL = {
+  commission: "commission", regulatory: "regulatory fees", slippage: "slippage",
+  total: "total cost", gross_pnl: "before costs", net_pnl: "after costs",
+  fees_pct_of_gross: "costs as a share of gross",
+};
+/** Costs are money spent. A signed formatter prints 346 spent as "+346", which reads as a
+ *  gain; the sign belongs to the P&L rows, not to the cost rows. */
+const COST_SIGNED = new Set(["gross_pnl", "net_pnl"]);
+
 function costsTab(){
   const costs = RUN.analysis?.costs;
   if(!costs) return `<p class="hint">No cost breakdown for this run.</p>`;
   const t = META?.thresholds?.cost_share_warning;
+  const eaten = costs.eaten_by_costs;
+
+  const cards = Object.entries(costs)
+    .filter(([k]) => k !== "eaten_by_costs")       // a verdict, shown as one below
+    .map(([k, v]) => {
+      const show = typeof v !== "number" ? String(v)
+        : Math.abs(v) < 1 ? pct(v)
+        : COST_SIGNED.has(k) ? money(v) : size(v);
+      return `<div class="card"><dt>${esc(COST_LABEL[k] || label(k))}</dt>
+        <dd>${esc(show)}</dd></div>`;
+    }).join("");
+
   return `<div class="pad">
-    <p class="hint">What the trading cost, against what it made. Live costs above
-      backtest costs is the norm, which is what the doubled-cost robustness run tests.</p>
-    <dl class="cards">${Object.entries(costs).map(([k, v]) => `
-      <div class="card"><dt>${esc(label(k))}</dt>
-        <dd>${esc(typeof v === "number" ? (Math.abs(v) < 1 ? pct(v) : money(v)) : String(v))}</dd>
-      </div>`).join("")}</dl>
-    ${t ? `<p class="hint">The cut this project uses: costs above
-      ${pct(t.value)} of gross are flagged — ${esc(t.because || "")}</p>` : ""}</div>`;
+    <dl class="cards">${cards}</dl>
+    ${eaten != null ? `<p class="hint${eaten ? " warn-text" : ""}">${eaten
+      ? `Costs took more than ${pct(t?.value)} of gross: this result is a statement about
+         the cost model as much as about the strategy.`
+      : `Costs stayed under the ${pct(t?.value)} of gross at which this project stops
+         trusting a result.`}</p>` : ""}</div>`;
 }
 
 /* The research tools, run on demand.

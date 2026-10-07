@@ -41,25 +41,86 @@ export function renderHist(rows){
 }
 
 /* ── by year ── */
-export function renderYears(rows){
-  const svg=$("years"), by={};
-  for(const r of rows){const y=r.entry_date.slice(0,4);by[y]=(by[y]||0)+r.net_pnl;}
-  const yrs=Object.keys(by).sort();
-  if(!yrs.length){blankChart(svg,"no trades under the current filter");return;}
+/* ── P&L by period ──────────────────────────────────────────────────────────────
+ *
+ * This was "by year", and on every run anyone actually makes it drew one bar. A four-month
+ * backtest has one year in it, so the chart was a single column against an empty box with
+ * "0 of 1 years positive" written above it — a sentence with no information in it. The
+ * bucket is chosen from the span now: months for anything under two years, quarters under
+ * six, years beyond that. The question the chart answers — was this spread across the
+ * period or did it happen in one stretch — is the same at every scale.
+ *
+ * It also labelled its axis with `money(lim)` where `lim` is a **magnitude**, so a run that
+ * lost 31,220 printed "+31,220" at the top of the scale and left the bottom unlabelled.
+ * Both ends are labelled now, and both carry their own sign.
+ */
+
+/** The bucket that gives a readable number of bars for the span covered. */
+function periodKey(rows){
+  const days = (() => {
+    const ds = rows.map(r => Date.parse(r.entry_date)).filter(Number.isFinite);
+    if(!ds.length) return 0;
+    return (Math.max(...ds) - Math.min(...ds)) / 86400000;
+  })();
+  if(days < 730) return {
+    unit: "month",
+    of: d => d.slice(0, 7),
+    label: k => k.slice(2).replace("-", "/"),   // 2023-04 -> 23/04
+  };
+  if(days < 2200) return {
+    unit: "quarter",
+    of: d => `${d.slice(0, 4)}Q${Math.floor(+d.slice(5, 7) / 3.01) + 1}`,
+    label: k => k.slice(2),                     // 2023Q2 -> 23Q2
+  };
+  return {unit: "year", of: d => d.slice(0, 4), label: k => k.slice(2)};
+}
+
+export function renderPeriods(rows){
+  const svg = $("years");
+  if(!rows.length){ blankChart(svg, "no trades under the current filter"); return; }
+  const spec = periodKey(rows);
+  const by = {};
+  for(const r of rows){
+    const k = spec.of(r.entry_date);
+    by[k] = (by[k] || 0) + r.net_pnl;
+  }
+  const keys = Object.keys(by).sort();
+  if(!keys.length){ blankChart(svg, "no trades under the current filter"); return; }
+
   const {W, H} = fit(svg, {height: 220});
-  const PL=52,PR=14,PT=18,PB=28;
-  const vals=yrs.map(y=>by[y]), lim=Math.max(...vals.map(Math.abs),1);
-  const bw=(W-PL-PR)/yrs.length, y0=PT+(H-PT-PB)/2, h=v=>Math.abs(v)/lim*((H-PT-PB)/2);
-  let s=`<line x1="${PL}" x2="${W-PR}" y1="${y0}" y2="${y0}" stroke="var(--line)"/>`;
-  yrs.forEach((yr,i)=>{const v=by[yr],bh=h(v);
-    s+=`<rect x="${(PL+i*bw+bw*.18).toFixed(1)}" y="${(v>=0?y0-bh:y0).toFixed(1)}"
-      width="${(bw*.64).toFixed(1)}" height="${Math.max(bh,1).toFixed(1)}"
-      fill="${v>=0?'var(--gain)':'var(--loss)'}" opacity=".7"/>`;
-    s+=txt(PL+i*bw+bw/2,H-PB+14,yr.slice(2),{anchor:"middle",size:11});});
-  s+=txt(PL-6,y0-((H-PT-PB)/2)+4,money(lim),{anchor:"end"})+txt(PL-6,y0+4,"0",{anchor:"end"});
-  s+=txt(W-PR,PT-2,`${vals.filter(v=>v>0).length} of ${yrs.length} years positive`,
-    {fill:"var(--ink-2)",size:11,anchor:"end",mono:false});
-  svg.innerHTML=s;
+  const PL = 56, PR = 14, PT = 20, PB = 30;
+  const vals = keys.map(k => by[k]);
+  const lim = Math.max(...vals.map(Math.abs), 1);
+  const bw = (W - PL - PR) / keys.length;
+  const y0 = PT + (H - PT - PB) / 2;
+  const h = v => Math.abs(v) / lim * ((H - PT - PB) / 2);
+
+  let s = `<line x1="${PL}" x2="${W - PR}" y1="${y0}" y2="${y0}" stroke="var(--border-strong)"/>`;
+  keys.forEach((k, i) => {
+    const v = by[k], bh = h(v);
+    s += `<rect x="${(PL + i * bw + bw * .18).toFixed(1)}" y="${(v >= 0 ? y0 - bh : y0).toFixed(1)}"
+      width="${(bw * .64).toFixed(1)}" height="${Math.max(bh, 1).toFixed(1)}" rx="1"
+      fill="${v >= 0 ? "var(--success)" : "var(--danger)"}" opacity=".85"/>`;
+    // Every bar gets its label where there is room for one; past about a dozen they are
+    // thinned rather than overprinted, and the ends are always kept so the span is read.
+    const step = Math.ceil(keys.length / 12);
+    if(i % step === 0 || i === keys.length - 1)
+      s += txt(PL + i * bw + bw / 2, H - PB + 14, spec.label(k), {anchor: "middle", size: 11});
+  });
+
+  // Both ends of the symmetric scale, each with its own sign.
+  s += txt(PL - 6, y0 - ((H - PT - PB) / 2) + 4, money(lim), {anchor: "end"});
+  s += txt(PL - 6, y0 + 4, "0", {anchor: "end"});
+  s += txt(PL - 6, y0 + ((H - PT - PB) / 2) + 4, money(-lim), {anchor: "end"});
+
+  const up = vals.filter(v => v > 0).length;
+  s += txt(W - PR, PT - 6, `${up} of ${keys.length} ${spec.unit}s positive`,
+           {fill: "var(--text-muted)", size: 11, anchor: "end", mono: false});
+  svg.innerHTML = s;
+  // The heading says which bucket was chosen. "by period" is honest but vague, and the
+  // reader should not have to infer the unit from the tick labels.
+  const head = $("periodHead");
+  if(head) head.textContent = `by ${spec.unit}`;
 }
 
 /* ── the scatter ── */
