@@ -460,6 +460,42 @@ suite("views — a tab that throws keeps its failure to itself", async () => {
   frame.remove();
 });
 
+suite("views — one link restores the whole reading, on any tab", async () => {
+  const net = await import("./net.js");
+  const runs = await net.getJSON(net.API.runs);
+  const run = await net.getJSON(net.API.run, {id: runs.runs[0].id});
+  const rows = run.rows || [];
+  if(rows.length < 4) return;                       // nothing to filter
+
+  // A range that keeps some but not all, and a closing slot that exists in this run.
+  const dates = rows.map(r => String(r.entry_date)).sort();
+  const from = dates[0], to = dates[Math.floor(dates.length / 2)];
+  const reason = rows.find(r => r.exit_reason)?.exit_reason;
+
+  const frame = document.createElement("iframe");
+  frame.style.cssText = "width:1200px;height:800px;border:0";
+  document.getElementById("sandbox").append(frame);
+
+  // On a tab with no chart stack. The restore used to live inside the overview branch, so
+  // a link that landed anywhere else dropped the range and the filter while the URL still
+  // said they were on.
+  frame.src = `/#/runs/${run.id}?tab=trades&range=${from}..${to}`
+            + (reason ? `&closed=${encodeURIComponent(reason)}` : "");
+  await new Promise(r => { frame.onload = r; setTimeout(r, 2500); });
+  await new Promise(r => setTimeout(r, 1500));
+  const doc = frame.contentDocument;
+
+  const shown = doc.querySelectorAll("#runDetail tbody tr").length;
+  ok(shown > 0 && shown < rows.length,
+     `the link's filters narrowed the table (${shown} of ${rows.length})`);
+  const chip = doc.getElementById("rangeChip");
+  ok(chip && !chip.hidden, "and the chip says what is filtering");
+  ok(chip.textContent.includes(from), "the range is named");
+  if(reason) ok(doc.getElementById("clearClosed"), "the slot filter has its own way out");
+  ok(doc.getElementById("clearRange"), "and so does the range");
+  frame.remove();
+});
+
 /* ── run the lot ── */
 export async function run(){
   const out = document.getElementById("out");

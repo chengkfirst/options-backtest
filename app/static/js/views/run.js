@@ -44,6 +44,7 @@ let TAB = "overview";  // which tab is open, so a brush can repaint it
 let PICKED = null;     // the selected trade's row, or null
 let SCROLL_TO_FIRST = false;  // set by the brush: take the table to the range's first trade
 let RANGE = null;      // the brushed range, so the chip can show and clear it
+let CLOSED_BY = null;  // filter to the trades one slot closed, from the exits tab
 
 /** The tabs of section 6, and what each one is waiting on where it cannot be built. */
 const TABS = [
@@ -867,21 +868,38 @@ function buildStack(host){
  *
  * One function for both the drag and the restore-from-URL, so the two cannot drift —
  * which they had, leaving a reloaded link showing a shaded range over the full table. */
+/** Recompute what the table and the tabs see, from every filter at once.
+ *
+ * The brushed range and the closing slot are two filters on one set, and the design plan
+ * asks for both — "brushing filters every chart and the trade table", and "clicking a slot
+ * anywhere filters the page to that slot's actions". They compose: brushing a drawdown and
+ * then clicking the stop loss asks "what did the stop do inside this fall", which is the
+ * question flow 2 of the addendum is made of, and neither filter alone answers it. */
+function recompute(){
+  VIEW = (RUN.rows || []).filter(r =>
+    (!RANGE || (r.entry_date >= RANGE.from && r.entry_date <= RANGE.to))
+    && (!CLOSED_BY || r.exit_reason === CLOSED_BY));
+  paintRangeChip();
+  if(PICKED && !VIEW.includes(PICKED)) pick(null);
+  paintDetail();
+  if(TAB && TAB !== "overview") renderTab(TAB, {});
+}
+
+/** Filter to the trades one slot closed, or clear it. The same control does both, because
+ *  the way out of a filter should be where the way in was. */
+function closedBy(reason){
+  CLOSED_BY = reason && reason !== CLOSED_BY ? reason : null;
+  SCROLL_TO_FIRST = Boolean(CLOSED_BY);
+  replace({closed: CLOSED_BY});
+  recompute();
+}
+
 function applyBrush(range){
-  VIEW = range
-    ? (RUN.rows || []).filter(r => r.entry_date >= range.from && r.entry_date <= range.to)
-    : (RUN.rows || []);
   // Take the table to where the selection starts rather than leaving the reader to find
   // it among four hundred rows.
   SCROLL_TO_FIRST = Boolean(range);
   RANGE = range || null;
-  paintRangeChip();
-  // A selected trade outside the new range is no longer on screen to be selected.
-  if(PICKED && !VIEW.includes(PICKED)) pick(null);
-  paintDetail();
-  // "Brushing filters every chart and the trade table" — so the open tab is repainted
-  // too, unless it is the stack itself, which drew the brush in the first place.
-  if(TAB && TAB !== "overview") renderTab(TAB, {});
+  recompute();
 }
 
 /** The brushed range, with a way out of it.
@@ -892,18 +910,25 @@ function applyBrush(range){
 function paintRangeChip(){
   const host = $("rangeChip");
   if(!host) return;
-  host.hidden = !RANGE;
-  if(!RANGE){ host.innerHTML = ""; return; }
-  host.innerHTML = `<span class="chip-range">${esc(RANGE.from)} → ${esc(RANGE.to)}</span>
-    <span class="chip-n">${VIEW.length} of ${(RUN.rows || []).length} trades</span>
-    <button type="button" id="clearRange">clear range</button>`;
-  $("clearRange").addEventListener("click", () => {
+  const on = Boolean(RANGE || CLOSED_BY);
+  host.hidden = !on;
+  if(!on){ host.innerHTML = ""; return; }
+  // Each filter says what it is and offers its own way out, because clearing the range and
+  // clearing the slot are different intentions and one button for both would guess.
+  host.innerHTML =
+    (RANGE ? `<span class="chip-range">${esc(RANGE.from)} → ${esc(RANGE.to)}</span>
+       <button type="button" id="clearRange">clear range</button>` : "")
+    + (CLOSED_BY ? `<span class="chip-range">closed by ${esc(REASON[CLOSED_BY] || CLOSED_BY)}</span>
+       <button type="button" id="clearClosed">clear slot</button>` : "")
+    + `<span class="chip-n">${VIEW.length} of ${(RUN.rows || []).length} trades</span>`;
+  $("clearRange")?.addEventListener("click", () => {
     if(STACK) STACK.setBrush(null);
     applyBrush(null);
     // The stack writes the range into the URL when it is dragged; clearing from here has
     // to take it out, or a reload restores a range the page is no longer showing.
     replace({range: null});
   });
+  $("clearClosed")?.addEventListener("click", () => closedBy(null));
 }
 
 /* ── the detail tier ────────────────────────────────────────────────────────── */
@@ -1097,8 +1122,23 @@ function render(query){
     });
 
   bindEvidence();
+
+  // A link carries the whole reading — the tab, the brushed range, the closing slot, the
+  // mark and the trade — and every part of it is restored here, before the tab is drawn.
+  // This lived inside the overview branch of `renderTab`, so a link that landed on any
+  // other tab silently dropped the range and the filter while the URL still said they
+  // were on.
+  CLOSED_BY = query.closed ? String(query.closed) : null;
+  if(query.trade != null && query.trade !== ""){
+    const want = String(query.trade);
+    PICKED = (RUN.rows || []).find(r => String(r.trade_id ?? "") === want) || null;
+  }
+  if(query.range){
+    const [from, to] = String(query.range).split("..");
+    RANGE = from && to ? {from, to} : null;
+  }
+  recompute();
   renderTab(tab, query);
-  paintDetail();
 }
 
 /* ── archiving and deleting ──────────────────────────────────────────────────────
@@ -1234,33 +1274,24 @@ function renderTabBody(tab, query){
     host.append(box);
     if(STACK) STACK.destroy();
     STACK = buildStack(box);
-    // A link carries the reading: the tab, the brushed range, the mark and the trade. Each
-  // is restored, and the trade last so it shades a stack that already has its range.
-  if(query.trade != null && query.trade !== ""){
-    const want = String(query.trade);
-    const row = (RUN.rows || []).find(r => String(r.trade_id ?? "") === want);
-    if(row){ PICKED = row; if(STACK) STACK.setHeld(
-      row.entry_date && row.exit_date
-        ? {from: String(row.entry_date).slice(0, 10), to: String(row.exit_date).slice(0, 10)}
-        : null); }
-  }
-  if(STACK && query.range){
-      const [from, to] = String(query.range).split("..");
-      if(from && to){
-        STACK.setBrush({from, to});
-        // The shading alone is not the view state. Restoring the brush has to restore
-        // what the brush *does* — a reloaded link that showed a shaded range over the
-        // full trade table would be telling the reader two different things at once.
-        applyBrush({from, to});
-      }
-    }
+    // A stack built after the range was restored still has to be told about it, since the
+    // shading lives on the chart and the filter lives in `RANGE`.
+    if(RANGE) STACK.setBrush(RANGE);
+    if(PICKED && PICKED.entry_date && PICKED.exit_date)
+      STACK.setHeld({from: String(PICKED.entry_date).slice(0, 10),
+                     to: String(PICKED.exit_date).slice(0, 10)});
     return;
   }
   if(tab === "settings"){ host.innerHTML = settingsTab(); return; }
   if(tab === "spread"){ spreadTab(host); return; }
   if(tab === "slice"){ sliceTab(host); return; }
   if(tab === "attribution"){ attributionTab(host); return; }
-  if(tab === "trades"){ host.innerHTML = exitReasonTab(); return; }
+  if(tab === "trades"){
+    host.innerHTML = exitReasonTab();
+    for(const tr of host.querySelectorAll("[data-closed]"))
+      tr.addEventListener("click", () => closedBy(tr.dataset.closed));
+    return;
+  }
   if(tab === "execution"){ host.innerHTML = costsTab(); return; }
   if(tab === "robustness"){
     host.innerHTML = robustnessTab();
@@ -1478,18 +1509,26 @@ function attributionTab(host){
   renderAttribution(attr, RUN.net_pnl ?? null);
 }
 
+/* Each row is one slot's closings, and clicking it filters the page to them — the design
+   plan's "clicking a slot anywhere filters the page to that slot's actions", at the level
+   the data supports. Filtering by Greek, which the addendum's flow 2 also asks for, needs
+   per-trade attribution the backend does not send; the run totals cannot say which trade a
+   Greek drove. */
 function exitReasonTab(){
   const rows = RUN.analysis?.by_exit_reason;
   if(!rows || !rows.length) return `<p class="hint">No exit breakdown for this run.</p>`;
   const cols = Object.keys(rows[0]);
+  const key = cols[0];
   return `<div class="pad">
-    <table class="plain"><thead><tr>${cols.map(c =>
+    <table class="plain pickable"><thead><tr>${cols.map(c =>
       `<th${c === cols[0] ? ' class="left"' : ""}>${esc(label(c))}</th>`).join("")}</tr></thead>
-    <tbody>${rows.map(r => `<tr>${cols.map((c, i) => {
+    <tbody>${rows.map(r => `<tr data-closed="${esc(String(r[key]))}"${
+      String(r[key]) === CLOSED_BY ? ' class="picked"' : ""}>${cols.map((c, i) => {
       const v = r[c];
       return `<td class="${i ? "n" : "left"}">${
         typeof v === "number" ? esc(fmtVal(c, v)) : esc(REASON[v] || v)}</td>`;
-    }).join("")}</tr>`).join("")}</tbody></table></div>`;
+    }).join("")}</tr>`).join("")}</tbody></table>
+    <p class="hint">Click a row to filter the trade table to the trades it closed.</p></div>`;
 }
 
 /* The costs the engine charged, as money rather than as field names.

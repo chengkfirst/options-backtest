@@ -856,3 +856,11 @@ td.bar span {
   color: var(--text-primary);
   cursor: pointer;
 }
+
+/* A table whose rows are a filter. The selected row takes the same treatment as a selected
+   trade — a light accent fill and a 2px bar — because it is the same idea in a different
+   place, and the state table defines it once. */
+.plain.pickable tbody tr { cursor: pointer; }
+.plain.pickable tbody tr:hover { background: var(--surface-2); }
+.plain.pickable tbody tr.picked { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.plain.pickable tbody tr.picked > td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
