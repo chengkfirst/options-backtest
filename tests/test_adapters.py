@@ -273,3 +273,148 @@ class TestTheAdapterAcceptsWhatVendorsActuallySend:
 
         with pytest.raises(DataQualityError, match="Accepted spellings"):
             normalise(self._frame(["CALL_OPTION", "PUT_OPTION"]))
+
+
+@kind("guard")
+class TestTheFileSourceIsUsableOnRealVolumes:
+    """A data path that works and is too slow to use is not a data path.
+
+    Both findings here came from one attempt: build a vendor-shaped file from the
+    fixture — different column names, IV as a percentage — and run a six-month backtest
+    off it. It **timed out at ten minutes**, twice, for two separate reasons:
+
+    - ``series()`` filtered the whole table with five boolean masks on every call, and
+      the engine calls it once per open position per session
+    - ``_prepare()`` called the vectorised ``greeks`` **once per row** through ``.iloc[i]``
+
+    Together: 101 seconds to construct 208,000 rows and minutes to run. Now 1.9 seconds
+    and 15 for 2.3 million.
+
+    The thresholds below are deliberately loose — ten times the measured figure. What is
+    being guarded is the **order of magnitude**, because the failure was not "a bit slow",
+    it was "unusable", and a tight bound would go red on a slower machine for no reason.
+    """
+
+    @staticmethod
+    def _vendor_file(market, chain, config, tmp_path, *, sessions=40):
+        """A file with a vendor's column names and IV as a percentage."""
+        rows = []
+        for day in [d for d in market.calendar.sessions
+                    if config.start <= d <= config.end][:sessions]:
+            snap = chain.snapshot(day)
+            if not len(snap):
+                continue
+            for _, r in snap.iterrows():
+                rows.append({
+                    "trade_date": r["asof"], "ticker": r["symbol"],
+                    "exp_date": r["expiry"], "strike_px": r["strike"],
+                    "call_put": r["right"], "best_bid": r["bid"],
+                    "best_offer": r["ask"], "spot_px": r["underlying_price"],
+                    "impl_vol_pct": float(r["iv"]) * 100.0,
+                })
+        path = tmp_path / "vendor.parquet"
+        pd.DataFrame(rows).to_parquet(path)
+        return path, len(rows)
+
+    COLUMN_MAP = {
+        "trade_date": "asof", "ticker": "symbol", "exp_date": "expiry",
+        "strike_px": "strike", "call_put": "right", "best_bid": "bid",
+        "best_offer": "ask", "spot_px": "underlying_price", "impl_vol_pct": "iv",
+    }
+
+    def test_construction_is_seconds_and_not_minutes(self, market, chain, config,
+                                                     tmp_path):
+        import time
+
+        from backtest.data.options.adapters import FileChainSource
+
+        path, count = self._vendor_file(market, chain, config, tmp_path)
+        assert count > 100_000, "too few rows for this to say anything about volume"
+
+        started = time.perf_counter()
+        source = FileChainSource(path, market, config,
+                                  column_map=self.COLUMN_MAP, scale={"iv": 0.01})
+        took = time.perf_counter() - started
+        assert took < 20.0, (
+            f"{count:,} rows took {took:.1f}s to prepare. It was 101s when the greeks "
+            f"were derived one row at a time; at that rate a backtest off a file is "
+            f"unusable rather than slow"
+        )
+        assert len(source.snapshot(source._frame["asof"].iloc[0])) > 0
+
+    def test_a_contract_lookup_does_not_scan_the_table(self, market, chain, config,
+                                                       tmp_path):
+        """``series()`` is called once per open position per session, so a full scan
+        there is a backtest that does not finish."""
+        import time
+
+        from backtest.core.types import ContractId, Right
+        from backtest.data.options.adapters import FileChainSource
+
+        path, _ = self._vendor_file(market, chain, config, tmp_path)
+        source = FileChainSource(path, market, config,
+                                  column_map=self.COLUMN_MAP, scale={"iv": 0.01})
+        row = source._frame.iloc[0]
+        contract = ContractId(symbol=row["symbol"], expiry=row["expiry"],
+                              strike=float(row["strike"]),
+                              right=Right.CALL if row["right"] == "C" else Right.PUT)
+        days = sorted(set(source._frame["asof"]))
+
+        started = time.perf_counter()
+        for _ in range(200):
+            source.series(contract, days)
+        took = time.perf_counter() - started
+        assert took < 5.0, (
+            f"200 contract lookups took {took:.1f}s. The engine makes one per open "
+            f"position per session, so this is the difference between a backtest that "
+            f"finishes and one that does not"
+        )
+
+    def test_a_derived_greek_equals_a_direct_call(self, market, chain, config, tmp_path):
+        """The vectorised derivation has to agree with the formula, to the bit.
+
+        Splitting the rows by right and calling `greeks` on arrays is a different
+        computation from calling it per row, and "it is faster now" is not evidence that
+        it is still right.
+        """
+        from backtest.core.types import Right
+        from backtest.data.options.adapters import FileChainSource
+        from backtest.data.options.pricing import greeks as bs_greeks
+
+        path, _ = self._vendor_file(market, chain, config, tmp_path, sessions=5)
+        source = FileChainSource(path, market, config,
+                                  column_map=self.COLUMN_MAP, scale={"iv": 0.01})
+        frame = source._frame
+        checked = 0
+        for _, row in frame.head(40).iterrows():
+            tau = max((row["expiry"] - row["asof"]).days, 0) / 365.0
+            if tau <= 0 or not np.isfinite(row["iv"]):
+                continue
+            expected = bs_greeks(
+                float(row["underlying_price"]), float(row["strike"]), tau,
+                config.fallback_risk_free_rate, float(row["iv"]), 0.0,
+                Right.CALL if row["right"] == "C" else Right.PUT)
+            for greek in ("delta", "gamma", "vega", "theta"):
+                assert float(row[greek]) == pytest.approx(
+                    float(np.asarray(expected[greek])), rel=1e-12, abs=1e-12), greek
+            checked += 1
+        assert checked >= 20, "too few rows checked for this to mean anything"
+
+    def test_a_supplied_greek_is_not_overwritten(self, market, chain, config, tmp_path):
+        """A vendor's delta and one I derived are not the same thing, and the derivation
+        must fill gaps rather than replace the data."""
+        from backtest.data.options.adapters import FileChainSource
+
+        path, _ = self._vendor_file(market, chain, config, tmp_path, sessions=3)
+        frame = pd.read_parquet(path)
+        frame["delta"] = 0.4242                    # a value no formula would produce
+        frame.to_parquet(path)
+
+        source = FileChainSource(path, market, config,
+                                  column_map=self.COLUMN_MAP, scale={"iv": 0.01})
+        assert (source._frame["delta"] == 0.4242).all(), (
+            "the supplied delta was overwritten by a derived one"
+        )
+        # The others were absent, so they are derived and the row says so.
+        assert source._frame["gamma"].notna().any()
+        assert source._frame["greeks_model_derived"].any()

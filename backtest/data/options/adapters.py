@@ -396,6 +396,30 @@ class FileChainSource:
         self._by_day: dict[date, pd.DataFrame] = {
             d: g.reset_index(drop=True) for d, g in self._frame.groupby("asof", sort=False)
         }
+        #: ``(symbol, expiry, right, strike) -> that contract's rows, indexed by asof``.
+        #:
+        #: **Built once, because ``series`` is the hot path.** It is called once per open
+        #: position per session -- for marking, for excursions, for the shadow window --
+        #: and the first version filtered the whole table with five boolean masks each
+        #: time. On 626,000 rows over 120 sessions that is minutes; a ten-minute timeout
+        #: on a single six-month backtest is what found it.
+        #:
+        #: Grouping rather than a sorted multi-index: the lookup is exact on all four
+        #: fields and never a range, so a dict of small frames is both faster and simpler
+        #: than an index that would also have to be kept sorted.
+        self._by_contract: dict[tuple, pd.DataFrame] = {}
+        known = self._frame
+        if "available_at" in known.columns:
+            # The same cut as `snapshot` and for the same reason, applied once here
+            # rather than on every call: a quote delivered after the day it describes is
+            # not available on that day, and marking a position against it would be
+            # look-ahead in the valuation rather than in the signal -- quieter, and just
+            # as wrong.
+            known = known.loc[known["available_at"] <= known["asof"]]
+        for key, group in known.groupby(
+                ["symbol", "expiry", "right", "strike"], sort=False):
+            self._by_contract[(key[0], key[1], key[2], float(key[3]))] = \
+                group.set_index("asof", drop=False)
 
     # ---- the protocol ----
     def snapshot(self, day: date, *, known_by: date | None = None) -> pd.DataFrame:
@@ -432,21 +456,20 @@ class FileChainSource:
         return known.reset_index(drop=True) if len(known) else empty_chain()
 
     def series(self, contract: ContractId, days: Iterable[date]) -> pd.DataFrame:
-        wanted = set(days)
-        f = self._frame
-        # Same cut as `snapshot`: a quote delivered after the day it describes is not
-        # available on that day, and marking a position against it would be look-ahead in
-        # the valuation rather than in the signal -- quieter, and just as wrong.
-        if "available_at" in f.columns:
-            f = f.loc[f["available_at"] <= f["asof"]]
-        hit = f.loc[
-            f["asof"].isin(wanted)
-            & (f["symbol"] == contract.symbol)
-            & (f["expiry"] == contract.expiry)
-            & (f["right"] == contract.right.value)
-            & (f["strike"].astype(float) == float(contract.strike))
-        ]
-        return hit.reset_index(drop=True) if len(hit) else empty_chain()
+        """One contract's rows on the given days.
+
+        A dict lookup on the contract and then a reindex on the days, rather than five
+        boolean masks over the whole table -- see ``_by_contract`` for why.
+        """
+        group = self._by_contract.get(
+            (contract.symbol, contract.expiry, contract.right.value,
+             float(contract.strike)))
+        if group is None:
+            return empty_chain()
+        wanted = [d for d in days if d in group.index]
+        if not wanted:
+            return empty_chain()
+        return group.loc[wanted].reset_index(drop=True)
 
     # ---- filling in ----
     def _prepare(self, frame: pd.DataFrame) -> pd.DataFrame:
@@ -488,9 +511,15 @@ class FileChainSource:
 
         need_iv = out["iv"].isna()
         if need_iv.any():
+            # This one stays per row: `implied_vol` is a numerical solve per contract and
+            # there is no array form of it. It is the reason to supply an `iv` column when
+            # the vendor has one -- solving 200,000 of them is about a minute, and the
+            # solve is also where a bad quote turns into an absent IV rather than a wrong
+            # one, so a supplied column is both faster and better.
+            mid_values = mid.to_numpy(dtype=float)
             solved = []
             for i in np.flatnonzero(need_iv.to_numpy()):
-                got = implied_vol(float(mid.iloc[i]), spot[i], strike[i], tau[i], rate,
+                got = implied_vol(mid_values[i], spot[i], strike[i], tau[i], rate,
                                   0.0, Right.CALL if is_call[i] else Right.PUT)
                 solved.append(got.unwrap() if got.is_present else np.nan)
             out.loc[need_iv, "iv"] = solved
@@ -499,15 +528,31 @@ class FileChainSource:
         greek_cols = ["delta", "gamma", "vega", "theta"]
         need_greeks = out[greek_cols].isna().any(axis=1)
         if need_greeks.any():
+            # **Two vectorised calls, not one per row.**
+            #
+            # `bs_greeks` takes arrays and the first version called it once per row
+            # through `.iloc[i]`, which on 208,000 rows was 42 of the 98 seconds this
+            # method took -- and a six-month backtest off a file timed out at ten
+            # minutes, which is what found it. Split by right rather than passed a
+            # per-row flag, because that is the only input the formula branches on.
             iv = out["iv"].astype(float).to_numpy()
-            for i in np.flatnonzero(need_greeks.to_numpy()):
-                if not np.isfinite(iv[i]) or tau[i] <= 0:
+            usable = need_greeks.to_numpy() & np.isfinite(iv) & (tau > 0)
+            positions = {col: out.columns.get_loc(col) for col in greek_cols}
+            values = out[greek_cols].to_numpy(dtype=float, copy=True)
+            for right, side in ((Right.CALL, is_call), (Right.PUT, ~is_call)):
+                rows = np.flatnonzero(usable & side)
+                if not len(rows):
                     continue
-                g = bs_greeks(spot[i], strike[i], tau[i], rate, iv[i],
-                              0.0, Right.CALL if is_call[i] else Right.PUT)
-                for col in greek_cols:
-                    if pd.isna(out.iloc[i][col]):
-                        out.iat[i, out.columns.get_loc(col)] = float(g[col])
+                g = bs_greeks(spot[rows], strike[rows], tau[rows], rate, iv[rows],
+                              0.0, right)
+                for n, col in enumerate(greek_cols):
+                    column = np.asarray(g[col], dtype=float)
+                    # Only where the vendor did not supply it: a derived greek must never
+                    # overwrite one that came with the data.
+                    absent = np.isnan(values[rows, n])
+                    values[rows[absent], n] = column[absent]
+            for n, col in enumerate(greek_cols):
+                out.iloc[:, positions[col]] = values[:, n]
             out.loc[need_greeks, "greeks_model_derived"] = True
         out["greeks_model_derived"] = out["greeks_model_derived"].fillna(False).astype(bool)
 
