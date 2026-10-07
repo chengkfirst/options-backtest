@@ -49,12 +49,10 @@ export function renderCurve(rows, hasEquity){
   // to differ between the two, or it is wrong under the event-driven engine — and nobody
   // looking at the chart could tell.
   $("curveNote").innerHTML = `Accumulated by exit date over ${pts.length.toLocaleString()} trades. ` + (hasEquity
-    ? `A different basis from the <b>equity curve</b> above: this excludes unrealised P&L ` +
-      `and is not scaled by capital used, so the two shapes can diverge widely. For ` +
-      `account drawdown, read the equity curve.`
-    : `<b>Not an equity curve</b> — the trade table computes each trade independently with ` +
-      `no capital constraint, so a fall here is not an account drawdown. For a real equity ` +
-      `curve, switch to the event-driven engine.`);
+    ? `Excludes unrealised P&L and is not scaled by capital used, so this and the ` +
+      `<b>equity curve</b> above can diverge widely.`
+    : `<b>Not an equity curve</b>: no capital constraint, so a fall here is not an ` +
+      `account drawdown.`);
 }
 
 /* ── the equity curve (event-driven engine only) ── */

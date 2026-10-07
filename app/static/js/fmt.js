@@ -49,14 +49,20 @@ export const money = v => absent(v)
   ? "—"
   : (v >= 0 ? "+" : "−") + Math.abs(v).toLocaleString("en-US", {maximumFractionDigits: 0});
 
-export const pct = v => absent(v) ? "—" : (v * 100).toFixed(1) + "%";
+/** One minus sign across the interface. `money` has always written U+2212 and these
+ *  wrote JavaScript's own hyphen, so a single band of cards showed "−31,220" beside
+ *  "-60.6%" — two glyphs of different widths for the same idea, which in a monospace
+ *  column also stops the digits lining up. */
+const MINUS = (text) => text.replace("-", "\u2212");
+
+export const pct = v => absent(v) ? "—" : MINUS((v * 100).toFixed(1)) + "%";
 
 /** A size with no sign, for a sentence that has already said the direction in words.
  *  "Lost +31,220" is what happens when a signed formatter is handed an absolute value. */
 export const size = v => absent(v)
   ? "—" : Math.abs(v).toLocaleString("en-US", {maximumFractionDigits: 0});
 
-export const num = (v, digits = 2) => absent(v) ? "—" : v.toFixed(digits);
+export const num = (v, digits = 2) => absent(v) ? "—" : MINUS(v.toFixed(digits));
 
 /** Money in as few characters as carry the magnitude: −23.3k, +1.19M.
  *

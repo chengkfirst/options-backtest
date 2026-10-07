@@ -25,19 +25,16 @@ const SURFACES = [
    what: "write a configuration and run it. The result opens on its own page"},
   {path: "/log", icon: "▤", name: "experiment log", view: "view-pending",
    what: "every run grouped by idea, with its trial count and verdict",
-   pending: "the stored runs, notes and verdicts exist in the backend; this surface is "
-            + "phase 4 of the frontend plan"},
+   pending: "the runs, notes and verdicts are stored; nothing reads them yet"},
   {path: "/compare", icon: "◫", name: "compare", view: "view-pending",
    what: "two to four runs side by side, differences first",
-   pending: "needs the experiment log to pick runs from; phase 4"},
+   pending: "needs the experiment log to pick runs from"},
   {path: "/registry", icon: "◈", name: "components", view: "view-pending",
    what: "every registered variant by slot, with its parameter schema",
-   pending: "the registry exists in the backend (backtest/core/component.py); it needs a "
-            + "/api/components endpoint, which is phase 3"},
+   pending: "the registry exists; no endpoint serves it yet"},
   {path: "/data", icon: "◴", name: "data", view: "view-pending",
    what: "the data snapshot's coverage and quality",
-   pending: "the loader's quality checks exist; there is no snapshot id to hang a page "
-            + "on yet, so the realism strip carries the provenance instead"},
+   pending: "the quality checks exist; there is no snapshot id to hang a page on"},
 ];
 
 function renderRail(){
@@ -58,7 +55,6 @@ function renderPending(surface){
     <h2>${surface.name}</h2>
     <p class="lead">${surface.what}</p>
     <p class="hint"><b>Not built yet.</b> ${surface.pending}</p>
-    <p class="hint">The bench does the whole loop today — compose, run, read, validate.</p>
     <button class="btn" type="button" data-goto="/bench">go to the bench</button>`;
 }
 

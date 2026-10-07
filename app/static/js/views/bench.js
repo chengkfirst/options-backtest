@@ -66,7 +66,7 @@ async function loadMeta(){
     META = await getJSON(API.meta);
   }catch(e){
     notice(`could not fetch the available signals: ${e.message}. The rule document still `
-      + `runs, but the starting document and the signal reference will be missing.`);
+      + `runs; the starting document and the signal reference will be missing.`);
     return;
   }
   checkMeta(META);
@@ -160,11 +160,10 @@ function gaps(rule){
     const target = has("delta") ? rule.delta : (rule.delta_lo + rule.delta_hi) / 2;
     out.push({
       what: "contracts are ordered by delta, and only by delta",
-      detail: `Inside Δ${rule.delta_lo}–${rule.delta_hi} the engine takes the contract `
-        + `nearest Δ${target}. It cannot rank by leverage, by premium or by breakeven `
-        + `move, so a rule like "the most leveraged call in the band" has to be `
-        + `approximated — Δ${rule.delta_lo} as the target picks the lowest-delta, usually `
-        + `most leveraged, contract that still passes the liquidity filters.`,
+      detail: `Inside Δ${rule.delta_lo}–${rule.delta_hi} it takes the contract nearest `
+        + `Δ${target}. There is no ranking by leverage, premium or breakeven move. For `
+        + `"most leveraged", set delta to the band floor (${rule.delta_lo}): lowest delta, `
+        + `usually highest leverage.`,
     });
   }
 
@@ -263,8 +262,7 @@ async function runBacktest(){
     return;
   }
   const name = $("ruleName").value.trim();
-  if(!name){ notice("give the rule a name — it is what the store versions it under, and "
-    + "what tells two different rules apart in the run history."); return; }
+  if(!name){ notice("give the rule a name — it is what the store versions it under."); return; }
 
   const btn = $("run");
   btn.disabled = true; btn.classList.add("busy"); btn.textContent = "running…";

@@ -57,8 +57,7 @@ const TABS = [
   {key: "settings", name: "settings"},
   {key: "exposure", name: "exposure",
    pending: "daily portfolio greeks and premium at risk against the book's limits. The "
-          + "engine computes them; they are not yet kept with the run, so this tab has "
-          + "nothing to read for a run that has finished."},
+          + "engine computes them; they are not kept with the run."},
 ];
 
 export async function enter({params, query}){
@@ -204,8 +203,7 @@ function assumptions(){
   return `<dl class="assume">${chips.map(([k, v, why]) => `
     <div class="assume-item"><dt data-tip="${esc(why)}">${esc(k)}</dt>
       <dd>${esc(v)}</dd></div>`).join("")}</dl>
-    <p class="assume-note">Changed by launching another run, never by editing here — an
-      assumption that can be tuned is one that will be.</p>`;
+    <p class="assume-note">Changed by launching another run, never edited here.</p>`;
 }
 
 /* The anomaly scan reports both kinds, so its findings are sorted by what they are
@@ -366,19 +364,15 @@ function metricCards(){
   const cards = [
     {lead: true, name: "annualised", value: eq && pct(eq.annualised), better: "higher",
      means: "the compound yearly rate this equity curve grew at over the period",
-     missing: "needs an equity curve, which only the event-driven engine builds. Rerun on "
-            + "the event-driven engine for this one"},
+     missing: "needs the event-driven engine"},
     {lead: true, name: "max drawdown", value: eq && pct(eq.max_drawdown), better: "closer to zero",
-     means: "the deepest fall from a peak of the account, at any point in the run. It is "
-          + "what a person would actually have had to sit through",
+     means: "the deepest fall from a peak of the account at any point in the run",
      note: eq && `at the bid: ${pct(eq.max_drawdown_liq)}`,
-     missing: "needs an equity curve, which only the event-driven engine builds"},
+     missing: "needs the event-driven engine"},
     {lead: true, name: "Sortino", value: inv && num(inv.Sortino), better: "higher",
-     means: "return per unit of **downside** volatility. Unlike a Sharpe it does not "
-          + "penalise upside swings, which matters for an option buyer whose good days "
-          + "are large by design",
+     means: "return per unit of **downside** volatility; upside swings are not penalised",
      note: inv && inv.downside_vol != null ? `downside vol ${pct(inv.downside_vol)}` : "",
-     missing: "needs an equity curve, which only the event-driven engine builds"},
+     missing: "needs the event-driven engine"},
     // The comparison the page was missing, and the first card a reader should be able to
     // find: a return shown alone cannot be judged. Beta and alpha ride with it rather than
     // taking cards of their own — the plan allows eight, and ten wrapped onto an orphaned
@@ -390,30 +384,23 @@ function metricCards(){
        ? `${pct(inv.strategy_total)} against ${pct(inv.buy_and_hold)}`
          + (inv.beta_vs_underlying != null ? ` · beta ${num(inv.beta_vs_underlying)}` : "")
        : "",
-     means: "the strategy's total return less what holding the underlying returned over "
-          + "the same period. Negative is the work losing to doing nothing. The beta "
-          + "beside it says how much of the return was simply the underlying moving — "
-          + "near 1 the strategy is the underlying in disguise, above it the underlying "
-          + "with leverage",
+     means: "total return less what holding the underlying returned over the same "
+          + "period; beta is how much of the return was the underlying moving",
      missing: "needs an equity curve and a benchmark series"},
     {name: "net P&L", value: money(RUN.net_pnl), interval: a.intervals?.net_pnl,
      means: "what the whole run made or lost after costs"},
     {name: "mean per trade", value: RUN.n_trades ? money(RUN.net_pnl / RUN.n_trades) : "—",
      interval: a.intervals?.mean_pnl,
-     means: "the net P&L spread over the trades. The interval beneath it is the backend's "
-          + "bootstrap, not an average of averages",
+     means: "net P&L over the trade count; the interval beneath is a bootstrap",
      // The division is the one arithmetic left in this file, and it is the presentation of
      // two stored numbers rather than a statistic of its own.
      note: `over ${RUN.n_trades} trades`},
     {name: "win rate", value: pct(RUN.win_rate),
-     means: "the share of trades that finished above zero. It says nothing about size — a "
-          + "strategy can win often and still lose money"},
+     means: "the share of trades that finished above zero; says nothing about size"},
     {name: "top 5 trades' share", value: inv && pct(inv.top5_share), better: "lower",
-     means: "how much of the total profit came from the five best trades. A high share "
-          + "means the result rests on a handful of outcomes rather than on the rule",
+     means: "how much of the total profit came from the five best trades",
      note: inv && inv.without_top5 != null ? `without them ${money(inv.without_top5)}` : "",
-     missing: "the run was profitable in too few trades for this to be meaningful, or the "
-            + "total was negative, in which case a share of it would not mean anything"},
+     missing: "no positive total to take a share of"},
   ];
 
   // Four lead the band at full size and the rest follow smaller. Eight cells of equal
@@ -480,7 +467,7 @@ function buildStack(host){
     host.innerHTML = `<p class="hint">This run has no daily curve. ${
       RUN.engine === "event_driven"
         ? "It was stored before the interface kept one — run the configuration again to get it."
-        : "The trade-table engine computes each trade independently and builds no equity curve, so there is no drawdown and no Sharpe. Rerun on the event-driven engine for those."
+        : "The trade-table engine builds none. Rerun on the event-driven engine."
     }</p>`;
     return null;
   }
@@ -644,7 +631,6 @@ function render(query){
 
     <section class="tier-detail">
       <header class="tier-head"><h3>every trade</h3>
-        <p class="hint">one row per closed trade, in the order they opened</p>
         <p class="hint tier-count" id="runDetailNote"></p></header>
       <div class="scroll" id="runDetail"></div>
     </section>`;
@@ -675,10 +661,8 @@ function renderTab(tab, query){
     return;
   }
   if(tab === "overview"){
-    host.innerHTML = `<p class="hint stack-lead">Every layer shares one time axis. Hover
-      to read them all at one date; <b>drag across a chart to select a period</b> — the
-      trade table below narrows to it and the link in the address bar carries it. Click
-      once to clear. The triangles on the axis mark days the run logged something.</p>`;
+    host.innerHTML = `<p class="hint stack-lead">Drag across any chart to select a period.
+      Triangles on the axis mark days the run logged an event.</p>`;
     const box = document.createElement("div");
     host.append(box);
     if(STACK) STACK.destroy();
@@ -746,10 +730,7 @@ function sliceTab(host){
   }
   const options = cols.map(c => `<option value="${esc(c)}">${esc(label(c))}</option>`).join("");
   host.innerHTML = `<div class="pad">
-    <p class="hint">Split the trades into equal-sized groups by one measurement taken at
-      entry, and see whether the outcome moves with it. A single group standing out is
-      more likely noise than a signal; a run of groups moving one way is the thing worth
-      following.</p>
+    <p class="hint">Equal-sized groups by one measurement taken at entry.</p>
     <div class="slice-controls">
       <label>group by <select id="sliceDim">${options}</select></label>
       <label>groups <select id="sliceBins">
@@ -769,8 +750,7 @@ function sliceTab(host){
         <div class="ab" id="ab"></div></section>
     </div>
     <section id="crossWrap" hidden><h4>crossed groups</h4>
-      <p class="hint">Each cell is the mean per trade. Cells with few trades are dimmed —
-        extremes there are usually noise.</p>
+      <p class="hint">Mean per trade; cells with few trades are dimmed.</p>
       <table class="grid-tab" id="cross"></table></section>
     <p class="hint" id="dimNote"></p></div>`;
 
@@ -853,9 +833,6 @@ function settingsTab(){
   }));
 
   return `<div class="pad">
-    <p class="hint">Everything this run was given, laid out as the seven components that
-      asked for it. A component with nothing shown was left alone — which is a different
-      statement from one that cannot be configured yet, and those say so.</p>
     <div class="settings">${groups.map(g => `
       <section class="setting-group">
         <h4>${esc(g.name)}</h4>
@@ -916,8 +893,7 @@ function exitReasonTab(){
   const rows = RUN.analysis?.by_exit_reason;
   if(!rows || !rows.length) return `<p class="hint">No exit breakdown for this run.</p>`;
   const cols = Object.keys(rows[0]);
-  return `<div class="pad"><p class="hint">What closed each trade, and what each kind
-    was worth. The slot that closed a trade is the readout of what that slot changed.</p>
+  return `<div class="pad">
     <table class="plain"><thead><tr>${cols.map(c =>
       `<th${c === cols[0] ? ' class="left"' : ""}>${esc(label(c))}</th>`).join("")}</tr></thead>
     <tbody>${rows.map(r => `<tr>${cols.map((c, i) => {
@@ -1034,9 +1010,7 @@ function robustnessTab(){
   const scenarios = RUN.scenarios || RUN.analysis?.scenarios;
   const offered = new Set(RUN.validations || []);
   return `<div class="pad">
-    <p class="hint">The research tools from the architecture's register, run against this
-      run. Each re-runs the strategy, so none of them runs until asked. Every report says
-      first what its numbers can and cannot be used for.</p>
+    <p class="hint">Each re-runs the strategy, so none has run yet.</p>
     <ul class="checks">${(META?.validations || []).map(v => {
       const can = offered.has(v.kind);
       const inputs = (VALID_INPUTS[v.kind] || []).map(i =>
@@ -1055,8 +1029,7 @@ function robustnessTab(){
     <pre id="validOut" class="valid-out" hidden></pre>
     ${scenarios && scenarios.length ? `
       <h4>historical scenarios</h4>
-      <p class="hint">Real windows, so no approximation — more trustworthy than a stress
-        test.</p>
+      <p class="hint">Real windows, not simulated shocks.</p>
       <table class="plain"><thead><tr><th class="left">scenario</th><th>from</th><th>to</th>
         <th>sessions</th><th>return</th><th>max drawdown</th></tr></thead>
       <tbody>${scenarios.map(s => `<tr>

@@ -452,20 +452,19 @@ VALIDATIONS: dict[str, dict[str, Any]] = {
     "baselines": {
         "label": "against a baseline",
         "why": "is this better than entering at random, or than just holding the "
-               "underlying. One run of this decides whether an idea is worth researching.",
+               "underlying.",
         "engines": None,
     },
     "ablation": {
         "label": "what each slot is worth",
-        "why": "remove one component at a time and see what the result loses. A slot "
-               "that costs nothing to remove is not earning its complexity.",
+        "why": "remove one component at a time and see what the result loses.",
         "engines": None,
     },
     "counterfactual": {
         "label": "would a different exit have been better",
         "why": "replays each trade against other take-profit and stop-loss levels using "
-               "the prices kept past the actual exit. A trade whose alternative never "
-               "fired is censored, not assumed to have closed.",
+               "the prices kept past the actual exit. An alternative that never fired is "
+               "censored, not assumed closed.",
         "engines": ("event_driven",),
     },
     "trials": {
