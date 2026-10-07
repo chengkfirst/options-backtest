@@ -334,3 +334,25 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:v
   border-left: 2px solid var(--warn);
   padding-left: 9px;
 }
+
+/* ── what a slot is, beside what it is set to ────────────────────────────────────
+   The architecture gives every slot a level, a moment it is asked and an action vocabulary.
+   A card that showed only its control read as though the control were the slot — so a take
+   profit looked like "a number at which to close" when the architecture lets it reduce, move
+   the stop, or ask for a hedge. The line carries the contract; the last part carries how much
+   of it the engine performs, which is the gap a researcher has to know before trusting a
+   result from this slot. */
+.comp-contract{
+  margin:0 0 var(--space-2);
+  display:flex;flex-direction:column;gap:2px;
+  font-size:var(--font-xs);line-height:1.45;
+}
+.comp-level{color:var(--ink-3)}
+.comp-emits{display:flex;flex-wrap:wrap;gap:4px}
+.comp-emits code{
+  background:var(--sunk);color:var(--ink-2);
+  padding:0 4px;border-radius:var(--radius-sm);
+  font-family:var(--mono);font-size:var(--font-xs);
+}
+.comp-wired{color:var(--warn)}
+.comp-wired b{color:var(--warn)}

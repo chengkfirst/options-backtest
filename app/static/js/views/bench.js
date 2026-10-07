@@ -234,14 +234,54 @@ const STATUS_MARK = { done: "", partial: "partial", missing: "not built" };
  * shown and not yet dragged.
  */
 const COLUMNS_BY_SLOT = {
-  setup: {column: "idle"},
-  entry: {column: "armed"},
-  select: {column: "armed"},
-  position: {column: "armed", tag: "book"},
-  take_profit: {column: "open", order: 1},
-  stop_loss: {column: "open", order: 2},
-  headwind: {column: "open", order: 3, tag: "book"},
-  hedge: {column: "open", order: 4, tag: "book"},
+  setup: {column: "idle", level: "candidate, per underlying",
+          when: "every snapshot while Idle **or Armed** — it can disarm as well as arm",
+          emits: ["arm", "disarm"]},
+  entry: {column: "armed", level: "underlying, then contracts",
+          when: "every snapshot while Armed",
+          emits: ["OPEN with legs", "nothing"]},
+  select: {column: "armed", level: "contracts",
+           when: "inside Entry, once it has fired",
+           emits: ["the legs Entry opens"]},
+  position: {column: "armed", level: "trade within the book",
+             when: "when OPEN or ADD is issued, **and when REDUCE needs a quantity** — so it "
+                 + "serves the open state too, not only the entry",
+             emits: ["contract quantities"]},
+  take_profit: {column: "open", order: 1, level: "trade",
+                when: "every snapshot while Open",
+                emits: ["REDUCE", "CLOSE", "SET_STOP", "request HEDGE_ADD", "HOLD"]},
+  stop_loss: {column: "open", order: 2, level: "trade",
+              when: "every snapshot while Open",
+              emits: ["CLOSE", "REDUCE", "HOLD"]},
+  headwind: {column: "open", order: 3, level: "trade **and** book",
+             when: "every snapshot while Open, per trade; and every snapshot on the book",
+             emits: ["REDUCE", "CLOSE", "ROLL", "SET_STOP", "request HEDGE_ADD", "HOLD",
+                     "scale, veto or force on the book"]},
+  hedge: {column: "open", order: 4, level: "trade **and** book",
+          when: "on request, or every snapshot while Open; and every snapshot on the book",
+          emits: ["HEDGE_ADD", "HEDGE_REMOVE"]},
+};
+
+/** What of a slot's contract the engine actually performs today.
+ *
+ * The architecture gives each slot an action vocabulary — a take profit may REDUCE, move the
+ * stop, or ask for a hedge, not only close. What is registered is narrower, and a composer
+ * that showed only the controls would let a reader believe the slot is the control. Read from
+ * what the registry offers where that is possible; stated here where the gap is structural,
+ * with the architecture's own table as the reference.
+ */
+const WIRED = {
+  setup: "nothing is registered. The candidate is always armed, so the gate is open",
+  entry: "the condition fires an OPEN. It cannot decline on the contracts it finds",
+  select: "a feasible region and one ranking target, applied inside Entry",
+  position: "a size per trade. It is not asked again for an ADD or a REDUCE",
+  take_profit: "**CLOSE only.** No registered form reduces, moves the stop, or asks for a "
+             + "hedge — so a staged exit cannot be expressed",
+  stop_loss: "**CLOSE only.** Same: no partial stop, and nothing writes a stop level that a "
+           + "later snapshot reads",
+  headwind: "**the book level only**, as a risk rule: scale down, halt, liquidate. The "
+          + "per-trade headwind runs as the daily review hook and emits nothing of its own",
+  hedge: "nothing is registered at either level",
 };
 
 const COLUMN_HEAD = {
@@ -275,6 +315,26 @@ function renderComponents(){
       + `views/bench.js needs the new slot.`);
   bindFields();
   paintFoot();
+}
+
+/** What this slot is, in the architecture's terms, and how much of it runs.
+ *
+ * A slot is not its control. The architecture gives each one a level, a moment it is asked,
+ * and an action vocabulary — a take profit may reduce, move the stop or ask for a hedge, not
+ * only close — and the composer showed a number box, which reads as the whole of what the
+ * slot is. The line says what it may emit and, underneath, what of that is actually wired, so
+ * the difference between the design and the engine is on the card rather than in a document.
+ */
+function contractLine(slot, place){
+  if(!place.level) return "";
+  return `<p class="comp-contract">
+    <span class="comp-level" data-tip="Where this slot acts, and when the engine asks it: ${
+      esc(place.when.replace(/\*\*/g, ""))}">${mark(place.level)}</span>
+    <span class="comp-emits" data-tip="The actions this slot may emit, from the
+      architecture's shared vocabulary. What is wired today is below.">${
+      place.emits.map(e => `<code>${esc(e)}</code>`).join(" ")}</span>
+    <span class="comp-wired">${mark(WIRED[slot] || "")}</span>
+  </p>`;
 }
 
 function compBlock(c, planMode){
@@ -314,10 +374,10 @@ function compBlock(c, planMode){
       data-comp="${c.key}">
       <h4 class="comp-h" data-tip="${esc(c.role)}">${place.order
         ? `<span class="comp-order" data-tip="The order the engine asks the open-state slots
-             in, every day a position is on. Fixed in the engine today.">${place.order}</span>`
-        : ""}${c.name}${place.tag
-        ? `<span class="comp-tag" data-tip="Acts on the whole book rather than on one
-             trade.">${esc(place.tag)}</span>` : ""}${badge}</h4>
+             in, every snapshot a position is on — the architecture's open_state_order. Fixed
+             in the engine today.">${place.order}</span>`
+        : ""}${c.name}${badge}</h4>
+      ${contractLine(c.key, place)}
       ${taken ? "" : variantPicker(c.key, own)}
       ${body}
     </article>`;
