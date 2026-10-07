@@ -173,10 +173,16 @@ export const label = c => {
   return signal ? `${signal[1].replace(/_/g, " ")} at entry` : c;
 };
 
+/** A measurement from a trade column, at the precision its magnitude calls for.
+ *
+ * **The true minus, like everything else.** This was the last place in the interface writing
+ * JavaScript's hyphen, so a bucket table and a card beside it showed "-4.3%" and "−4.3%" for
+ * the same kind of quantity — two glyphs of different widths for one idea, which in a
+ * monospace column also stops the digits lining up. */
 export function fmtVal(col, v){
   if(absent(v)) return "—";
-  if(PCT.has(col)) return (v * 100).toFixed(1) + "%";
-  if(Math.abs(v) >= 100) return v.toFixed(0);
-  if(Math.abs(v) >= 1) return v.toFixed(2);
-  return v.toFixed(3);
+  if(PCT.has(col)) return MINUS((v * 100).toFixed(1)) + "%";
+  if(Math.abs(v) >= 100) return MINUS(v.toFixed(0));
+  if(Math.abs(v) >= 1) return MINUS(v.toFixed(2));
+  return MINUS(v.toFixed(3));
 }

@@ -65,7 +65,9 @@ suite("fmt — absence, zero and sign", async () => {
   eq(f.moneyShort(-54321), "−54.3k", "moneyShort thousands");
   eq(f.moneyShort(1190000), "+1.19M", "moneyShort millions");
   eq(f.sgn(0), "", "zero has no sign class");
-  ok(!/-/.test(f.pct(-0.1) + f.num(-1) + f.money(-1)),
+  ok(!/-/.test(f.pct(-0.1) + f.num(-1) + f.money(-1)
+               + f.fmtVal("entry_iv", -0.1) + f.fmtVal("holding_days", -120)
+               + f.fmtVal("entry_delta", -0.5)),
      "no hyphen-minus survives anywhere a true minus is used");
 });
 
