@@ -22,6 +22,9 @@ front/back contract     the UI needs a field the server never sends
 doc examples            the snippets in the README do not run
 component definitions   a form field that is not a run() parameter: no effect
 language                mixed-language identifiers that stop matching
+vocabulary              two words for one concept on two screens
+standing assumptions    a sheet row that states its own answer and goes stale
+self-test coverage      a suite that quietly stops covering a module
 =====================  ====================================================
 
 The bar for a new convention: **a concrete failure first, then the guard.**
@@ -53,6 +56,14 @@ GUARDS: tuple[tuple[str, list[str], bool], ...] = (
     ("components",   [sys.executable, "-m", "pytest", "tests/test_components.py", "-q"], False),
     ("wiring",       [sys.executable, "tools/check_wiring.py"], False),
     ("contrast",     [sys.executable, "tools/check_contrast.py"], False),
+    # The three interface guards. They were written and then never registered here, so a
+    # convention this project holds to -- one word per concept, a standing-assumptions sheet
+    # that reads the record, a self-test that still covers every module -- was checked only
+    # by whoever remembered to run it. That is the state the first line of this file calls a
+    # wish rather than a convention.
+    ("words",        [sys.executable, "tools/check_words.py"], False),
+    ("evidence",     [sys.executable, "tools/check_evidence.py"], False),
+    ("self-test",    [sys.executable, "tools/check_selftest.py"], False),
     ("modules",      [sys.executable, "tools/check_modules.py"], False),
     ("baseline",     [sys.executable, "-m", "tools.baseline", "check"], False),
     ("test suite",   [sys.executable, "-m", "pytest", "tests", "-q"], True),
