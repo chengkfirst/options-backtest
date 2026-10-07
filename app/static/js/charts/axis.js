@@ -34,6 +34,7 @@ const AXIS_HEIGHT = 20;
  *   dates   {string[]}  the shared domain, one entry per step, ascending
  *   layers  {object[]}  {key, title, height, hint, series, draw, read}
  *   holdOut {object}    {from, to} drawn as a hatch and left empty, or null
+ *   held    {object}    {from, to} of one trade's holding period, shaded, or null
  *   marks   {object[]}  {date, kind, label} drawn as triangles on the axis
  *   onBrush {function}  called with ({from, to}) or (null) when cleared
  */
@@ -42,6 +43,7 @@ export function chartStack(root, spec){
     dates: spec.dates || [],
     layers: (spec.layers || []).filter(Boolean),
     holdOut: spec.holdOut || null,
+    held: spec.held || null,
     marks: spec.marks || [],
     onBrush: spec.onBrush || (() => {}),
     collapsed: new Set(spec.collapsed || []),
@@ -112,6 +114,18 @@ export function chartStack(root, spec){
   /** The hold-out and the brush, drawn under every layer so the eye reads one band. */
   function shading(scale){
     let out = "";
+    // One trade's holding period, shaded across every layer at once. The design plan's
+    // rule 4: selecting a trade shades the time it was open, so the question "what was the
+    // book doing while this position was on" is answered by looking rather than by
+    // remembering two dates.
+    if(state.held){
+      const a = indexOfDate(state.held.from), b = indexOfDate(state.held.to);
+      if(a != null && b != null)
+        out += `<rect class="held" x="${scale.x(a)}" y="${scale.plot.top}"
+                  width="${Math.max(scale.x(b) - scale.x(a), 1.5)}"
+                  height="${scale.plot.height}"/>`;
+    }
+
     if(state.holdOut){
       const a = indexOfDate(state.holdOut.from), b = indexOfDate(state.holdOut.to);
       if(a != null && b != null && b > a)
@@ -288,6 +302,11 @@ export function chartStack(root, spec){
 
   return {
     draw,
+    /** Shade one trade's holding period, or clear it. */
+    setHeld(range){
+      state.held = range && range.from && range.to ? range : null;
+      draw();
+    },
     /** Set the brush from outside — restoring it from the URL, for instance. */
     setBrush(range){
       state.brush = range && range.from && range.to

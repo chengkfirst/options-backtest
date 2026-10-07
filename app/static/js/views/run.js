@@ -40,6 +40,8 @@ let STACK = null;      // the chart group, so it can be told the brush
 let VIEW = [];         // the trades inside the brush — what the detail tier shows
 let MARK = "mid";      // which mark the curve is drawn on (display only)
 let TAB = "overview";  // which tab is open, so a brush can repaint it
+let PICKED = null;     // the selected trade's row, or null
+let SCROLL_TO_FIRST = false;  // set by the brush: take the table to the range's first trade
 
 /** The tabs of section 6, and what each one is waiting on where it cannot be built. */
 const TABS = [
@@ -809,6 +811,11 @@ function applyBrush(range){
   VIEW = range
     ? (RUN.rows || []).filter(r => r.entry_date >= range.from && r.entry_date <= range.to)
     : (RUN.rows || []);
+  // Take the table to where the selection starts rather than leaving the reader to find
+  // it among four hundred rows.
+  SCROLL_TO_FIRST = Boolean(range);
+  // A selected trade outside the new range is no longer on screen to be selected.
+  if(PICKED && !VIEW.includes(PICKED)) pick(null);
   paintDetail();
   // "Brushing filters every chart and the trade table" — so the open tab is repainted
   // too, unless it is the stack itself, which drew the brush in the first place.
@@ -846,7 +853,8 @@ function paintDetail(){
   const shown = rows.slice(0, 400);
   box.innerHTML = `<table class="trades"><thead><tr>${
     COLUMNS.map(c => `<th${c.left ? ' class="left"' : ""}>${esc(c.name)}</th>`).join("")
-  }</tr></thead><tbody>${shown.map((r, i) => `<tr tabindex="0" data-row="${i}">${
+  }</tr></thead><tbody>${shown.map((r, i) => `<tr tabindex="0" data-row="${i}"${
+    r === PICKED ? ' class="picked" aria-selected="true"' : ""}>${
     COLUMNS.map(c => {
       const raw = r[c.key];
       const text = c.fmt ? c.fmt(raw) : (raw ?? "—");
@@ -858,6 +866,55 @@ function paintDetail(){
   }</tr>`).join("")}</tbody></table>${
     rows.length > shown.length
       ? `<p class="hint">The first ${shown.length} are shown.</p>` : ""}`;
+
+  for(const tr of box.querySelectorAll("tbody tr")){
+    tr.addEventListener("click", () => pick(shown[+tr.dataset.row]));
+    // Arrows walk the table, Enter and Space select, Escape clears — the design plan's
+    // keyboard rule for tables. The rows already carried `tabindex`; nothing listened.
+    tr.addEventListener("keydown", e => {
+      const i = +tr.dataset.row;
+      if(e.key === "ArrowDown" || e.key === "ArrowUp"){
+        e.preventDefault();
+        const next = box.querySelector(`[data-row="${i + (e.key === "ArrowDown" ? 1 : -1)}"]`);
+        if(next){ next.focus(); pick(shown[+next.dataset.row]); }
+      }else if(e.key === "Enter" || e.key === " "){
+        e.preventDefault(); pick(shown[i]);
+      }else if(e.key === "Escape"){ pick(null); }
+    });
+  }
+
+  // A brushed range scrolls the table to the first trade inside it, rather than leaving
+  // the reader to find where the selection starts in four hundred rows.
+  if(SCROLL_TO_FIRST && shown.length){
+    SCROLL_TO_FIRST = false;
+    box.querySelector("tbody tr")?.scrollIntoView({block: "nearest"});
+  }
+}
+
+/** Select a trade, or clear the selection.
+ *
+ * One function, because the three things that happen have to happen together: the row is
+ * marked, the charts shade the period it was open, and the address bar carries it. A
+ * selection that the link does not carry is a reading that cannot be sent to anyone. */
+function pick(row){
+  PICKED = row && row !== PICKED ? row : null;
+  const held = PICKED && PICKED.entry_date && PICKED.exit_date
+    ? {from: String(PICKED.entry_date).slice(0, 10), to: String(PICKED.exit_date).slice(0, 10)}
+    : null;
+  if(STACK) STACK.setHeld(held);
+  replace({trade: PICKED ? String(PICKED.trade_id ?? "") : null});
+
+  // The marks are moved in place rather than by repainting the table. Rebuilding it
+  // destroyed the focused row, so the first arrow key worked and the second had nothing
+  // to act on — the keyboard walked one step and stopped.
+  const box = $("runDetail");
+  if(!box) return;
+  for(const tr of box.querySelectorAll("tbody tr")){
+    const on = VIEW[+tr.dataset.row] === PICKED && PICKED !== null;
+    tr.classList.toggle("picked", on);
+    if(on) tr.setAttribute("aria-selected", "true");
+    else tr.removeAttribute("aria-selected");
+  }
 }
 
 /* ── the page ───────────────────────────────────────────────────────────────── */
@@ -1022,7 +1079,17 @@ function renderTab(tab, query){
     host.append(box);
     if(STACK) STACK.destroy();
     STACK = buildStack(box);
-    if(STACK && query.range){
+    // A link carries the reading: the tab, the brushed range, the mark and the trade. Each
+  // is restored, and the trade last so it shades a stack that already has its range.
+  if(query.trade != null && query.trade !== ""){
+    const want = String(query.trade);
+    const row = (RUN.rows || []).find(r => String(r.trade_id ?? "") === want);
+    if(row){ PICKED = row; if(STACK) STACK.setHeld(
+      row.entry_date && row.exit_date
+        ? {from: String(row.entry_date).slice(0, 10), to: String(row.exit_date).slice(0, 10)}
+        : null); }
+  }
+  if(STACK && query.range){
       const [from, to] = String(query.range).split("..");
       if(from && to){
         STACK.setBrush({from, to});

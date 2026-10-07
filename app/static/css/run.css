@@ -739,3 +739,21 @@ td.bar span {
 }
 .del-cost { color: var(--warning); }
 .del-row { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+
+/* ── selection, as the state table defines it ───────────────────────────────────
+ *
+ * §11: selected is a light accent fill and a 2px accent bar on the left; focus is a 1px
+ * outline **during keyboard navigation only**, which `:focus-visible` is exactly. The rows
+ * already carried `tabindex` and nothing listened to them, so a reader could tab onto a
+ * trade and have nothing happen. */
+.trades tbody tr { cursor: pointer; }
+.trades tbody tr:hover { background: var(--surface-2); }
+.trades tbody tr.picked { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.trades tbody tr.picked > td:first-child,
+.trades tbody tr.picked > th:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.trades tbody tr:focus { outline: none; }
+.trades tbody tr:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+/* One trade's holding period, shaded across every layer of the stack. Under the lines, so
+   it reads as a region of the chart rather than as another series. */
+.held { fill: color-mix(in srgb, var(--accent) 13%, transparent); }
