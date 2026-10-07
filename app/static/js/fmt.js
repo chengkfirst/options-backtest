@@ -45,9 +45,26 @@ export const EXCLUDE = new Set([
 export const absent = v =>
   v == null || (typeof v === "number" && !Number.isFinite(v));
 
-export const money = v => absent(v)
-  ? "—"
-  : (v >= 0 ? "+" : "−") + Math.abs(v).toLocaleString("en-US", {maximumFractionDigits: 0});
+/** The magnitude, at the precision the size calls for: whole dollars at a thousand and
+ *  above, cents below. At four figures the cents are noise; at two they are the number,
+ *  and a P&L of 3.15 printed as "+3" was rounding away most of it. */
+const mag = v => {
+  const n = Math.abs(v);
+  return n >= 1000
+    ? n.toLocaleString("en-US", {maximumFractionDigits: 0})
+    : n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+};
+
+/** Money, written one way everywhere: a dollar sign, thousands separators, the sign
+ *  always shown.
+ *
+ * The same rules say units belong in a column header rather than in every cell, which is
+ * the opposite instruction inside a table. Both hold: `money` is for prose, cards and
+ * sentences, and `bare` is for a column whose header already names the unit. */
+export const money = v => absent(v) ? "—" : (v >= 0 ? "+" : "−") + "$" + mag(v);
+
+/** The same number without its unit, for a column headed "net P&L ($)". */
+export const bare = v => absent(v) ? "—" : (v >= 0 ? "+" : "−") + mag(v);
 
 /** One minus sign across the interface. `money` has always written U+2212 and these
  *  wrote JavaScript's own hyphen, so a single band of cards showed "−31,220" beside
@@ -55,12 +72,18 @@ export const money = v => absent(v)
  *  column also stops the digits lining up. */
 const MINUS = (text) => text.replace("-", "\u2212");
 
-export const pct = v => absent(v) ? "—" : MINUS((v * 100).toFixed(1)) + "%";
+/** A percentage at one decimal, and **two below one percent**, where one decimal rounds a
+ *  0.35% cost to 0.4% — a sixth of it, lost to the format. */
+export const pct = v => {
+  if(absent(v)) return "—";
+  const n = v * 100;
+  return MINUS(n.toFixed(Math.abs(n) < 1 && n !== 0 ? 2 : 1)) + "%";
+};
 
-/** A size with no sign, for a sentence that has already said the direction in words.
+/** Unsigned money, for a sentence that has already said the direction in words — "lost
+ *  $31,220". The unit stays: the sign is what the sentence supplied, not the currency.
  *  "Lost +31,220" is what happens when a signed formatter is handed an absolute value. */
-export const size = v => absent(v)
-  ? "—" : Math.abs(v).toLocaleString("en-US", {maximumFractionDigits: 0});
+export const size = v => absent(v) ? "—" : "$" + mag(v);
 
 export const num = (v, digits = 2) => absent(v) ? "—" : MINUS(v.toFixed(digits));
 
@@ -77,6 +100,42 @@ export const moneyShort = v => {
   if(size >= 1e3) return `${sign}${(size / 1e3).toFixed(1)}k`;
   return `${sign}${size.toFixed(0)}`;
 };
+
+/* ── dates, written for where they are read ──────────────────────────────────────
+ *
+ * Three forms, because the same date serves three purposes. A table, an identifier and a
+ * URL take ISO, which sorts and round-trips. Prose takes a month name, because "2023-02-17"
+ * inside a sentence reads as a serial number. A chart axis takes the shortest form that
+ * stays unambiguous, because the year is already said by the axis.
+ *
+ * Parsed as UTC. A bare `new Date("2023-02-17")` is UTC midnight and
+ * `toLocaleDateString` then renders it in the local zone — which is the previous day
+ * anywhere west of Greenwich, so a trade opened on the 17th was labelled the 16th.
+ */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const parts = iso => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ""));
+  return m ? {y: +m[1], mo: +m[2], d: +m[3]} : null;
+};
+
+/** `Oct 7, 2026` — for prose and tooltips. */
+export const dateLong = iso => {
+  const p = parts(iso);
+  return p ? `${MONTHS[p.mo - 1]} ${p.d}, ${p.y}` : "—";
+};
+
+/** `Oct 7` — for a chart axis, where the year is already established. */
+export const dateShort = iso => {
+  const p = parts(iso);
+  return p ? `${MONTHS[p.mo - 1]} ${p.d}` : "—";
+};
+
+/** An expiry says the date and how far away it is together, because neither alone answers
+ *  "is this the near month". */
+export const expiry = (iso, dte) =>
+  absent(dte) ? dateLong(iso) : `${iso} · ${Math.round(dte)} DTE`;
 
 export const sgn = v => absent(v) ? "" : v > 0 ? "pos" : v < 0 ? "neg" : "";
 

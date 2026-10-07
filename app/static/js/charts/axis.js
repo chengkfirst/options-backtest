@@ -22,6 +22,7 @@
 "use strict";
 
 import {esc} from "../dom.js";
+import {dateLong, dateShort} from "../fmt.js";
 
 const PAD = {left: 58, right: 14, top: 10, bottom: 4};
 const AXIS_HEIGHT = 20;
@@ -152,16 +153,40 @@ export function chartStack(root, spec){
   }
 
   /** The date axis, shared, plus the event markers. */
-  function axisStrip(w){
+  /** The month alone, for an axis that has already said the year. */
+const MONTH_OF = iso => dateShort(iso).split(" ")[0];
+
+function axisStrip(w){
     const n = state.dates.length;
     if(!n) return "";
+    // Ticks at the grain the span can carry. It used to tick only where the year changed,
+    // so a run inside one year got a single label and a lone `2023-04` bolted on the end —
+    // an axis with one mark is a caption. Under two years the months are the useful
+    // divisions; beyond that the years are.
+    const first = String(state.dates[0]).slice(0, 10);
+    const last = String(state.dates[n - 1]).slice(0, 10);
+    const months = (+last.slice(0, 4) - +first.slice(0, 4)) * 12
+                 + (+last.slice(5, 7) - +first.slice(5, 7));
     const ticks = [];
-    let lastYear = "";
-    for(let i = 0; i < n; i++){
-      const year = String(state.dates[i]).slice(0, 4);
-      if(year !== lastYear){ ticks.push({i, label: year}); lastYear = year; }
+    if(months <= 24){
+      let lastKey = "";
+      for(let i = 0; i < n; i++){
+        const d = String(state.dates[i]);
+        const key = d.slice(0, 7);
+        if(key === lastKey) continue;
+        lastKey = key;
+        // The month, and the year with it the first time and whenever it turns over, so
+        // the axis never asks the reader to remember which year they are in.
+        const showYear = ticks.length === 0 || d.slice(0, 4) !== String(state.dates[ticks[ticks.length - 1].i]).slice(0, 4);
+        ticks.push({i, label: showYear ? `${dateShort(d)}` : MONTH_OF(d)});
+      }
+    }else{
+      let lastYear = "";
+      for(let i = 0; i < n; i++){
+        const year = String(state.dates[i]).slice(0, 4);
+        if(year !== lastYear){ ticks.push({i, label: year}); lastYear = year; }
+      }
     }
-    if(ticks.length === 1) ticks.push({i: n - 1, label: String(state.dates[n - 1]).slice(0, 7)});
     const marks = state.marks.map(m => {
       const i = indexOfDate(m.date);
       if(i == null) return "";
@@ -197,7 +222,7 @@ export function chartStack(root, spec){
     }
     const at = state.hover;
     tip.hidden = false;
-    tip.innerHTML = `<div class="tip-date">${esc(state.dates[at])}</div>`
+    tip.innerHTML = `<div class="tip-date">${esc(dateLong(state.dates[at]))}</div>`
       + state.layers.map(layer => {
           const value = layer.read ? layer.read(at) : "";
           return value === "" || value == null ? "" : `<div class="tip-row">

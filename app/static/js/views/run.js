@@ -25,7 +25,8 @@ import {$, esc, mark} from "../dom.js";
 import {API, getJSON, notice, postJSON} from "../net.js";
 import {checkContract} from "../contract.js";
 import {go} from "../router.js";
-import {EXCLUDE, REASON, absent, fmtVal, label, money, moneyShort, num, pct, size}
+import {EXCLUDE, REASON, absent, bare, dateLong, fmtVal, label, money, moneyShort,
+        num, pct, size}
   from "../fmt.js";
 import {areaLayer, chartStack, lineLayer, underwaterLayer} from "../charts/axis.js";
 import {renderAB, renderHist, renderPeriods, renderScatter} from "../charts/distribution.js";
@@ -287,6 +288,20 @@ const SHEET = [
                 || "availability dates were assumed, so rows may have been used before "
                  + "they were knowable")
          : ok("availability came from the data; rows not yet known were withheld")},
+
+      {what: "period",
+       // The span the run covers, which went missing when the sheet was reorganised by
+       // subject. Prose takes a month name; a table and a URL take ISO — two ISO dates
+       // inside a spec row read as serial numbers.
+       value: r => `${dateLong(r.start_date)} → ${dateLong(r.end_date)}`,
+       limits: r => {
+         const days = (Date.parse(r.end_date) - Date.parse(r.start_date)) / 86400000;
+         const years = days / 365.25;
+         return years < 1
+           ? warn(`${Math.round(days)} days, which covers one kind of market and not a `
+                + `cycle — nothing here says how the rule behaves in the others`)
+           : ok(`${years.toFixed(1)} years`);
+       }},
 
       {what: "breadth",
        // The engine runs one symbol. There is no configuration in which this axis is
@@ -890,9 +905,9 @@ const COLUMNS = [
   {key: "quantity", name: "qty", fmt: v => num(v, 0)},
   {key: "entry_price", name: "in", fmt: v => num(v)},
   {key: "exit_price", name: "out", fmt: v => num(v)},
-  {key: "net_pnl", name: "net P&L", fmt: money, sign: true},
+  {key: "net_pnl", name: "net P&L ($)", fmt: bare, sign: true},
   {key: "exit_reason", name: "closed by", left: true, fmt: v => REASON[v] || v || "—"},
-  {key: "holding_days", name: "held", fmt: v => num(v, 0)},
+  {key: "holding_days", name: "held (trading days)", fmt: v => num(v, 0)},
   {key: "entry_iv", name: "IV in", fmt: pct},
   {key: "entry_delta", name: "Δ in", fmt: v => num(v, 3)},
   // How far the trade ran in favour and against while it was open. Both are named in the

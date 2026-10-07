@@ -56,10 +56,10 @@ suite("fmt — absence, zero and sign", async () => {
     for(const [n, fn] of [["money", f.money], ["pct", f.pct], ["num", f.num],
                           ["size", f.size], ["moneyShort", f.moneyShort]])
       eq(fn(v), "—", `${n}(${String(v)})`);
-  eq(f.money(0), "+0", "a real zero is not absence");
+  eq(f.money(0), "+$0.00", "a real zero is not absence");
   eq(f.pct(0), "0.0%", "pct(0)");
-  eq(f.size(-1234), "1,234", "size drops the sign");
-  eq(f.money(-1234), "−1,234", "money uses a true minus");
+  eq(f.size(-1234), "$1,234", "size drops the sign and keeps the unit");
+  eq(f.money(-1234), "−$1,234", "money uses a true minus");
   eq(f.pct(-0.258), "−25.8%", "pct uses a true minus");
   eq(f.num(-1.5), "−1.50", "num uses a true minus");
   eq(f.moneyShort(-54321), "−54.3k", "moneyShort thousands");
@@ -67,6 +67,38 @@ suite("fmt — absence, zero and sign", async () => {
   eq(f.sgn(0), "", "zero has no sign class");
   ok(!/-/.test(f.pct(-0.1) + f.num(-1) + f.money(-1)),
      "no hyphen-minus survives anywhere a true minus is used");
+});
+
+/* ── the addendum's formatting rules, which are checkable one by one ── */
+suite("fmt — the written form of every kind of value", async () => {
+  const f = await import("./fmt.js");
+  // Money: a dollar sign, thousands separators, the sign always, whole dollars at a
+  // thousand and above and cents below — at four figures the cents are noise, at two they
+  // are the number.
+  eq(f.money(12480), "+$12,480", "money at four figures is whole dollars");
+  eq(f.money(-3.15), "−$3.15", "money below a thousand carries its cents");
+  eq(f.money(999.5), "+$999.50", "just below the boundary");
+  eq(f.money(1000), "+$1,000", "and at it");
+  // In a table the unit is in the header, so the cell carries the number alone.
+  eq(f.bare(12480), "+12,480", "bare drops the unit and keeps the rest");
+  eq(f.bare(-3.15), "−3.15", "bare keeps the cents too");
+  // Percent: one decimal, and two below one percent, where one rounds 0.35% to 0.4%.
+  eq(f.pct(0.184), "18.4%", "a percentage at one decimal");
+  eq(f.pct(0.0035), "0.35%", "below one percent takes two");
+  eq(f.pct(-0.0035), "−0.35%", "and keeps its sign");
+  eq(f.pct(0), "0.0%", "zero is one decimal, not two");
+  // Ratios are two decimals; counts carry separators.
+  eq(f.num(1.3249), "1.32", "a ratio at two decimals");
+  eq(f.size(-1046), "$1,046", "unsigned money keeps its unit");
+  // Three date forms, one per place they are read.
+  eq(f.dateLong("2026-10-07"), "Oct 7, 2026", "prose takes a month name");
+  eq(f.dateShort("2026-10-07"), "Oct 7", "an axis has already said the year");
+  eq(f.expiry("2026-11-20", 44), "2026-11-20 · 44 DTE", "an expiry says how far away it is");
+  eq(f.dateLong(null), "—", "an absent date");
+  eq(f.dateLong("not a date"), "—", "a value that is not one");
+  // Parsed as UTC: a bare Date() renders UTC midnight in the local zone, which is the
+  // previous day west of Greenwich — a trade opened on the 17th labelled the 16th.
+  eq(f.dateLong("2023-01-01"), "Jan 1, 2023", "no off-by-one from the local zone");
 });
 
 /* ── dom: escaping, in both the contexts this interface writes ── */

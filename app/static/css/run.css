@@ -821,3 +821,11 @@ td.bar span {
   cursor: pointer;
 }
 .range-chip button:hover { color: var(--text-primary); border-color: var(--border-strong); }
+
+/* Tabular figures everywhere a number sits in a column. Proportional digits are different
+   widths, so a value jitters sideways as it changes and a column of them does not line up
+   — the addendum asks for "no layout shift: numbers use tabular figures". */
+.sheet-is, .trades td, .trades th, .cards dd, .card-note, .interval,
+.plain td, .plain th, .grid-tab td, .grid-tab th {
+  font-variant-numeric: tabular-nums;
+}
