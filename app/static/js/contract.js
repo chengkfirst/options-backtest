@@ -53,6 +53,10 @@ export const CONTRACT = {
         "analysis.by_exit_reason", "analysis.excursion",
         // The headline comparison: the same first-order exposure held in shares. A list,
         // so the element fields are declared with `*`.
+        // The backend's own trade statistics, which no surface read until the plan's
+        // audit found them.
+        "analysis.trade_stats", "analysis.trade_stats.profit_factor",
+        "analysis.trade_stats.avg_win", "analysis.trade_stats.avg_loss",
         "analysis.baselines", "analysis.baselines.*.name",
         "analysis.baselines.*.strategy", "analysis.baselines.*.baseline",
         "analysis.baselines.*.excess", "analysis.baselines.*.note",

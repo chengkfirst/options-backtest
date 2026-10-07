@@ -200,7 +200,7 @@ class Handler(SimpleHTTPRequestHandler):
             # "this run does not have that" and lets the page fall back. Every part the
             # contract declares is present, so only one of those two can happen.
             if isinstance(record.get("analysis"), dict):
-                for key in ("baselines",):
+                for key in ("baselines", "trade_stats"):
                     record["analysis"].setdefault(key, None)
             return self._json(record)
         if url.path == "/api/strategies":

@@ -367,6 +367,8 @@ def _analysis(result, record: dict[str, Any]) -> dict[str, Any]:
     """
     from dataclasses import asdict
 
+    from backtest.research import metrics
+
     out: dict[str, Any] = {}
 
     def attempt(name: str, fn):
@@ -386,6 +388,13 @@ def _analysis(result, record: dict[str, Any]) -> dict[str, Any]:
     attempt("by_exit_reason", lambda: json.loads(
         result.by_exit_reason().reset_index().to_json(orient="records")))
     attempt("investor", lambda: result.investor_view())
+
+    # The backend's own trade statistics — the average win and loss, the profit factor,
+    # the mean holding period. `metrics.trade_stats` has computed these all along and no
+    # surface read them, so the page could say what the run made and not how it made it:
+    # whether the wins are large and rare or small and frequent is the first question after
+    # the total, and the number answering it was already in the record.
+    attempt("trade_stats", lambda: _finite(metrics.trade_stats(result.trades)))
 
     # The baseline that answers the question actually being asked. `investor_view` carries
     # buy-and-hold, which for an option strategy is the weakest comparison there is: it

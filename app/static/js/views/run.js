@@ -42,6 +42,7 @@ let MARK = "mid";      // which mark the curve is drawn on (display only)
 let TAB = "overview";  // which tab is open, so a brush can repaint it
 let PICKED = null;     // the selected trade's row, or null
 let SCROLL_TO_FIRST = false;  // set by the brush: take the table to the range's first trade
+let RANGE = null;      // the brushed range, so the chip can show and clear it
 
 /** The tabs of section 6, and what each one is waiting on where it cannot be built. */
 const TABS = [
@@ -640,6 +641,7 @@ function metricCards(){
   const a = RUN.analysis || {};
   const eq = a.equity_metrics || RUN.equity_metrics || null;
   const inv = a.investor || null;
+  const ts = a.trade_stats || null;
   const t = (META && META.thresholds) || {};
   const floor = t.bootstrap_min_observations?.value ?? 0;
   const thin = RUN.n_trades < floor;
@@ -682,6 +684,16 @@ function metricCards(){
      note: `over ${RUN.n_trades} trades`},
     {name: "win rate", value: pct(RUN.win_rate),
      means: "the share of trades that finished above zero; says nothing about size"},
+    // The design plan asks for a payoff ratio here. The backend computes a **profit
+    // factor** — gross wins over gross losses — which is a different statistic, so the
+    // card is named for the one that exists rather than relabelling it into the one that
+    // was asked for. Both answer the question the card is for: whether the wins are large
+    // and rare or small and frequent.
+    {name: "profit factor", value: ts && num(ts.profit_factor), better: "higher",
+     means: "gross wins divided by gross losses; 1.0 is break-even before costs",
+     note: ts && ts.avg_win != null
+       ? `win ${moneyShort(ts.avg_win)} · loss ${moneyShort(ts.avg_loss)}` : "",
+     missing: "needs at least one losing trade to divide by"},
     {name: "top 5 trades' share", value: inv && pct(inv.top5_share), better: "lower",
      means: "how much of the total profit came from the five best trades",
      note: inv && inv.without_top5 != null ? `without them ${money(inv.without_top5)}` : "",
@@ -814,12 +826,36 @@ function applyBrush(range){
   // Take the table to where the selection starts rather than leaving the reader to find
   // it among four hundred rows.
   SCROLL_TO_FIRST = Boolean(range);
+  RANGE = range || null;
+  paintRangeChip();
   // A selected trade outside the new range is no longer on screen to be selected.
   if(PICKED && !VIEW.includes(PICKED)) pick(null);
   paintDetail();
   // "Brushing filters every chart and the trade table" — so the open tab is repainted
   // too, unless it is the stack itself, which drew the brush in the first place.
   if(TAB && TAB !== "overview") renderTab(TAB, {});
+}
+
+/** The brushed range, with a way out of it.
+ *
+ * Clearing a brush was a click on a chart, which the page explained in a sentence — and a
+ * control a reader has to be told about in prose is one they will not find. The chip says
+ * what is selected and how many trades it holds, and the button undoes it. */
+function paintRangeChip(){
+  const host = $("rangeChip");
+  if(!host) return;
+  host.hidden = !RANGE;
+  if(!RANGE){ host.innerHTML = ""; return; }
+  host.innerHTML = `<span class="chip-range">${esc(RANGE.from)} → ${esc(RANGE.to)}</span>
+    <span class="chip-n">${VIEW.length} of ${(RUN.rows || []).length} trades</span>
+    <button type="button" id="clearRange">clear</button>`;
+  $("clearRange").addEventListener("click", () => {
+    if(STACK) STACK.setBrush(null);
+    applyBrush(null);
+    // The stack writes the range into the URL when it is dragged; clearing from here has
+    // to take it out, or a reload restores a range the page is no longer showing.
+    replace({range: null});
+  });
 }
 
 /* ── the detail tier ────────────────────────────────────────────────────────── */
@@ -873,8 +909,7 @@ function paintDetail(){
     ? `${rows.length.toLocaleString()} trades`
     : `${rows.length.toLocaleString()} of ${(RUN.rows || []).length.toLocaleString()} trades in the brushed range`;
   if(!rows.length){
-    box.innerHTML = `<p class="hint">No trade opened inside the brushed range. Clear the
-      brush by clicking once on a chart.</p>`;
+    box.innerHTML = `<p class="hint">No trade opened inside the brushed range.</p>`;
     return;
   }
   const shown = sorted(rows).slice(0, 400);
@@ -984,6 +1019,7 @@ function render(query){
       ${evidence()}
     </section>
 
+    <div class="range-chip" id="rangeChip" hidden></div>
     <nav class="run-tabs" role="tablist">${TABS.map(t =>
       `<button type="button" class="tab${t.key === tab ? " on" : ""}" role="tab"
          data-tab="${t.key}">${esc(t.name)}</button>`).join("")}</nav>
