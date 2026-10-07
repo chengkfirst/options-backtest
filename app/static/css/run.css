@@ -94,91 +94,108 @@
   color: var(--text-secondary);
 }
 
-/* ── the evidence tier ──────────────────────────────────────────────────────────
+/* ── what every run stands on ───────────────────────────────────────────────────
  *
- * One ranked list, not three folded blocks whose rows folded again. Severity lives in a
- * gutter the eye runs straight down, and the consequence sits on the row rather than one
- * click behind it: a title like "censored: a stop loss at -50% was in force" says nothing
- * on its own about what it costs the reader, so a list of titles could not be scanned.
+ * A fixed sheet, one table per subject, three columns: the axis, what this run did on it,
+ * and what that limits. An assumption and the limitation it causes are the same fact, and
+ * the two separate blocks this replaces made the reader hold one in their head while
+ * reading the other.
  *
- * The old layout put each block's items in a three-column grid, which left ragged vertical
- * gaps wherever one item was a line and its neighbour a paragraph, and gave every item the
- * same weight whatever its severity — so "this run cannot be reproduced" sat level with a
- * note about bucket counts, two clicks from the eye. */
-.evidence { display: grid; gap: var(--space-3); margin-top: var(--space-4); }
-
-.ev-sec {
+ * A row in a good state still shows, in muted text. That is deliberate: a blank cannot be
+ * told from an axis nobody examined, and the sheet's whole value is that its shape does
+ * not change between a careful run and a careless one. */
+.evidence {
+  margin-top: var(--space-4);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface-1);
-  padding: var(--space-3) var(--space-4);
 }
-/* The block's left edge carries the worst severity inside it, so the tier can be read
-   before any single row is. */
+.evidence > summary {
+  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.evidence > summary::-webkit-details-marker { display: none; }
+.evidence > summary::before { content: "▸"; color: var(--text-muted); font-size: 10px; }
+.evidence[open] > summary::before { content: "▾"; }
+.ev-why { font-size: var(--font-xs); font-weight: 400; color: var(--text-muted); }
+
+.ev-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: var(--space-4);
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.ev-sec { border-left: 3px solid var(--border); padding-left: var(--space-3); }
+/* The section's edge carries the worst state inside it, so the sheet can be read at the
+   level of subjects before any row is. */
 .ev-sec.bad { border-left-color: var(--danger); }
 .ev-sec.warn { border-left-color: var(--warning); }
+.ev-sec.ok { border-left-color: var(--success); }
 .ev-sec.leads { border-left-color: var(--accent); }
-.ev-sec.flat { border-left-color: var(--border); }
 
 .ev-sec h3 {
   margin: 0 0 var(--space-2);
-  font-size: var(--font-sm);
+  font-size: var(--font-xs);
   font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
 }
 .ev-n {
   font-family: var(--mono);
-  font-size: var(--font-xs);
+  font-size: 10px;
   font-weight: 500;
+  letter-spacing: 0;
   color: var(--text-muted);
   background: var(--surface-2);
   border-radius: 9px;
-  padding: 1px 7px;
+  padding: 1px 6px;
 }
-.ev-why { font-size: var(--font-xs); font-weight: 400; color: var(--text-muted); }
 
-.lims { margin: 0; padding: 0; list-style: none; }
-
-/* Claim and consequence in two columns: the claim column is wide enough to read as a
-   column, and the consequence takes the rest instead of wrapping under a bullet. */
-.lim {
-  display: grid;
-  grid-template-columns: 10px minmax(170px, 19rem) 1fr;
-  gap: var(--space-3);
-  align-items: baseline;
-  padding: var(--space-2) 0;
+.sheet { width: 100%; border-collapse: collapse; }
+.sheet th, .sheet td {
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  text-align: left;
+  vertical-align: top;
+  border-top: 1px solid var(--border);
 }
-.lim + .lim { border-top: 1px solid var(--border); }
+.sheet tr:first-child th, .sheet tr:first-child td { border-top: 0; }
 
-.lim-mark {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--text-muted);
-  align-self: center;
-}
-.lim.bad .lim-mark { background: var(--danger); }
-.lim.warn .lim-mark { background: var(--warning); }
-.lim.note .lim-mark { background: var(--border-strong); }
-
-.lim-what { font-size: var(--font-sm); color: var(--text-primary); }
-.lim.bad .lim-what { font-weight: 600; }
-.lim-so { font-size: var(--font-xs); line-height: 1.5; color: var(--text-secondary); }
-.lim-so b { color: var(--text-primary); font-weight: 600; }
-
-.lim-more { margin-top: var(--space-2); }
-.lim-more > summary {
-  cursor: pointer;
+.sheet th {
+  width: 8.5rem;
   font-size: var(--font-xs);
+  font-weight: 400;
   color: var(--text-muted);
-  padding: var(--space-1) 0;
+  white-space: nowrap;
 }
-.lim-more > summary:hover { color: var(--text-primary); }
+.sheet-is {
+  width: 11rem;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.sheet-so { font-size: var(--font-xs); line-height: 1.5; color: var(--text-secondary); }
+.sheet-so b { color: var(--text-primary); font-weight: 600; }
 
-@media (max-width: 900px) {
-  .lim { grid-template-columns: 10px 1fr; }
-  .lim-so { grid-column: 2; }
+/* The consequence column carries the state; the other two stay neutral so the eye reads
+   one signal per row rather than three. */
+.sheet tr.ok .sheet-so { color: var(--text-muted); }
+.sheet tr.warn .sheet-so { color: var(--warning); }
+.sheet tr.bad .sheet-so { color: var(--danger); }
+.sheet tr.bad th, .sheet tr.bad .sheet-is { color: var(--text-primary); }
+
+@media (max-width: 760px) {
+  .sheet th, .sheet-is { width: auto; white-space: normal; }
 }
 
 /* The assumptions: a spec sheet, not findings. Label above value, several to a row, and

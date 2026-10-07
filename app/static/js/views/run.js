@@ -184,46 +184,28 @@ function spread(){
  * scanning one list of nine grey rows takes neither.
  */
 
-/** What the result rests on. Facts about the run, not controls: a realism assumption is
- *  varied by launching another run, which is the architecture's rule that these are
- *  tested and never tuned. */
-function assumptions(){
-  const m = RUN.manifest || {};
-  const cfg = m.config || {};
-  const ex = m.execution || {};
-  const prov = m.provenance || {};
-  // Label and value, and nothing hovering behind them.
-  //
-  // Each of these used to carry a sentence in a tooltip, on the reasoning that "λ 1.00"
-  // teaches a reader who does not know what λ is nothing. That reasoning was right and the
-  // fix was wrong: the answer to an unreadable label is a readable label, not an
-  // explanation hidden one hover away where it cannot be scanned, printed or searched. So
-  // the value says what it is — "the whole spread" rather than "1.00" — and the row is
-  // read in one pass.
-  const lam = cfg.costs?.adverse_fraction;
-  const lag = ex.execution_lag_days;
-  const dirty = String(m.code || "").includes("+dirty");
-  const chips = [
-    ["period", `${RUN.start_date} → ${RUN.end_date}`],
-    ["capital", size(cfg.notional_capital)],
-    ["engine", RUN.engine === "event_driven"
-      ? "event driven, with an equity curve" : "trade table, no equity curve"],
-    ["fill delay", lag == null ? "—"
-      : lag === 0 ? "same session" : `${lag} session${lag === 1 ? "" : "s"} after the signal`],
-    ["fill price", absent(lam) ? "—"
-      : lam >= 1 ? "the whole spread paid (λ 1.00)"
-      : `${pct(lam)} across the spread (λ ${num(lam)})`],
-    ["quotes kept after exit", ex.shadow_days != null ? `${ex.shadow_days} days` : "—"],
-    ["option prices", prov.all_synthetic ? "Black-Scholes, no skew"
-      : prov.mixed ? `${pct(prov.synthetic_share)} Black-Scholes` : "real quotes"],
-    ["code", dirty ? `${m.code} — cannot be reproduced` : (m.code || "—")],
-    ["result id", m.run_id || "—"],
-  ];
-  return `<dl class="assume">${chips.map(([k, v]) => `
-    <div class="assume-item"><dt>${esc(k)}</dt>
-      <dd>${esc(v)}</dd></div>`).join("")}</dl>
-    <p class="assume-note">Changed by launching another run, never edited here.</p>`;
-}
+/* ── what every run stands on ─────────────────────────────────────────────────────
+ *
+ * Checking is the backend's work — it runs the anomaly scan, writes `diagnostics` as the
+ * engine steps, computes the intervals, states the data boundary. Nothing here checks
+ * anything. This is the sheet that says **what the machinery assumed and where that limits
+ * the answer**, filled in with this run's values.
+ *
+ * It is the same sheet every time. That is the point: a list that varies in length reads
+ * as "here is what we happened to find", and the reader cannot tell a quiet run from an
+ * unexamined one. A fixed sheet reads as "here is what this platform always assumes", and
+ * a row that is fine this time still tells you the axis exists.
+ *
+ * Organised by **subject**, because that is how the question arises — what does the data
+ * not contain, what does the pricing model assume, what does the fill model leave out —
+ * and because an assumption and the limitation it causes are the same fact seen twice.
+ * They sit in one row: what was assumed, what this run used, and what it costs you.
+ *
+ * Every value is read from the manifest rather than written here, so a row stays true when
+ * the backend changes rather than becoming a confident claim about code that has moved.
+ * `tools/check_evidence.py` holds that: a row whose value does not come from the record is
+ * a row that can go stale silently.
+ */
 
 /* The anomaly scan reports both kinds, so its findings are sorted by what they are
    **about**: the reliability of the evidence, or the behaviour of this strategy. */
@@ -233,153 +215,343 @@ const ABOUT_THE_EVIDENCE = new Set([
   "rule_failed",    // a rule the run could not hold
 ]);
 
-/* ── where a limitation may come from ──────────────────────────────────────────────
- *
- * The split between an assumption and a limitation is not a judgement made per item. It
- * follows from **where the fact comes from**, and that rule decides every case:
- *
- *   assumption   a condition chosen before the run — capital, the fill model, the data
- *                source, the engine. It lives in `manifest.config` / `execution` /
- *                `provenance`, and the way to change it is to run again.
- *   limitation   a property of the evidence that came out — too few trades, trades that
- *                overlap, a censored distribution, a statistic that could not be computed,
- *                code that cannot be reproduced. It lives in `anomalies`, `diagnostics`,
- *                `problems`, the interval caveats and the manifest's provenance of the
- *                run itself. No configuration choice makes it go away.
- *
- * Every limitation therefore names the channel it was read from. That is not decoration:
- * it is what makes the list **auditable**, because the channels can be enumerated and a
- * channel carrying content that reaches no item is a hole in this function rather than a
- * quiet absence. `tools/check_evidence.py` holds that property.
- *
- * `diagnostics` is the one this list was missing entirely. The engine logged 409
- * early-exercise disagreements on run 166 and the interface used them only to place
- * markers on a chart — so the page drew a tick for each and never said that the option
- * model was uncertain four hundred times over.
- */
-const EVIDENCE_CHANNELS = [
-  "provenance.hold_out", "provenance.synthetic", "provenance.availability",
-  "n_trades", "intervals", "excursion.censoring", "anomalies", "diagnostics",
-  "problems", "analysis.unavailable", "manifest.code", "manifest.guards",
-];
-
-/** How many of a diagnostic kind are worth a line of their own. Below this the engine
- *  noting something a handful of times is routine; above it, it is a statement about how
- *  much of the run rested on a model the engine itself was unsure of. */
+/** How many of a diagnostic kind are worth saying. Below this the engine noting something
+ *  a handful of times is routine; above it, it is a statement about how much of the run
+ *  rested on a model the engine itself was unsure of. */
 const DIAGNOSTIC_FLOOR = 20;
 
-const DIAGNOSTIC_SAYS = {
-  early_exercise_risk: n => [`the early-exercise model was uncertain ${n} times`,
-    "on each of those days the binomial tree disagreed with the flag about whether "
-    + "holding beat exercising, so those positions were valued on the less certain side"],
-  candidate_dropped: n => [`${n} entries were dropped before they opened`,
-    "the signal fired and no position followed, so the trade count is below what the "
-    + "rule asked for"],
-};
+/** One diagnostic kind, counted, or null. */
+function diagnostic(r, kind){
+  const d = (r.diagnostics || []).find(x => x && x.kind === kind);
+  return d && (d.count || 0) >= DIAGNOSTIC_FLOOR ? d.count : null;
+}
 
-/** Where these numbers stop being reliable.
+/** The anomaly of a kind, or null. */
+function anomaly(r, kind){
+  return (r.anomalies || []).find(f => f && f.kind === kind) || null;
+}
+
+const bad = s => ({level: "bad", says: s});
+const warn = s => ({level: "warn", says: s});
+const ok = s => ({level: "ok", says: s});
+
+/** The sheet. Each row: what the axis is, what this run did on it, and what that limits.
  *
- * Properties of the evidence, each naming the channel it came from and the cut behind it,
- * and every cut read from `/api/meta` rather than written here. */
-function limitationItems(){
-  const t = (META && META.thresholds) || {};
-  const a = RUN.analysis || {};
-  const prov = RUN.manifest?.provenance || {};
-  const out = [];
-  const add = (from, level, short, detail) => out.push({from, level, short, detail});
+ * `limits` returning `ok(...)` means the axis is in a good state and says so, rather than
+ * leaving a blank that reads as "not examined". */
+const SHEET = [
+  {
+    area: "data",
+    title: "Data",
+    rows: [
+      {what: "option prices",
+       value: r => {
+         const p = r.manifest?.provenance || {};
+         return p.all_synthetic ? "Black-Scholes, no skew"
+           : p.mixed ? `${pct(p.synthetic_share)} modelled` : "real quotes";
+       },
+       limits: r => {
+         const p = r.manifest?.provenance || {};
+         if(p.all_synthetic) return bad("no option-side number describes a traded market "
+           + "— the formula has no skew, so strike choice is being judged against an "
+           + "assumption rather than against prices");
+         if(p.mixed) return warn(`${pct(p.synthetic_share)} of the option prices are the `
+           + `formula rather than quotes`);
+         return ok("from quotes");
+       }},
 
-  const holdOut = prov.hold_out || {};
-  if(!holdOut.hold_out)
-    add("provenance.hold_out", "warn", "nothing was held out",
-      holdOut.note || "no period was reserved, so no number here is out of sample.");
-  else if(holdOut.touched)
-    add("provenance.hold_out", "warn", "the hold-out was revealed", holdOut.note || "");
+      {what: "bid/ask spread",
+       value: r => {
+         const syn = r.manifest?.config?.synthetic;
+         return r.manifest?.provenance?.all_synthetic && syn
+           ? `${pct(syn.spread_pct)} of price, floor ${syn.spread_floor}` : "from quotes";
+       },
+       limits: r => r.manifest?.provenance?.all_synthetic
+         ? warn("the spread is a formula, so a max-spread filter is filtering the formula "
+              + "and the cost of crossing it is not a real cost")
+         : ok("the spread paid is the spread quoted")},
 
-  // The data boundary. It was shown only as the verdict's caveat, where it is one line
-  // competing with the others; it is also the single widest limitation on an option
-  // strategy's numbers and belongs on the list that gets read as a list.
-  if(prov.all_synthetic)
-    add("provenance.synthetic", "bad", "the option prices are not market prices",
-      "they come from Black-Scholes with no skew, so every option-side conclusion "
-      + "describes the formula rather than what could have been traded.");
-  else if(prov.mixed)
-    add("provenance.synthetic", "warn",
-      `${pct(prov.synthetic_share)} of the option prices are modelled`,
-      "that share of the result rests on Black-Scholes rather than on quotes.");
+      {what: "underlying prices",
+       // The data version names what produced this chain, so the row says which snapshot
+       // rather than asserting a quality the record is not consulted about.
+       value: r => {
+         const v = String(r.manifest?.data_version || "—");
+         return v.startsWith("synthetic:") ? "real closes; chain generated" : v;
+       },
+       limits: r => r.manifest?.provenance?.availability_assumed
+         ? warn(r.manifest.provenance.availability_note
+                || "availability dates were assumed, so rows may have been used before "
+                 + "they were knowable")
+         : ok("availability came from the data; rows not yet known were withheld")},
 
-  if(prov.availability_assumed)
-    add("provenance.availability", "warn", "availability dates were assumed",
-      prov.availability_note || "rows may have been used before they were knowable.");
+      {what: "breadth",
+       // The engine runs one symbol. There is no configuration in which this axis is
+       // fine, so it is marked permanent rather than written as a row that merely never
+       // reports ok.
+       always: "the engine runs one underlying at a time",
+       value: r => `${r.config?.symbol || r.symbol || "—"} only`,
+       limits: () => warn("one underlying, so nothing here says whether the rule "
+                        + "generalises or whether this is one instrument's decade")},
+    ],
+  },
+  {
+    area: "model",
+    title: "Pricing model",
+    rows: [
+      {what: "exercise style",
+       value: r => r.manifest?.config?.contract?.exercise || "—",
+       limits: r => {
+         const n = diagnostic(r, "early_exercise_risk");
+         return n
+           ? warn(`the binomial tree disagreed with the early-exercise flag ${
+               n.toLocaleString()} times; those positions were valued on the less certain `
+               + `side`)
+           : ok("early exercise was valued without disagreement");
+       }},
 
-  const floor = t.bootstrap_min_observations?.value;
-  if(floor != null && RUN.n_trades < floor)
-    add("n_trades", "warn", `only ${RUN.n_trades} trades`,
-      `below the ${floor} this project requires before a statistic carries an interval. `
-      + `${t.bootstrap_min_observations.because || ""}`);
+      {what: "risk-free rate",
+       // The config carries one rate, not a curve; no setting makes this axis fine.
+       always: "the config carries a single rate, not a term structure",
+       value: r => {
+         const rate = r.manifest?.config?.fallback_risk_free_rate;
+         return absent(rate) ? "—" : `${pct(rate)} flat`;
+       },
+       limits: () => warn("a single constant, not a curve, so anything the term structure "
+                        + "would have changed is absorbed into the result")},
 
-  for(const interval of Object.values(a.intervals || {})){
-    if(!interval) continue;
-    if(interval.low <= 0 && 0 <= interval.high)
-      add("intervals", "bad", `${interval.name}: the sign is not established`,
-        `redrawing these trades spans ${money(interval.low)} to ${money(interval.high)}, `
-        + `which includes zero. ${interval.caveat || ""}`);
-    else if(interval.caveat)
-      add("intervals", "note", `${interval.name}: the interval is understated`,
-          interval.caveat);
-  }
+      {what: "greeks",
+       // How much of the result the expansion actually placed, rather than a label for the
+       // method. `share.residual` is the part it could not attribute to any Greek.
+       value: r => {
+         const share = (r.attribution || r.analysis?.attribution)?.share;
+         return absent(share?.residual) ? "—"
+           : `${pct(Math.abs(share.residual))} unplaced`;
+       },
+       limits: r => {
+         const attr = r.attribution || r.analysis?.attribution;
+         const n = attr && attr.high_residual;
+         const cut = META?.thresholds?.attribution_residual_warning?.value;
+         return n
+           ? warn(`${n} trade${n === 1 ? "" : "s"} left a residual past ${
+               cut != null ? pct(cut) : "the cut"}, so that much of the attribution is `
+               + `unplaced`)
+           : ok("the expansion placed every trade inside its tolerance");
+       }},
+    ],
+  },
+  {
+    area: "execution",
+    title: "Execution",
+    rows: [
+      {what: "fill delay",
+       value: r => {
+         const lag = r.manifest?.execution?.execution_lag_days;
+         return lag == null ? "—" : lag === 0 ? "same session"
+           : `${lag} session${lag === 1 ? "" : "s"}`;
+       },
+       limits: r => r.manifest?.execution?.execution_lag_days === 0
+         ? bad("filled on the close that produced the signal, which cannot be traded")
+         : ok("nothing is filled on the bar that decided it")},
 
-  for(const line of a.excursion?.censoring || [])
-    add("excursion.censoring", "warn", `censored: ${String(line).split(":")[0]}`, line);
+      {what: "fill price",
+       value: r => {
+         const lam = r.manifest?.config?.costs?.adverse_fraction;
+         return absent(lam) ? "—" : lam >= 1 ? "whole spread (λ 1.00)"
+           : `${pct(lam)} across (λ ${num(lam)})`;
+       },
+       limits: r => {
+         const lam = r.manifest?.config?.costs?.adverse_fraction;
+         return absent(lam) ? warn("not recorded")
+           : lam >= 1 ? ok("the pessimistic end: the whole spread is paid")
+           : warn("less than the whole spread, which assumes an edge in getting filled");
+       }},
 
-  for(const found of RUN.anomalies || [])
-    if(ABOUT_THE_EVIDENCE.has(found.kind))
-      add("anomalies", found.severity === "high" ? "bad" : "warn",
-          found.headline, found.detail);
+      {what: "market impact",
+       value: r => {
+         const slip = r.manifest?.config?.costs?.slippage_per_contract;
+         return absent(slip) ? "—" : slip === 0 ? "none charged" : `${slip} per contract`;
+       },
+       limits: r => r.manifest?.config?.costs?.slippage_per_contract === 0
+         ? warn("size is assumed not to move the price, which holds while the position is "
+              + "small against the contract's volume and not otherwise")
+         : ok("a per-contract charge was applied")},
 
-  // What the engine logged about its own work while running. Read for the first time
-  // here; it was going only to the chart's event markers.
-  for(const d of RUN.diagnostics || []){
-    if(!d || (d.count || 0) < DIAGNOSTIC_FLOOR) continue;
-    const says = DIAGNOSTIC_SAYS[d.kind];
-    const [short, detail] = says
-      ? says(d.count.toLocaleString())
-      : [`${d.kind.replace(/_/g, " ")} happened ${d.count.toLocaleString()} times`,
-         (d.reasons || []).map(r => r.why).slice(0, 1).join("") || ""];
-    add("diagnostics", d.count >= DIAGNOSTIC_FLOOR * 10 ? "warn" : "note", short, detail);
-  }
+      {what: "tradability cut",
+       value: r => {
+         const w = r.manifest?.config?.costs?.max_relative_spread;
+         return absent(w) ? "none" : `spread ≤ ${pct(w)}`;
+       },
+       limits: r => absent(r.manifest?.config?.costs?.max_relative_spread)
+         ? warn("no width was refused, so a contract nobody could have traded could still "
+              + "have been bought")
+         : ok("contracts wider than the cut were refused rather than filled")},
+    ],
+  },
+  {
+    area: "book",
+    title: "Portfolio",
+    rows: [
+      {what: "capital",
+       value: r => size(r.manifest?.config?.notional_capital),
+       limits: r => r.manifest?.execution?.enforce_capital
+         ? ok("positions were refused when the cash was not there")
+         : warn("capital was not enforced, so the book could hold more than it could pay "
+              + "for")},
 
-  for(const problem of RUN.problems || [])
-    add("problems", "bad", typeof problem === "string" ? problem : (problem.headline || ""),
-        typeof problem === "string" ? "" : (problem.detail || ""));
+      {what: "concurrent positions",
+       value: r => {
+         const n = r.manifest?.execution?.max_concurrent;
+         return n == null ? "no cap" : String(n);
+       },
+       limits: r => r.manifest?.execution?.max_concurrent == null
+         ? warn("every signal that had cash could open, so the book's concentration is "
+              + "whatever the signal produced rather than something that was chosen")
+         : ok("the book was held to the cap")},
 
-  // A part of the analysis that refused to compute says why. That reason is a limitation
-  // on what this page can show, and it was reaching no one.
-  for(const [part, why] of Object.entries(a.unavailable || {}))
-    add("analysis.unavailable", "note", `${part} could not be computed`, String(why));
+      {what: "book-level risk rule",
+       value: r => r.manifest?.execution?.risk_rule || "none",
+       limits: r => r.manifest?.execution?.risk_rule
+         ? ok("a book-wide rule was in force")
+         : warn("nothing reduced or halted the book on a drawdown, so the equity curve is "
+              + "what the strategy does unmanaged")},
+    ],
+  },
+  {
+    area: "evidence",
+    title: "Evidence",
+    rows: [
+      {what: "trades",
+       value: r => String(r.n_trades ?? "—"),
+       limits: r => {
+         const floor = META?.thresholds?.bootstrap_min_observations?.value;
+         return floor != null && r.n_trades < floor
+           ? bad(`below the ${floor} this project requires before a statistic carries an `
+               + `interval`)
+           : ok("enough observations to carry an interval");
+       }},
 
-  // **Uncommitted code.** The manifest names a commit, which reads as a promise that the
-  // run can be had again; with a dirty tree that promise is false, because the commit it
-  // names does not contain the code that ran and nothing records the difference.
-  const code = String(RUN.manifest?.code || "");
-  if(code.includes("+dirty"))
-    add("manifest.code", "bad", "this run cannot be reproduced",
-      `it ran on **${code}** — the named commit does not contain the code that produced `
-      + `these numbers, and the difference is recorded nowhere.`);
+      {what: "independence",
+       value: r => {
+         const o = anomaly(r, "overlap");
+         return o ? o.headline.replace(/^only /, "") : "not measured";
+       },
+       limits: r => {
+         const o = anomaly(r, "overlap");
+         return o ? warn("positions held at the same time move together, so an interval "
+                       + "computed on the nominal count is too narrow")
+           : ok("no overlap was reported");
+       }},
 
-  const guards = RUN.manifest?.guards || {};
-  if(guards.state && guards.state !== "clean")
-    add("manifest.guards", "warn", `the guards were ${guards.state} for this code`,
-        guards.note || "");
+      {what: "censoring",
+       value: r => {
+         const c = r.analysis?.excursion?.censoring || [];
+         return c.length ? `${c.length} cut${c.length === 1 ? "" : "s"} in force` : "none";
+       },
+       limits: r => {
+         const c = r.analysis?.excursion?.censoring || [];
+         return c.length
+           ? warn(c.map(l => String(l).split(":")[0]).join("; ")
+                + " — paths past each were never observed")
+           : ok("no exit rule truncated what could be seen");
+       }},
 
-  if(RUN.anomalies === null)
-    add("anomalies", "note", "no scan was recorded",
-      "this run was stored before the interface kept one, which is not the same as a "
-      + "scan that found nothing.");
+      {what: "out of sample",
+       value: r => {
+         const h = r.manifest?.provenance?.hold_out || {};
+         return h.hold_out ? (h.touched ? `${h.hold_out}, revealed` : h.hold_out) : "none";
+       },
+       limits: r => {
+         const h = r.manifest?.provenance?.hold_out || {};
+         if(!h.hold_out) return bad("no period was reserved, so every number here was "
+                                  + "available while the strategy was being chosen");
+         return h.touched ? warn(h.note || "the reserved period has been revealed")
+           : ok("a period is reserved and has not been looked at");
+       }},
+    ],
+  },
+  {
+    area: "provenance",
+    title: "Reproducibility",
+    rows: [
+      {what: "code",
+       value: r => String(r.manifest?.code || "—"),
+       limits: r => String(r.manifest?.code || "").includes("+dirty")
+         ? bad("the named commit does not contain the code that produced these numbers, "
+             + "and the difference is recorded nowhere — this run cannot be obtained again")
+         : ok("the commit names the code that ran")},
 
-  // Worst first. A list whose order carries nothing makes the reader rank nine items
-  // themselves before they can act on one.
-  const RANK = {bad: 0, warn: 1, note: 2};
-  return out.sort((x, y) => RANK[x.level] - RANK[y.level]);
+      {what: "guards",
+       value: r => r.manifest?.guards?.state || "—",
+       limits: r => {
+         const g = r.manifest?.guards || {};
+         return g.state && g.state !== "clean"
+           ? warn(g.note || `the guards were ${g.state} for this code`)
+           : ok("the guards passed on this code");
+       }},
+
+      {what: "result id",
+       value: r => r.manifest?.run_id || "—",
+       limits: r => r.manifest?.run_id
+         ? ok("two runs sharing this fingerprint are the same run")
+         : warn("no fingerprint was recorded, so this result cannot be matched to another")},
+
+      {what: "libraries",
+       value: r => {
+         const e = r.manifest?.environment || {};
+         return e.python ? `python ${e.python}, pandas ${e.pandas || "—"}` : "—";
+       },
+       limits: r => r.manifest?.environment?.python
+         ? ok("the versions that produced this are recorded")
+         : warn("no versions were recorded, so a different environment cannot be told "
+              + "apart from a different result")},
+    ],
+  },
+];
+
+/** The sheet, rendered: one table per subject, same shape every run.
+ *
+ * Three columns — the axis, what this run did on it, and what that limits — because an
+ * assumption and its consequence are the same fact and reading them apart was the problem
+ * with the two separate blocks this replaces. A row in a good state says so rather than
+ * going blank: a blank cannot be told from an axis nobody looked at. */
+function evidence(){
+  const leads = standsOutItems();
+  const worstOf = rows => {
+    const lv = rows.map(r => r.limits(RUN).level);
+    return lv.includes("bad") ? "bad" : lv.includes("warn") ? "warn" : "ok";
+  };
+
+  const sheet = SHEET.map(sec => {
+    const state = worstOf(sec.rows);
+    const n = sec.rows.filter(r => r.limits(RUN).level !== "ok").length;
+    return `<section class="ev-sec ${state}">
+      <h3>${esc(sec.title)}${n ? `<span class="ev-n">${n}</span>` : ""}</h3>
+      <table class="sheet"><tbody>${sec.rows.map(row => {
+        const lim = row.limits(RUN);
+        return `<tr class="${lim.level}">
+          <th>${esc(row.what)}</th>
+          <td class="sheet-is">${esc(String(row.value(RUN)))}</td>
+          <td class="sheet-so">${mark(lim.says)}</td></tr>`;
+      }).join("")}</tbody></table>
+    </section>`;
+  }).join("");
+
+  // Leads are not faults and are not part of the fixed sheet: they are what this
+  // particular run did that is worth a second look, so an empty list shows nothing at all.
+  const stands = !leads.length ? "" : `
+    <section class="ev-sec leads">
+      <h3>What stands out<span class="ev-n">${leads.length}</span></h3>
+      <table class="sheet"><tbody>${leads.map(f => `<tr class="${f.level}">
+        <th colspan="2">${esc(f.short)}</th>
+        <td class="sheet-so">${mark(f.detail || "")}</td></tr>`).join("")}</tbody></table>
+    </section>`;
+
+  return `<details class="evidence" open>
+    <summary>What this run stands on<span class="ev-why">${
+      SHEET.reduce((a, s) => a + s.rows.filter(r => r.limits(RUN).level !== "ok").length, 0)
+    } of ${SHEET.reduce((a, s) => a + s.rows.length, 0)} axes carry a limitation</span></summary>
+    <div class="ev-grid">${sheet}${stands}</div>
+  </details>`;
 }
 
 /** What this run actually did that is worth a second look.
@@ -394,67 +566,7 @@ function standsOutItems(){
                 short: f.headline, detail: f.detail}));
 }
 
-/** One limitation: the claim, then what it costs you, on one row.
- *
- * Each used to be a `<details>` **inside** a folded block — a reader had to open the
- * block, then open the row, to learn that a limitation they could already see the title of
- * meant their result had no established sign. Two clicks to read one sentence, and the
- * titles alone ("censored: a stop loss at -50% was in force") carry no consequence, so the
- * list could not be scanned. The consequence is on the row now and nothing folds. */
-function limitationRow(f){
-  return `<li class="lim ${f.level}">
-    <span class="lim-mark" aria-hidden="true"></span>
-    <span class="lim-what">${esc(f.short)}</span>
-    ${f.detail ? `<span class="lim-so">${mark(f.detail)}</span>` : ""}
-  </li>`;
-}
 
-/** The evidence tier: what the result rests on, and where it stops being reliable.
- *
- * It was three folded blocks side by side, each opening into a three-column grid of rows
- * that themselves folded. Three problems, and the layout caused all of them: the columns
- * left ragged vertical gaps, every item carried the same weight whatever its severity, and
- * the two-level fold put the most serious thing a run can say — that it cannot be
- * reproduced — two clicks from the eye.
- *
- * Now: one ranked list, full width, worst first, severity in a gutter the eye can run
- * down. The three that matter most are open; the tail is behind one control, because
- * **nine** open rows between the answer and the charts is the wall that caused the folding
- * in the first place. Assumptions follow as what they are — a spec sheet, not findings. */
-const LIMITS_SHOWN = 3;
-
-function evidence(){
-  const lim = limitationItems();
-  const leads = standsOutItems();
-  const head = lim.slice(0, LIMITS_SHOWN), tail = lim.slice(LIMITS_SHOWN);
-  const worst = lim.length ? lim[0].level : "ok";
-
-  const limits = !lim.length ? "" : `
-    <section class="ev-sec ${worst}">
-      <h3>Limitations<span class="ev-n">${lim.length}</span>
-        <span class="ev-why">where these numbers stop being reliable</span></h3>
-      <ul class="lims">${head.map(limitationRow).join("")}</ul>
-      ${tail.length ? `<details class="lim-more">
-        <summary>${tail.length} more</summary>
-        <ul class="lims">${tail.map(limitationRow).join("")}</ul>
-      </details>` : ""}
-    </section>`;
-
-  // Leads are not faults, so they are not in the list above and not coloured like one.
-  const stands = !leads.length ? "" : `
-    <section class="ev-sec leads">
-      <h3>What stands out<span class="ev-n">${leads.length}</span>
-        <span class="ev-why">found by rule — leads, not faults</span></h3>
-      <ul class="lims">${leads.map(limitationRow).join("")}</ul>
-    </section>`;
-
-  return `<div class="evidence">${limits}${stands}
-    <section class="ev-sec flat">
-      <h3>Assumptions<span class="ev-why">what the result rests on</span></h3>
-      ${assumptions()}
-    </section>
-  </div>`;
-}
 
 /** The metric cards: value, interval, and what makes it untrustworthy.
  *
