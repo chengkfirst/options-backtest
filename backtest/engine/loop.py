@@ -206,6 +206,20 @@ class OpenTrade:
     #: Sessions between the day the entry was due to fill and the day it did. Zero unless
     #: a quote was missing on the execution day.
     entry_deferred: int = 0
+    #: **The stop level a slot has moved it to**, as a loss fraction of the entry
+    #: premium, or None for the rule's own constant.
+    #:
+    #: The document's SET_STOP action, which was recorded as unbuildable on the grounds
+    #: that there was "nowhere to record a stop that moves during the trade". That was
+    #: wrong: the stateful component protocol is exactly that place and the trailing stop
+    #: already uses it. What was actually missing is different and smaller -- a stop move
+    #: that is **logged and attributable** rather than hidden inside one component's
+    #: state, so "the stop moved to breakeven on day 12, because the take-profit slot
+    #: asked" is a row in the decision log instead of an invisible dict update.
+    stop_level: float | None = None
+    #: Every move of it, in order: (when, slot, level, reason). The record that makes the
+    #: move attributable.
+    stop_moves: list = field(default_factory=list)
     #: Maximum favourable / adverse excursion while held, for MFE/MAE research
     mfe: float = 0.0
     mae: float = 0.0
@@ -780,7 +794,8 @@ class EventDrivenEngine:
                 # The static rules are tested first. They are a **safety net**: the
                 # time-based exits may not be circumvented by a review, or one review
                 # function written wrong quietly drags a position into expiry.
-                reasons = self._exit_reasons(pos, trade, quotes, day, strategy)
+                reasons = self._exit_reasons(pos, trade, quotes, day, strategy,
+                                             actions)
                 action = None
                 if not reasons and strategy.review is not None:
                     action = self._review_action(
@@ -1320,7 +1335,8 @@ class EventDrivenEngine:
                                f"{skipped} position(s) are too small to reduce without "
                                f"closing them, so nothing was cut")
 
-    def _exit_reasons(self, pos: Position, trade: OpenTrade, quotes, day: date, strategy: Strategy):
+    def _exit_reasons(self, pos: Position, trade: OpenTrade, quotes, day: date,
+                      strategy: Strategy, actions: list | None = None):
         # This trade's own rule wins. Under a plan each trade's take-profit and stop
         # can differ — which is where the seven components' coupling actually lands:
         # one judgement decides both what to buy and how to get out.
@@ -1358,6 +1374,16 @@ class EventDrivenEngine:
                 # the context the day's bookkeeping already filled, so there is one
                 # source for it rather than two that can disagree.
                 book=trade.slot_record.book,
+                # **SET_STOP.** Any Open-state slot may move this trade's stop, and the
+                # move is logged with the slot that asked and the reason -- which is the
+                # whole difference between this and a stateful component keeping a level
+                # to itself.
+                set_stop=self._stop_setter(
+                    trade, day, actions if actions is not None else []),
+                # What the stop is right now, so a slot can ratchet from it rather than
+                # recomputing it.
+                stop_level=(trade.stop_level if trade.stop_level is not None
+                            else rule.stop_loss),
             )
             # **Each slot writes only into its own namespace.** The writer is bound to
             # the slot name and has nowhere else to put anything, so two slots both
@@ -1402,7 +1428,14 @@ class EventDrivenEngine:
                     hit = bool(stop({**ctx, "write": note,
                                      "slots": trade.slot_record}))
                 else:
-                    hit = rule.stop_loss is not None and ratio <= -rule.stop_loss
+                    # The level a slot moved it to wins over the rule's constant. Without
+                    # this the action would be recorded and have no effect, which is the
+                    # worst of the three possible states.
+                    level = (trade.stop_level if trade.stop_level is not None
+                             else rule.stop_loss)
+                    hit = level is not None and ratio <= -level
+                note.write("level_used", trade.stop_level if trade.stop_level is not None
+                           else rule.stop_loss)
                 note.write("fired", hit)
                 if hit:
                     reasons.append(ExitReason.STOP_LOSS)
@@ -1550,6 +1583,34 @@ class EventDrivenEngine:
         return Intent(contract=contract, side=Side.BUY, quantity=quantity,
                       created=day, execute_on=target, trade_id=trade_id,
                       kind=Action.OPEN, reason="entry", component_id="entry")
+
+    def _stop_setter(self, trade, day: date, actions: list):
+        """A bound ``set_stop(level, reason)`` for one trade on one session.
+
+        Bound rather than handed the trade, for the reason the slot writers are bound:
+        a component cannot reach a trade that is not the one it is deciding about.
+        """
+        def set_stop(level: float, reason: str = "") -> float:
+            if level is None or not math.isfinite(float(level)):
+                raise InvariantError(
+                    f"a stop level must be a finite number; got {level!r}. An absent "
+                    f"stop is `None` on the rule, not a NaN written over a real one")
+            level = float(level)
+            if level < 0:
+                raise InvariantError(
+                    f"a stop level is a loss fraction and is not negative; got {level}. "
+                    f"-0.3 would read as 'exit when the trade is 30% up'")
+            trade.stop_level = level
+            trade.stop_moves.append((day, "stop_loss", level, reason))
+            actions.append(TradeAction(
+                action=Action.SET_STOP, trade_id=trade.trade_id, when=day,
+                component_id="stop_loss",
+                reason=reason or f"the stop moved to {level:.1%}",
+                values={"level": level},
+            ))
+            return level
+
+        return set_stop
 
     def _entry_premium(self, contract, quantity: int, day: date) -> float:
         """What this entry would pay, **at the ask**.

@@ -34,6 +34,13 @@ def exit_context(
     #: trade's and ``ctx["book"]["delta"]`` is the whole account's, and silently reading
     #: one for the other is the kind of mistake that does not raise.
     book: Any = None,
+    #: ``set_stop(level, reason)`` -- move this trade's stop, logged as a SET_STOP action
+    #: with the slot that asked. None when the engine supplies none, so a variant that
+    #: wants it can refuse rather than silently not moving anything.
+    set_stop: Any = None,
+    #: The stop in force right now, as a loss fraction, or None if there is none. A slot
+    #: ratcheting a stop needs to know what it is ratcheting from.
+    stop_level: Any = None,
     **extra: Any,
 ) -> dict[str, Any]:
     """What an exit component is given each day.
@@ -64,5 +71,7 @@ def exit_context(
         # gets an empty mapping instead of a TypeError -- and `.get` on it returns None,
         # which is the absence it should branch on.
         "book": dict(book) if book else {},
+        "set_stop": set_stop,
+        "stop_level": stop_level,
         **extra,
     }

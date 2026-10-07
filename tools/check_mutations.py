@@ -317,6 +317,22 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
     ),
     Mutation(
+        # A logged stop move that does not move the stop is the worst of three states.
+        "a moved stop is the one the exit is tested against",
+        "backtest/engine/loop.py",
+        "                    level = (trade.stop_level if trade.stop_level is not None",
+        "                    level = (None if trade.stop_level is not None",
+        ("tests/test_set_stop.py::TestTheRatchetMovesTheStop",),
+    ),
+    Mutation(
+        # Without the action the move is invisible: the stop changes and nothing says so.
+        "a stop move is recorded as an action",
+        "backtest/engine/loop.py",
+        "            actions.append(TradeAction(\n                action=Action.SET_STOP,",
+        "            [].append(TradeAction(\n                action=Action.SET_STOP,",
+        ("tests/test_set_stop.py::TestTheRatchetMovesTheStop",),
+    ),
+    Mutation(
         # Three figures' worth of requirements were never read, because the text
         # extraction every inventory was built from drops images.
         "the inventory is checked against the figures in the PDF itself",

@@ -527,6 +527,16 @@ SIGNALS: tuple[Clause, ...] = (
            ("backtest/core/actions.py",), needle="values: Mapping"),
     Clause("SignalCombiner", "the share of the trade affected, for REDUCE",
            ("backtest/core/actions.py",), needle="fraction: float | None"),
+    # **Built, after its recorded reason turned out to be wrong.** It said there was
+    # "nowhere to record a stop that moves during the trade"; the stateful component
+    # protocol is exactly that place and `stop_loss/trailing` had been using it all
+    # along. What was actually missing is a stop move that is *logged and attributable*
+    # rather than private to one component -- "up 30%, stop to breakeven" could be
+    # written, and a reader could not see that it had happened.
+    Clause("SignalCombiner", "SET_STOP moves a stop, logged with the slot that asked",
+           ("backtest/engine/loop.py",), needle="def _stop_setter"),
+    Clause("StopLossRule", "a stop that moves during the trade",
+           ("backtest/signals/stop_loss/__init__.py",), needle="def _ratchet"),
     Clause("SignalCombiner", "HOLD is an explicit no-change, logged with its reason",
            ("backtest/core/actions.py",), needle="HOLD"),
     Clause("SignalCombiner", "an optional score passed on to Positioning",
