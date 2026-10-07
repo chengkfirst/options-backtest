@@ -26,6 +26,7 @@ import {CONTRACT, checkContract, checkMeta} from "./../contract.js";
 import {money, num, pct, sgn} from "./../fmt.js";
 import {stats} from "./../stats.js";
 import {go} from "./../router.js";
+import {bind} from "./../ui/keys.js";
 
 let META = null;          // the contents of /api/meta
 let LIVE = false;         // is the service up
@@ -539,6 +540,17 @@ function blockingReason(){
 
 /* ── running ── */
 $("run").addEventListener("click", runBacktest);
+
+/* ⌘↩ submits, which is the design plan's appendix and the one shortcut a composer needs:
+   the configuration is typed into a box, and reaching for the mouse to leave it is the step
+   the plan's "2 steps to submit" target does not have room for. Bound while the bench is on
+   screen rather than always — the same keystroke on the analysis page would run whatever the
+   form happened to hold. */
+bind("bench", [
+  {keys: ["mod+Enter"], does: "run this configuration",
+   where: () => !$("view-bench").hidden,
+   run: () => { if(!$("run").disabled) runBacktest(); }},
+]);
 async function runBacktest(){
   if(!LIVE){ notice("no local service, so nothing can be run."); return; }
   clearIssues();

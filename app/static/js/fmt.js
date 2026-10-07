@@ -34,6 +34,26 @@ export const REASON = {
   expiry_otm: "expired out of the money", risk_forced: "forced by risk",
 };
 
+/** The seven slots, in the architecture's order and words. The number travels with the name
+ *  wherever a slot is drawn: section 12 asks that every slot marker carry its number, so
+ *  colour is never the only thing telling two slots apart. */
+export const SLOT = {
+  1: "setup / regime", 2: "entry", 3: "take profit", 4: "stop loss",
+  5: "headwind", 6: "positioning", 7: "hedge / protection",
+};
+
+/** Which slot closed a trade, by the reason the engine recorded — and `null` where the
+ *  answer is honestly "no slot did".
+ *
+ * Three of the reasons are not a slot: a holding cap and a days-to-expiry floor are
+ * lifecycle settings, and an expiry is the contract ending. Mapping them onto a slot anyway
+ * would put a colour and a number on a decision no component made, and the attribution by
+ * closing slot would then credit a component for what the calendar did. */
+export const SLOT_OF_EXIT = {
+  take_profit: 3, stop_loss: 4, risk_forced: 5,
+  time_exit: null, dte_floor: null, expiry_itm: null, expiry_otm: null,
+};
+
 /** Columns that are an outcome or an identifier, so grouping the result by them would
  *  be grouping the answer by itself. */
 export const EXCLUDE = new Set([
@@ -139,7 +159,19 @@ export const expiry = (iso, dte) =>
 
 export const sgn = v => absent(v) ? "" : v > 0 ? "pos" : v < 0 ? "neg" : "";
 
-export const label = c => LABEL[c] || c;
+/** A column's name, written for a reader.
+ *
+ * The table above names the ones worth a phrase of their own. Everything else the engine
+ * writes at entry follows one pattern — `entry_sig_<signal>` — so the fallback unfolds it
+ * rather than printing the identifier: a trade card listing `entry_sig_iv_rank_252` asks the
+ * reader to know the storage format, and the whole point of the context block is that they
+ * can read what the slots saw. An unrecognised name still prints as itself, which is the
+ * honest outcome for a column nothing here knows about. */
+export const label = c => {
+  if(LABEL[c]) return LABEL[c];
+  const signal = /^entry_sig_(.+)$/.exec(String(c ?? ""));
+  return signal ? `${signal[1].replace(/_/g, " ")} at entry` : c;
+};
 
 export function fmtVal(col, v){
   if(absent(v)) return "—";

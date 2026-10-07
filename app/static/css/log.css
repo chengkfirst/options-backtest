@@ -1,0 +1,370 @@
+/* log.css — the experiment log and the comparison.
+ *
+ * Both are tables of runs, so they share the row metrics, the series colours and the chips.
+ * Every value is a token; the four series colours and their dash patterns are the only place
+ * a column's identity is carried by appearance, and each is also labelled with its run id.
+ */
+
+/* `app.css` still carries two bare type selectors from when it was the whole page —
+   `section{display:flex;flex-direction:column}` and `header{display:flex;…space-between}`.
+   They reach every surface added since, and on this one they put the lead paragraph on the
+   same line as the title and pushed it to the far right. Reset here rather than edited
+   there: app.css is being retired stylesheet by stylesheet, and a sweeping change to it in
+   the same commit as a new surface would make a visual regression impossible to attribute. */
+#view-log, #view-compare { display: block; }
+.log-head, .cmp-head { display: block; }
+
+.log-wrap, .cmp-wrap {
+  padding: var(--space-4) var(--space-5) var(--space-6);
+  min-width: 0;
+}
+
+.log-head h2, .cmp-head h2 {
+  font-family: var(--display);
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
+  margin: 0 0 var(--space-1);
+}
+
+.log-head .hint, .cmp-head .hint { margin: 0 0 var(--space-3); max-width: 90ch; }
+
+/* ── the filter bar ──
+   Every filter is view state and lives in the URL, so a link restores the list. The count on
+   the clear button is there because a list filtered down to nothing looks like an empty
+   store, and the number of active filters is the answer. */
+.log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  margin-bottom: var(--space-4);
+}
+
+.log-f {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+.log-f.check { flex-direction: row; align-items: center; gap: var(--space-2); }
+.log-f.grow { flex: 1; min-width: 16ch; }
+
+.log-f select, .log-f input[type="search"] {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: var(--font-sm);
+  padding: 4px var(--space-2);
+}
+
+/* ── an idea, and the size of the search under it ── */
+.idea { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); }
+.idea + .idea { margin-top: var(--space-3); }
+
+.idea-head {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 10px minmax(8rem, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.idea-head:hover { background: var(--surface-2); }
+
+/* The caret turns when the group opens. `run.css` turns it for a subject; an idea is a
+   different container and inherited the arrow without the rotation, so an open group still
+   pointed at itself. */
+.idea.open .subj-caret { transform: rotate(90deg) translateX(1px); }
+
+/* The table is wider than the window on purpose — a research table that drops columns to
+   fit is a research table that answers fewer questions — so it scrolls inside the group
+   rather than pushing the page sideways. `app.css` gives `.scroll` a border and a radius
+   meant for a panel; inside a group those draw a second box around the first. */
+.idea .scroll {
+  overflow-x: auto;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  border-top: 1px solid var(--border);
+}
+
+.idea-name {
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.idea-trials, .idea-best, .idea-holdout, .idea-count {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* The trial count is the one number in the header a reader must not miss: it is what the
+   best result has to be discounted by. */
+.idea-trials {
+  font-family: var(--mono);
+  color: var(--text-primary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+}
+
+.idea-count { color: var(--text-muted); }
+.log-warn { color: var(--warning); }
+.log-none, .log-base { color: var(--text-muted); font-size: var(--font-xs); }
+.log-empty { padding: 0 var(--space-4) var(--space-3); }
+
+/* ── the run table ── */
+.log-table { width: 100%; border-collapse: collapse; font-size: var(--font-sm); }
+
+.log-table th, .log-table td {
+  padding: 4px var(--space-2);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+  vertical-align: middle;
+  height: var(--row-compact);
+}
+
+.log-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-1);
+  border-top: 0;
+  border-bottom: 1px solid var(--border-strong);
+  text-align: right;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  font-weight: var(--weight-regular);
+}
+
+.log-table th.left, .log-table td.left { text-align: left; }
+.log-table td.n, .log-table th.n { text-align: right; }
+
+.log-table td.n, .log-table .mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-table td.wide {
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-table tbody tr:hover { background: var(--surface-2); }
+
+/* Below the minimum trade count every figure in the row is muted — the plan's "metrics are
+   muted and conclusions are labeled insufficient", applied where runs are compared rather
+   than only on the run's own page. The hue stays so a loss still reads as a loss; the weight
+   goes, so the row stops competing with the ones that are evidence. */
+.log-table tbody tr.thin td.n { opacity: 0.55; }
+.log-thin { border-bottom: 1px dotted var(--text-muted); }
+.log-table tbody tr.ticked { background: var(--accent-soft); }
+.log-table td.tick, .log-table th.tick { width: 2rem; text-align: center; }
+
+.sortby {
+  font: inherit;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.sortby:hover { color: var(--text-primary); }
+.sortby.on { color: var(--text-primary); }
+
+.log-badge {
+  font-size: var(--font-xs);
+  font-family: var(--mono);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  margin-left: var(--space-1);
+}
+
+.log-badge.syn { color: var(--warning); border-color: var(--warning); }
+.log-badge.arch { color: var(--text-muted); background: var(--surface-sunk); }
+
+.log-chip {
+  font-size: var(--font-xs);
+  font-family: var(--mono);
+  color: var(--text-secondary);
+  margin-right: var(--space-2);
+}
+
+/* An interval that spans zero is marked, and one below the trade floor is muted — the two
+   ways a figure on this page can fail to mean what it looks like. */
+.log-iv { font-family: var(--mono); font-size: var(--font-xs); color: var(--text-secondary); }
+.log-iv.crosses { color: var(--warning); }
+.log-iv.thin { color: var(--text-muted); }
+
+.log-verdict, .log-note {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: var(--font-xs);
+  padding: 2px var(--space-1);
+  max-width: 22ch;
+}
+
+/* ── the compare bar ──
+   Appears once two runs are ticked and stays at the bottom of the window, because the rows
+   being ticked may be anywhere in a long list. */
+.compare-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+}
+
+/* ══ the comparison ══════════════════════════════════════════════════════════════ */
+
+.cmp-section { margin-top: var(--space-6); }
+
+.cmp-section h3 {
+  font-family: var(--display);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  margin: 0 0 var(--space-2);
+}
+
+.cmp-section h4 {
+  margin: var(--space-4) 0 var(--space-1);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+}
+
+.cmp-n { color: var(--text-muted); font-family: var(--mono); font-size: var(--font-xs); }
+
+/* Equal columns, both here and in the tables below: a comparison where one run's column is
+   twice the width of another's reads as one of them mattering more, and the eye compares
+   positions as well as numbers. */
+.cmp-columns {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--space-2);
+  table-layout: fixed;
+}
+
+.cmp-table { table-layout: fixed; }
+.cmp-table th:first-child { width: 22ch; }
+
+/* `app.css` uppercases every `th` on the page, which is right for a label and wrong for an
+   identifier: the leaf is `select.delta_hi` and printing it as SELECT.DELTA_HI shows the
+   reader a path that does not exist. */
+.cmp-table th.mono, .log-table th.mono { text-transform: none; }
+
+.cmp-col {
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--border-strong);
+  padding: var(--space-2) var(--space-3);
+  vertical-align: top;
+  font-size: var(--font-sm);
+}
+
+.cmp-col.base { background: var(--surface-2); }
+
+/* The column's identity: its series colour on the top border and in the swatch, **and** its
+   run id written out. Colour is never the only carrier. */
+.cmp-col.series-1 { border-top-color: var(--data-1); }
+.cmp-col.series-2 { border-top-color: var(--data-2); }
+.cmp-col.series-3 { border-top-color: var(--data-3); }
+.cmp-col.series-4 { border-top-color: var(--data-4); }
+
+.cmp-swatch {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  margin-right: var(--space-2);
+  vertical-align: middle;
+}
+
+.series-1 .cmp-swatch { background: var(--data-1); }
+.series-2 .cmp-swatch { background: var(--data-2); }
+.series-3 .cmp-swatch { background: var(--data-3); }
+.series-4 .cmp-swatch { background: var(--data-4); }
+
+.cmp-idea, .cmp-when {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.cmp-badge {
+  display: inline-block;
+  margin-top: var(--space-1);
+  font-size: var(--font-xs);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
+
+.cmp-flag {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--warning-soft);
+  border-left: 3px solid var(--warning);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: var(--font-sm);
+}
+
+.cmp-table { width: 100%; }
+.cmp-table th.series-1 { color: var(--data-1); }
+.cmp-table th.series-2 { color: var(--data-2); }
+.cmp-table th.series-3 { color: var(--data-3); }
+.cmp-table th.series-4 { color: var(--data-4); }
+.cmp-table td.base, .cmp-table th.base { background: var(--surface-2); }
+
+.cmp-table td { vertical-align: top; }
+.cmp-value { display: block; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.cmp-iv, .cmp-delta, .cmp-tie {
+  display: block;
+  font-size: var(--font-xs);
+  font-family: var(--mono);
+  color: var(--text-muted);
+}
+
+.cmp-delta.pos { color: var(--success); }
+.cmp-delta.neg { color: var(--danger); }
+
+/* The marking the plan asks for: a difference whose intervals overlap must not read as a
+   win, so it is named in words rather than left to the reader to compare two ranges. */
+.cmp-tie {
+  color: var(--warning);
+  font-family: var(--sans);
+}
+
+.cmp-prov th, .cmp-prov td { border-top: 1px solid var(--border-strong); }
+.cmp-trades { width: 100%; }

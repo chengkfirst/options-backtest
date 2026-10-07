@@ -375,6 +375,52 @@ button.subj-head:hover { background: var(--surface-2); }
 .card.thin dd { color: var(--text-secondary); }
 .card.empty dd { color: var(--text-muted); }
 
+/* ── the interval bar under a card ───────────────────────────────────────────────
+   A thin bar at 20% opacity behind the estimate, which is the design plan's rule for an
+   interval, plus a tick at zero: the one thing a reader needs from an interval at a glance
+   is whether it is on one side of zero. Drawn with elements rather than an svg because it
+   is three rectangles and an svg here would need a viewBox per card. */
+.card-iv { margin-top: 3px; }
+
+.card-iv-track {
+  position: relative;
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--border-strong) 60%, transparent);
+}
+
+.card-iv-span {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.45;
+}
+
+.card-iv.crosses .card-iv-span { background: var(--warning); }
+
+.card-iv-zero {
+  position: absolute;
+  top: -2px;
+  width: 1px;
+  height: 8px;
+  background: var(--text-muted);
+}
+
+.card-iv-ends {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* The spread on the headline figure. A full-width line directly under the verdict,
    because it qualifies that number and a 165px card could not hold the sentence.
    Warning-coloured when the range spans zero: then the headline's sign is not
@@ -477,7 +523,29 @@ button.subj-head:hover { background: var(--surface-2); }
 .layer-svg .limit { stroke: var(--warning); stroke-dasharray: 4 3; opacity: 0.8; }
 .layer-svg .cross { stroke: var(--text-muted); stroke-width: 1; }
 .layer-svg .brushed { fill: var(--accent); opacity: 0.12; }
-.layer-svg .holdout { fill: var(--text-muted); opacity: 0.1; }
+
+/* The hold-out and any span with no data are **hatched**, which is the design plan's rule
+   for both: the period is not merely shaded, it is empty, and a flat tint would read as a
+   value. The fill comes from the pattern the stack defines; only its stroke is styled here,
+   so a theme change carries. */
+.layer-svg .hatch-line { stroke: var(--text-muted); stroke-width: 1.4; opacity: 0.38; }
+.layer-svg .holdout, .layer-svg .gap { stroke: none; }
+
+/* Taking a layer away: shown on hover of its bar, so eight layers do not carry eight
+   permanent buttons competing with the values. */
+.layer-csv {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  padding: 0 var(--space-1);
+  opacity: 0;
+}
+.layer-bar:hover .layer-csv, .layer-csv:focus-visible { opacity: 1; }
+.layer-csv:hover { color: var(--text-primary); border-color: var(--border-strong); }
 
 .layer-svg .y-label, .stack-axis .tick {
   fill: var(--text-muted);
@@ -864,3 +932,164 @@ td.bar span {
 .plain.pickable tbody tr:hover { background: var(--surface-2); }
 .plain.pickable tbody tr.picked { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .plain.pickable tbody tr.picked > td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* ══ the trade card ══════════════════════════════════════════════════════════════
+   The design plan's section 7, in the drawer. Its hero is the trade's P&L, so that is the
+   only large number in the card and everything under it is a two-column list — a card read
+   beside a chart has to be scannable in one pass, and a page of equal-weight blocks is not.
+*/
+.tc-conclusion {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.tc-conclusion.good { border-left-color: var(--success); }
+.tc-conclusion.bad { border-left-color: var(--danger); }
+
+.tc-pnl {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 24px;
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.tc-conclusion.good .tc-pnl { color: var(--success); }
+.tc-conclusion.bad .tc-pnl { color: var(--danger); }
+
+.tc-split, .tc-closed {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.tc-closed b { color: var(--text-primary); font-weight: var(--weight-medium); }
+
+.tc-block { margin-top: var(--space-5); break-inside: avoid; }
+
+.tc-block h4 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Two columns, the value in monospace and right of the label, so a column of figures lines
+   up and can be compared down the card. */
+.tc-facts, .tc-context {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-3);
+  margin: 0;
+  font-size: var(--font-sm);
+}
+
+.tc-facts dt, .tc-context dt { color: var(--text-muted); min-width: 0; }
+
+.tc-facts dd, .tc-context dd {
+  margin: 0;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tc-facts dd.pos, .tc-context dd.pos { color: var(--success); }
+.tc-facts dd.neg, .tc-context dd.neg { color: var(--danger); }
+
+/* ── the lifecycle strip ──
+   Four states, and a marker per recorded action in its slot's colour **with its number in
+   it**: section 12 requires that colour never be the only thing telling two slots apart,
+   and a marker is exactly where that rule bites. Idle and armed are drawn as not reached,
+   because this engine does not record them per trade — a strip that showed all four as
+   facts would be inventing two of them. */
+.tc-states {
+  display: flex;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-xs);
+}
+
+.tc-state {
+  flex: 1;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  letter-spacing: 0.03em;
+}
+
+.tc-state.reached { background: var(--accent-soft); color: var(--text-primary); }
+.tc-state.assumed {
+  background: var(--surface-sunk);
+  color: var(--text-muted);
+  border: 1px dashed var(--border-strong);
+}
+
+.tc-actions { margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+
+.tc-action {
+  display: grid;
+  grid-template-columns: 18px 10ch 7ch 1fr;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-1) 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--font-sm);
+}
+
+.tc-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--on-accent);
+}
+
+.tc-when { color: var(--text-secondary); font-family: var(--mono); font-size: var(--font-xs); }
+.tc-what { font-family: var(--mono); font-size: var(--font-xs); color: var(--text-primary); }
+.tc-why { color: var(--text-muted); font-size: var(--font-xs); line-height: 1.4; }
+
+.tc-legs { width: 100%; }
+
+/* ══ waiting ══════════════════════════════════════════════════════════════════════
+   Shaped like the content that is coming and shown only after 300 ms, so a cached run is
+   never preceded by a flash of grey. Never a spinner, never a blank page.
+*/
+.skeleton {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg,
+    var(--surface-1) 0%, var(--surface-2) 50%, var(--surface-1) 100%);
+  background-size: 200% 100%;
+  animation: skeleton 1.2s ease-in-out infinite;
+}
+
+@keyframes skeleton {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+.sk-head { height: 28px; width: 42%; margin-bottom: var(--space-3); }
+.sk-verdict { height: 54px; width: 100%; margin-bottom: var(--space-4); }
+.sk-dt { height: 9px; width: 60%; }
+.sk-dd { height: 20px; width: 80%; margin-top: 6px; }
+.sk-chart { height: 230px; margin-top: var(--space-4); }
+
+/* The legs table is wider than 400 px and the drawer is 400 px by the token: it scrolls
+   inside the card rather than being cut off at the edge, where the fees column simply
+   disappeared with nothing to say it had. */
+.tc-scroll { overflow-x: auto; border: 0; border-radius: 0; background: none; }

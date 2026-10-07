@@ -64,9 +64,30 @@ export const CONTRACT = {
         "analysis.intervals.net_pnl.estimate", "analysis.intervals.net_pnl.low",
         "analysis.intervals.net_pnl.high", "analysis.intervals.net_pnl.level",
         "analysis.intervals.net_pnl.caveat",
+        // The mean per trade is read from the bootstrap's own estimate rather than divided
+        // out of the total, so the figure on the card and the interval under it come from
+        // the same computation.
+        "analysis.intervals.mean_pnl.estimate", "analysis.intervals.mean_pnl.low",
+        "analysis.intervals.mean_pnl.high", "analysis.intervals.mean_pnl.level",
         "analysis.investor.Sortino", "analysis.investor.Calmar",
         "analysis.investor.top5_share", "analysis.investor.without_top5",
+        // Alpha, not the difference of two totals: a strategy with twice the exposure
+        // should beat the underlying by that much, and subtracting the totals credits the
+        // leverage to the strategy. Beta rides with it in the same card's note.
+        "analysis.investor.annualised_alpha", "analysis.investor.beta_vs_underlying",
+        "analysis.investor.buy_and_hold", "analysis.investor.strategy_total",
         "analysis.excursion.censoring",
+        // The comparison's metric rows, each named here at the depth it is read.
+        "analysis.costs.fees_pct_of_gross",
+        // The trade card. Every block of it is a stored column of the trade log; a renamed
+        // column has to fail here rather than leaving a card with blanks in it.
+        "rows.*.trade_id", "rows.*.quantity", "rows.*.mfe", "rows.*.mae",
+        "rows.*.entry_underlying_price", "rows.*.exit_underlying_price",
+        "rows.*.exit_iv", "rows.*.exit_delta", "rows.*.entry_dte_calendar",
+        // What the experiment log and the comparison read off a run: which idea and version
+        // it belongs to, when it ran, what it covered, and how it is filed.
+        "started", "strategy_name", "strategy_ver", "symbol", "start_date", "end_date",
+        "synthetic", "n_notes", "last_verdict", "fingerprint",
         // The realism strip: what determined this result, restated where it is read.
         "manifest.run_id", "manifest.code", "manifest.config.notional_capital",
         "manifest.config.costs.adverse_fraction", "manifest.execution.execution_lag_days",
@@ -99,6 +120,41 @@ export const CONTRACT = {
                  "scenarios.*.scenario", "scenarios.*.from", "scenarios.*.to",
                  "scenarios.*.sessions", "scenarios.*.return",
                  "scenarios.*.max drawdown", "scenarios.*.note"],
+  /* One row of `/api/runs`, which is the experiment log's whole list.
+   *
+   * Declared separately from `run` because it is a different shape: the list carries what a
+   * row needs to be read and compared, and not the trade log or the daily curve — 172 runs
+   * with their curves attached is a payload nobody asked for. A field read in the list has to
+   * be declared here even when `run` already declares it, because the two endpoints are
+   * free to drift apart and the list is the one that would fail silently.
+   */
+  runs: ["id", "started", "strategy_name", "strategy_ver", "symbol",
+         "start_date", "end_date", "n_trades", "net_pnl", "win_rate", "synthetic",
+         "archived", "n_notes", "last_verdict", "sharpe_annualised", "fingerprint",
+         "config", "config.engine", "manifest", "analysis"],
+  /* The columns of the list that only some runs have.
+   *
+   * A trade-table run has no equity metrics and a run saved before a part of the analysis
+   * existed has none of it, and both are **normal**. Demanding them of the first row of the
+   * list would put a red "the backend is missing fields" strip above an ordinary list, which
+   * is how a notice strip gets ignored. `check_wiring` still holds them: its sample run is
+   * event-driven and fills every one in, so a rename fails there.
+   */
+  runs_when_set: ["manifest.execution.execution_lag_days",
+                  "manifest.config.costs.adverse_fraction",
+                  "analysis.equity_metrics.annualised",
+                  "analysis.equity_metrics.max_drawdown",
+                  "analysis.investor.Sortino",
+                  "analysis.intervals.net_pnl.low", "analysis.intervals.net_pnl.high",
+                  "analysis.intervals.net_pnl.level"],
+  /* One group of `/api/ideas`: the size of the search under an idea.
+   *
+   * The header of a group in the experiment log is not decoration — it is the count the
+   * deflated Sharpe is deflated by. A renamed field here would leave the header reading
+   * "undefined tried", which is the one number on that page a reader must be able to trust.
+   */
+  ideas: ["idea", "runs", "archived", "distinct", "reruns", "unplaced", "symbols",
+          "last", "best_sharpe", "hold_out", "hold_out_touched", "verdicts"],
   meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps",
          "validations",
          // Every registered form of every slot. The composer's variant pickers and their
@@ -161,6 +217,26 @@ export function checkContract(record){
     notice(`the backend sent ${roots.join(", ")} without: ${partial.join(", ")}. That `
       + `section will render incomplete.`);
   }
+}
+
+/** One row of the list, checked once rather than per row.
+ *
+ * Every row of `/api/runs` comes out of the same SELECT, so a field missing from the first is
+ * missing from all of them; checking each would report the same fault 172 times. */
+export function checkRuns(rows){
+  if(!rows || !rows.length) return;
+  const missing = CONTRACT.runs.filter(p => resolvePath(rows[0], p) === "missing");
+  if(missing.length)
+    notice(`/api/runs is missing: ${missing.join(", ")}. The experiment log reads those, `
+      + `so part of every row will be blank.`);
+}
+
+export function checkIdeas(groups){
+  if(!groups || !groups.length) return;
+  const missing = CONTRACT.ideas.filter(p => resolvePath(groups[0], p) === "missing");
+  if(missing.length)
+    notice(`/api/ideas is missing: ${missing.join(", ")}. An idea's header reads those, and `
+      + `the trial count is the number the deflated Sharpe depends on.`);
 }
 
 export function checkMeta(meta){

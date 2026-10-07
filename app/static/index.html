@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="bench.css">
 <link rel="stylesheet" href="css/shell.css">
 <link rel="stylesheet" href="css/run.css">
+<link rel="stylesheet" href="css/log.css">
 
 <div class="shell">
 
@@ -130,9 +131,15 @@
     <div class="scroll"><table id="runs"></table></div>
   </section>
 
+  <!-- The empty state says what will appear and offers one way on, which is the design
+       plan's rule for it. "Nothing run yet" is true of this session and false of the
+       record — 172 runs are in the store — so it says which, and points at them. -->
   <div class="placeholder" id="placeholder">
-    <h2>nothing run yet</h2>
-    <p>Fill in the slots on the left, then press run.</p>
+    <h2>nothing run yet in this session</h2>
+    <p>Fill in the slots on the left, then press run. The result opens on its own page and
+       the run appears here.</p>
+    <p><a class="btn" href="#/log">open the experiment log</a></p>
+    <p class="hint">Every earlier run is there, grouped by the idea that owns it.</p>
     <p class="hint" id="gapList" hidden></p>
   </div>
 </main>
@@ -140,6 +147,12 @@
 
   <!-- ══ run analysis: the design plan's section 6, in three tiers ══ -->
   <section id="view-run" hidden></section>
+
+  <!-- ══ the experiment log: the design plan's section 5 ══ -->
+  <section id="view-log" hidden></section>
+
+  <!-- ══ two to four runs, differences first: section 5 again ══ -->
+  <section id="view-compare" hidden></section>
 
   <!-- ══ a surface the backend cannot answer yet ══ -->
   <section class="pending" id="view-pending" hidden>

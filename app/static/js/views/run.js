@@ -34,6 +34,10 @@ import {renderCurve} from "../charts/equity.js";
 import {renderAttribution} from "../charts/attribution.js";
 import {renderBuckets, renderCross, renderRobust} from "../charts/tables.js";
 import {replace} from "../router.js";
+import {closeDrawer, isOpen as cardOpen, openDrawer, toggleFull} from "../ui/drawer.js";
+import {bind} from "../ui/keys.js";
+import {provide} from "../ui/palette.js";
+import {actions as cardActions, card as cardBody, contractParts} from "./trade.js";
 
 let RUN = null;        // the record being viewed
 let META = null;       // /api/meta, for the thresholds
@@ -45,6 +49,9 @@ let PICKED = null;     // the selected trade's row, or null
 let SCROLL_TO_FIRST = false;  // set by the brush: take the table to the range's first trade
 let RANGE = null;      // the brushed range, so the chip can show and clear it
 let CLOSED_BY = null;  // filter to the trades one slot closed, from the exits tab
+let SCALE = "linear";  // the equity layer's vertical scale (display only)
+let UNBIND = null;     // takes this page's keyboard bindings off again on the way out
+let UNPROVIDE = null;  // and its entries out of the command palette
 
 /** The tabs of section 6, and what each one is waiting on where it cannot be built. */
 const TABS = [
@@ -74,24 +81,138 @@ const CACHE = new Map();
 
 export function forget(id){ CACHE.delete(Number(id)); }
 
+/* A skeleton shaped like the page that is coming, and **only after 300 ms** — the design
+ * plan's state table, which also forbids a spinner and a blank page. The delay is the point:
+ * a cached run paints in under a frame, and flashing a grey page in front of it is slower to
+ * read than the page itself. The cells match the real band, so nothing moves when the
+ * numbers arrive. */
+const SKELETON = `<section class="tier-top">
+  <div class="skeleton sk-head"></div>
+  <div class="skeleton sk-verdict"></div>
+  <dl class="cards">${Array.from({length: 8}, (_, i) =>
+    `<div class="card${i < 4 ? " lead" : ""}"><dt><span class="skeleton sk-dt"></span></dt>
+      <dd><span class="skeleton sk-dd"></span></dd></div>`).join("")}</dl>
+</section>
+<div class="skeleton sk-chart"></div>`;
+
 export async function enter({params, query}){
   const id = Number(params.id);
   const host = $("view-run");
   const cached = CACHE.get(id);
-  if(!cached) host.innerHTML = `<p class="hint">loading run ${esc(params.id)}…</p>`;
+  let late = 0;
+  if(!cached)
+    late = setTimeout(() => { host.innerHTML = SKELETON; }, 300);
   try{
     if(!META) META = await getJSON(API.meta);
     RUN = cached || await getJSON(API.run, {id});
     CACHE.set(id, RUN);
   }catch(e){
+    clearTimeout(late);
     host.innerHTML = `<div class="pending"><h2>run ${esc(params.id)}</h2>
-      <p class="hint">${esc(e.message)}</p></div>`;
+      <p class="hint">${esc(e.message)}</p>
+      <button class="btn" type="button" data-goto="/log">go to the experiment log</button></div>`;
     return;
   }
+  clearTimeout(late);
   checkContract(RUN);
   MARK = query.mark === "liq" ? "liq" : "mid";
+  SCALE = query.scale === "log" ? "log" : "linear";
   VIEW = RUN.rows || [];
+  bindKeys();
   render(query);
+}
+
+/* ── the keyboard ────────────────────────────────────────────────────────────────
+ *
+ * The design plan's appendix, for the keys this page owns. They are registered on the way in
+ * and taken off on the way out, so a key never acts on a run that is no longer on screen —
+ * and so the command palette, which lists the live registry, offers exactly what the page
+ * the reader is on can do.
+ */
+function bindKeys(){
+  if(UNBIND) UNBIND();
+  UNBIND = bind("run", [
+    {keys: ["Escape"], does: "close the trade card, or clear the brushed range",
+     run: () => {
+       if(cardOpen()) closeDrawer();
+       else if(RANGE || CLOSED_BY){
+         if(STACK) STACK.setBrush(null);
+         CLOSED_BY = null;
+         applyBrush(null);
+         replace({range: null, closed: null});
+       }
+     }},
+    ...TABS.map((t, i) => ({
+      keys: [String(i + 1)], does: `open the ${t.name} tab`,
+      run: () => step({tab: t.key}),
+    })),
+    {keys: ["j"], does: "the next trade in the table's order",
+     run: () => walk(1), where: () => VIEW.length > 0},
+    {keys: ["k"], does: "the previous trade in the table's order",
+     run: () => walk(-1), where: () => VIEW.length > 0},
+    {keys: ["f"], does: "expand the trade card to the full window",
+     run: toggleFull, where: cardOpen},
+    {keys: ["l"], does: "draw the equity on a logarithmic scale, or back",
+     run: () => setScale(SCALE === "log" ? "linear" : "log")},
+    {keys: ["m"], does: "mark the book at the bid, or at the mid",
+     run: () => setMark(MARK === "mid" ? "liq" : "mid")},
+    {keys: ["mod+shift+c"], does: "copy a link to this exact reading", run: copyLink},
+  ]);
+  if(UNPROVIDE) UNPROVIDE();
+  // The trades of the open run, by id and by contract, so a trade someone mentioned in a
+  // message can be reached by typing its number.
+  UNPROVIDE = provide("trades", query => {
+    const q = String(query || "").toLowerCase();
+    if(!q) return [];
+    return (RUN.rows || [])
+      .filter(r => String(r.trade_id).includes(q)
+        || String(r.contract || "").toLowerCase().includes(q))
+      .slice(0, 8)
+      .map(r => ({
+        kind: "trade", label: `trade ${r.trade_id} · ${contractParts(r.contract).readable}`,
+        hint: money(r.net_pnl), run: () => openCard(r),
+      }));
+  });
+}
+
+/** Walk to the next or previous trade, opening the card on it — the plan's J and K. */
+function walk(by){
+  const order = sorted(VIEW).slice(0, SHOWN_LIMIT);
+  if(!order.length) return;
+  const at = PICKED ? order.indexOf(PICKED) : -1;
+  const next = order[Math.max(0, Math.min(order.length - 1, at + by))] || order[0];
+  openCard(next);
+}
+
+function setMark(mark){
+  MARK = mark;
+  replace({mark: MARK});
+  render({tab: TAB, mark: MARK, scale: SCALE});
+}
+
+/** The vertical scale of the equity layer. Display only, and labelled as such: the metrics
+ *  were computed on the values, not on their logarithms. */
+function setScale(scale){
+  SCALE = scale;
+  replace({scale: SCALE === "log" ? "log" : null});
+  if(TAB === "overview") renderTab("overview", {});
+  const chip = $("scaleToggle");
+  if(chip) chip.textContent = SCALE === "log" ? "log scale" : "linear scale";
+}
+
+/** The address bar already describes the reading; this puts it on the clipboard.
+ *
+ * `navigator.clipboard` needs a secure context, and `http://localhost` is one — but a page
+ * opened from a file or over a plain host on the network is not, and there the write
+ * rejects. The link is shown in that case rather than silently not copied. */
+async function copyLink(){
+  const url = window.location.href;
+  try{
+    await navigator.clipboard.writeText(url);
+    notice(`the link to this reading is on the clipboard: ${url}`);
+  }catch{
+    notice(`this browser would not give the page the clipboard. The link is: ${url}`);
+  }
 }
 
 /* ── the conclusion tier ────────────────────────────────────────────────────── */
@@ -698,6 +819,12 @@ function metricCards(){
   // Every card carries a definition and, where it has one, the direction that is better.
   // A reader who meets "Calmar -0.44" with no explanation has been given a number and no
   // way to use it, which is worse than giving nothing.
+  // Eight, which is the maximum the design plan allows, and the reason the count is a limit
+  // rather than a preference: a band of nine wrapped onto an orphaned second row where the
+  // eye had already stopped. The ninth was the profit factor, and it is not lost — the win
+  // rate's note carries it, beside the average win and loss it is the ratio of, which is
+  // where a reader comparing "how often" against "how much" wants it.
+  const iv = a.intervals || {};
   const cards = [
     {lead: true, name: "annualised", value: eq && pct(eq.annualised), better: "higher",
      means: "the compound yearly rate this equity curve grew at over the period",
@@ -711,38 +838,44 @@ function metricCards(){
      note: inv && inv.downside_vol != null ? `downside vol ${pct(inv.downside_vol)}` : "",
      missing: "needs the event-driven engine"},
     // The comparison the page was missing, and the first card a reader should be able to
-    // find: a return shown alone cannot be judged. Beta and alpha ride with it rather than
-    // taking cards of their own — the plan allows eight, and ten wrapped onto an orphaned
-    // second row where the eye stopped before reaching them.
-    {lead: true, name: "vs buy and hold", better: "higher",
-     value: inv && inv.buy_and_hold != null && inv.strategy_total != null
-       ? pct(inv.strategy_total - inv.buy_and_hold) : null,
+    // find: a return shown alone cannot be judged.
+    //
+    // It used to subtract the two totals here — `strategy_total - buy_and_hold` — which is
+    // not the comparison it looked like. A strategy that is twice the underlying's exposure
+    // *should* beat it by that much, and the difference of two totals credits the leverage
+    // to the strategy. `annualised_alpha` is the backend's own figure, the return left after
+    // beta times the benchmark, and it has been in `investor_view` all along. One less
+    // number this file works out, and a more honest one.
+    {lead: true, name: "alpha, annualised", better: "higher",
+     value: inv && inv.annualised_alpha != null ? pct(inv.annualised_alpha) : null,
      note: inv && inv.buy_and_hold != null
-       ? `${pct(inv.strategy_total)} against ${pct(inv.buy_and_hold)}`
+       ? `${pct(inv.strategy_total)} total against ${pct(inv.buy_and_hold)} held`
          + (inv.beta_vs_underlying != null ? ` · beta ${num(inv.beta_vs_underlying)}` : "")
        : "",
-     means: "total return less what holding the underlying returned over the same "
-          + "period; beta is how much of the return was the underlying moving",
+     means: "the annual return left after what beta times the underlying explains — the "
+          + "part that is not the underlying moving",
      missing: "needs an equity curve and a benchmark series"},
     {name: "net P&L", value: money(RUN.net_pnl),
-     means: "what the whole run made or lost after costs"},
-    {name: "mean per trade", value: RUN.n_trades ? money(RUN.net_pnl / RUN.n_trades) : "—",
-     means: "net P&L over the trade count; the interval beneath is a bootstrap",
-     // The division is the one arithmetic left in this file, and it is the presentation of
-     // two stored numbers rather than a statistic of its own.
-     note: `over ${RUN.n_trades} trades`},
+     means: "what the whole run made or lost after costs",
+     interval: iv.net_pnl, format: moneyShort},
+    // The backend bootstraps the mean per trade and reports the estimate with it, so the
+    // card reads that rather than dividing the total by the count: a division here produces
+    // a number beside an interval that was computed from a different quantity.
+    {name: "mean per trade", means: "the average trade, with the bootstrap's own estimate",
+     value: iv.mean_pnl && !absent(iv.mean_pnl.estimate) ? money(iv.mean_pnl.estimate) : null,
+     note: `over ${RUN.n_trades} trades`,
+     interval: iv.mean_pnl, format: moneyShort,
+     missing: "the bootstrap declines below ten trades, so there is no estimate to show"},
     {name: "win rate", value: pct(RUN.win_rate),
-     means: "the share of trades that finished above zero; says nothing about size"},
-    // The design plan asks for a payoff ratio here. The backend computes a **profit
-    // factor** — gross wins over gross losses — which is a different statistic, so the
-    // card is named for the one that exists rather than relabelling it into the one that
-    // was asked for. Both answer the question the card is for: whether the wins are large
-    // and rare or small and frequent.
-    {name: "profit factor", value: ts && num(ts.profit_factor), better: "higher",
-     means: "gross wins divided by gross losses; 1.0 is break-even before costs",
+     means: "the share of trades that finished above zero; the note says how much, which is "
+          + "the half a rate cannot tell you",
+     // The design plan asks for a payoff ratio. The backend computes a **profit factor** —
+     // gross wins over gross losses — which is a different statistic, so it is named for
+     // the one that exists rather than relabelled into the one that was asked for.
      note: ts && ts.avg_win != null
-       ? `win ${moneyShort(ts.avg_win)} · loss ${moneyShort(ts.avg_loss)}` : "",
-     missing: "needs at least one losing trade to divide by"},
+       ? `win ${moneyShort(ts.avg_win)} · loss ${moneyShort(ts.avg_loss)}`
+         + (ts.profit_factor != null ? ` · profit factor ${num(ts.profit_factor)}` : "")
+       : ""},
     {name: "top 5 trades' share", value: inv && pct(inv.top5_share), better: "lower",
      means: "how much of the total profit came from the five best trades",
      note: inv && inv.without_top5 != null ? `without them ${money(inv.without_top5)}` : "",
@@ -756,11 +889,14 @@ function metricCards(){
   return `<dl class="cards">${ordered.map(c => {
     const absentCard = c.value == null || c.value === "—" || c.value === false;
     return `<div class="card${c.lead ? " lead" : ""}${thin ? " thin" : ""}${
-      absentCard ? " empty" : ""}">
+      absentCard ? " empty" : ""}"${thin
+        ? ` data-tip="Muted: ${RUN.n_trades} trades is below the ${floor} this project `
+          + `requires before a statistic carries an interval."` : ""}>
       <dt>${esc(c.name)}${c.better
         ? `<span class="card-dir" aria-hidden="true">${
             c.better === "higher" ? "↑" : c.better === "lower" ? "↓" : "→0"}</span>` : ""}</dt>
       <dd>${absentCard ? "—" : esc(c.value)}</dd>
+      ${absentCard ? "" : intervalBar(c.interval, c.format)}
       ${absentCard && c.missing ? `<p class="card-why">${esc(c.missing)}</p>` : ""}
       ${!absentCard && c.note ? `<p class="card-note">${esc(c.note)}</p>` : ""}
     </div>`;
@@ -768,8 +904,35 @@ function metricCards(){
 }
 
 /** A thin bar beneath the value: the range a different sample would plausibly have given.
- *  Marked when it contains zero, because then the sign is not established and the point
- *  estimate alone would read as a result. */
+ *
+ * The design plan puts one under every metric card. Two of the eight have one, because two
+ * are what the backend bootstraps — and a bar drawn under the other six would be a bar this
+ * file invented. The rest carry their interval in the verdict sentence above the band, which
+ * is where the headline figure's own spread belongs.
+ *
+ * **Marked when it contains zero**, because then the sign of the result is not established
+ * and the point estimate alone reads as a finding. The span is the interval plus a fifth of
+ * its width at each end, so a bar that clears zero narrowly still shows the gap rather than
+ * ending exactly at the edge. */
+function intervalBar(interval, format = moneyShort){
+  if(!interval || absent(interval.low) || absent(interval.high)) return "";
+  const {low, high} = interval;
+  const pad = (high - low) / 5 || Math.abs(high) / 5 || 1;
+  const from = Math.min(low, 0) - pad, to = Math.max(high, 0) + pad;
+  const at = v => ((v - from) / ((to - from) || 1)) * 100;
+  const crosses = low <= 0 && 0 <= high;
+  const level = absent(interval.level) ? "" : `${Math.round(interval.level * 100)}%`;
+  return `<div class="card-iv${crosses ? " crosses" : ""}"
+       data-tip="${level} of resamples of these trades landed between ${format(low)} and ${
+         format(high)}${crosses ? ". It spans zero, so the sign is not established." : ""}">
+    <span class="card-iv-track">
+      <span class="card-iv-span" style="left:${at(low).toFixed(1)}%;width:${
+        (at(high) - at(low)).toFixed(1)}%"></span>
+      <span class="card-iv-zero" style="left:${at(0).toFixed(1)}%"></span>
+    </span>
+    <span class="card-iv-ends">${esc(format(low))} … ${esc(format(high))}</span>
+  </div>`;
+}
 /* ── the process tier ───────────────────────────────────────────────────────── */
 
 /** The reserved period, as the chart stack wants it, or null when none was declared.
@@ -813,7 +976,9 @@ function buildStack(host){
     brush: null,
     layers: [
       lineLayer({
-        key: "equity", title: `equity, marked at the ${MARK === "liq" ? "bid" : "mid"}`,
+        key: "equity", title: `equity, marked at the ${MARK === "liq" ? "bid" : "mid"}`
+          + (SCALE === "log" ? ", log scale" : ""),
+        log: SCALE === "log",
         // The benchmark is the comparison that makes the line mean anything: a strategy
         // return shown alone cannot be judged, and this one is beaten by simply holding
         // the underlying. Where no benchmark was stored the other mark takes the second
@@ -936,7 +1101,11 @@ function paintRangeChip(){
 const COLUMNS = [
   {key: "entry_date", name: "opened"},
   {key: "exit_date", name: "closed"},
-  {key: "contract", name: "contract", mono: true, left: true},
+  // The readable form, with the engine's own id on hover — the design plan's rule for a
+  // contract, and the reason is scanning: `QQQ_20200207_C_00219000` hides the strike in a
+  // zero-padded field, and a column of four hundred of them cannot be read down at all.
+  {key: "contract", name: "contract", mono: true, left: true,
+   fmt: v => contractParts(v).readable, title: v => String(v ?? "")},
   {key: "quantity", name: "qty", fmt: v => num(v, 0)},
   {key: "entry_price", name: "in", fmt: v => num(v)},
   {key: "exit_price", name: "out", fmt: v => num(v)},
@@ -956,6 +1125,13 @@ const COLUMNS = [
    table had none, so the only order available was the one the trades happened in — which
    answers "what happened next" and never "which was the worst". */
 let SORT = {key: null, dir: -1};
+
+/** How many rows the table draws. The plan asks for a virtualised table above 5,000 rows;
+ *  this is the honest version of that until there is one — a fixed window, with the count it
+ *  is a window onto stated under it. It is a constant and not a literal because J and K walk
+ *  the same set, and a keyboard that could step past the last drawn row would select a trade
+ *  the reader cannot see. */
+const SHOWN_LIMIT = 400;
 
 /** The rows in the order the header asks for. A column with no value sorts to the end
  *  whichever way the arrow points: an absent number is not a small one, and letting it
@@ -978,14 +1154,21 @@ function paintDetail(){
   const box = $("runDetail");
   if(!box) return;
   const rows = VIEW;
-  $("runDetailNote").textContent = rows.length === (RUN.rows || []).length
-    ? `${rows.length.toLocaleString()} trades`
-    : `${rows.length.toLocaleString()} of ${(RUN.rows || []).length.toLocaleString()} trades in the brushed range`;
+  // The note names **which** filters narrowed the table. It said "in the brushed range"
+  // whatever was on, so filtering by a closing slot with no range read as a range nobody had
+  // drawn — and the reader's next move is to look for a brush that is not there.
+  const all = (RUN.rows || []).length;
+  const by = [RANGE ? "the brushed range" : "", CLOSED_BY ? "the closing slot" : ""]
+    .filter(Boolean).join(" and ");
+  $("runDetailNote").textContent = rows.length === all
+    ? `${all.toLocaleString()} trades`
+    : `${rows.length.toLocaleString()} of ${all.toLocaleString()} trades${
+        by ? `, narrowed by ${by}` : ""}`;
   if(!rows.length){
     box.innerHTML = `<p class="hint">No trade opened inside the brushed range.</p>`;
     return;
   }
-  const shown = sorted(rows).slice(0, 400);
+  const shown = sorted(rows).slice(0, SHOWN_LIMIT);
   box.innerHTML = `<table class="trades"><thead><tr>${
     COLUMNS.map(c => `<th${c.left ? ' class="left"' : ""}><button type="button"
       class="sortby${SORT.key === c.key ? " on" : ""}" data-sort="${esc(c.key)}"
@@ -1000,7 +1183,8 @@ function paintDetail(){
       const cls = [c.left ? "left" : "", c.mono ? "mono" : "",
                    c.sign && !absent(raw) ? (raw > 0 ? "pos" : raw < 0 ? "neg" : "") : ""]
                   .filter(Boolean).join(" ");
-      return `<td${cls ? ` class="${cls}"` : ""}>${esc(text)}</td>`;
+      return `<td${cls ? ` class="${cls}"` : ""}${c.title
+        ? ` title="${esc(c.title(raw))}"` : ""}>${esc(text)}</td>`;
     }).join("")
   }</tr>`).join("")}</tbody></table>${
     rows.length > shown.length
@@ -1016,8 +1200,13 @@ function paintDetail(){
     });
 
   for(const tr of box.querySelectorAll("tbody tr")){
+    // A click selects and shades; opening the card is a second, deliberate action. The plan
+    // asks for both and they are different intentions: "what was the book doing while this
+    // was on" is answered by the shading alone, and a drawer that opened on every click
+    // would cover the chart that answers it.
     tr.addEventListener("click", () => pick(shown[+tr.dataset.row]));
-    // Arrows walk the table, Enter and Space select, Escape clears — the design plan's
+    tr.addEventListener("dblclick", () => openCard(shown[+tr.dataset.row]));
+    // Arrows walk the table, Enter opens the card, Escape clears — the design plan's
     // keyboard rule for tables. The rows already carried `tabindex`; nothing listened.
     tr.addEventListener("keydown", e => {
       const i = +tr.dataset.row;
@@ -1025,7 +1214,9 @@ function paintDetail(){
         e.preventDefault();
         const next = box.querySelector(`[data-row="${i + (e.key === "ArrowDown" ? 1 : -1)}"]`);
         if(next){ next.focus(); pick(shown[+next.dataset.row]); }
-      }else if(e.key === "Enter" || e.key === " "){
+      }else if(e.key === "Enter"){
+        e.preventDefault(); openCard(shown[i]);
+      }else if(e.key === " "){
         e.preventDefault(); pick(shown[i]);
       }else if(e.key === "Escape"){ pick(null); }
     });
@@ -1044,13 +1235,21 @@ function paintDetail(){
  * One function, because the three things that happen have to happen together: the row is
  * marked, the charts shade the period it was open, and the address bar carries it. A
  * selection that the link does not carry is a reading that cannot be sent to anyone. */
-function pick(row){
-  PICKED = row && row !== PICKED ? row : null;
+function pick(row, {toggle = true} = {}){
+  PICKED = row && (!toggle || row !== PICKED) ? row : null;
   const held = PICKED && PICKED.entry_date && PICKED.exit_date
     ? {from: String(PICKED.entry_date).slice(0, 10), to: String(PICKED.exit_date).slice(0, 10)}
     : null;
   if(STACK) STACK.setHeld(held);
-  replace({trade: PICKED ? String(PICKED.trade_id ?? "") : null});
+  // `replace` deletes any key whose value is null, so `card` is only mentioned when it is
+  // being taken out — naming it with a null-ish value on every selection would close the card
+  // the moment the reader clicked the next row.
+  replace(PICKED
+    ? {trade: String(PICKED.trade_id ?? "")}
+    : {trade: null, card: null});
+  // Clearing the selection closes the card: a card with nothing selected behind it is a
+  // reading of a trade the rest of the page has stopped showing.
+  if(!PICKED && cardOpen()) closeDrawer();
 
   // The marks are moved in place rather than by repainting the table. Rebuilding it
   // destroyed the focused row, so the first arrow key worked and the second had nothing
@@ -1063,6 +1262,50 @@ function pick(row){
     if(on) tr.setAttribute("aria-selected", "true");
     else tr.removeAttribute("aria-selected");
   }
+}
+
+/* ── the trade card ─────────────────────────────────────────────────────────────
+ *
+ * The design plan's section 7, opened in the right drawer so the chart stack and the table
+ * stay where they were — its fifth principle, "drill down without navigating away".
+ *
+ * Opening it does three things at once, which is why they are one function: the row is
+ * selected, the charts shade the period the trade was open, and the URL carries both the
+ * trade and the fact that the card is open, so the link a reader sends opens the card and not
+ * only the page behind it.
+ */
+function openCard(row){
+  if(!row) return;
+  // Not a toggle here. A click on a row toggles its selection, which is right for selecting;
+  // asking for the card twice is asking for the card, and clearing the selection under an
+  // open drawer would leave a card on screen with nothing shaded behind it.
+  pick(row, {toggle: false});
+  replace({card: "1"});
+  const order = sorted(VIEW).slice(0, SHOWN_LIMIT);
+  const spec = {
+    title: `trade ${row.trade_id}`,
+    subtitle: `${esc(contractParts(row.contract).underlying)} · ${
+      esc(dateLong(row.entry_date))} → ${esc(dateLong(row.exit_date))}`,
+    actions: cardActions(row),
+    body: cardBody(row, {config: RUN.config, position: order.indexOf(row) + 1,
+                         total: order.length}),
+  };
+  // The same call whether the card is opening or walking to the next trade: the drawer only
+  // notes where to return focus and scroll **on the way in**, so J and K through forty trades
+  // still come back to the row the reader started from, and the width they dragged stays.
+  openDrawer(spec, () => replace({card: null}));
+  paintCardActions(row);
+}
+
+/** The card's own controls. Rebound after each paint, because the header is rewritten. */
+function paintCardActions(row){
+  $("tradeLink")?.addEventListener("click", copyLink);
+  $("tradeLocate")?.addEventListener("click", () => {
+    if(TAB !== "overview") step({tab: "overview"});
+    SCROLL_TO_FIRST = true;
+    paintDetail();
+  });
+  $("tradeSlot")?.addEventListener("click", () => closedBy(row.exit_reason));
 }
 
 /* ── the page ───────────────────────────────────────────────────────────────── */
@@ -1079,7 +1322,14 @@ function render(query){
             ? RUN.config.entry : "a plan function decides")}</p>
         <div class="run-actions">
           <button type="button" class="chip" id="markToggle"
+            data-tip="Display only (M). Both marks are stored; the metrics and the stop
+                      triggers were computed on the run's configured mark."
             >showing the ${MARK === "liq" ? "bid" : "mid"} mark</button>
+          <button type="button" class="chip" id="scaleToggle"
+            data-tip="Display only (L). A log axis makes equal percentage moves equal
+                      distances, which is how a multi-year curve should be read."
+            >${SCALE === "log" ? "log scale" : "linear scale"}</button>
+          <a class="chip" href="#/log">experiment log</a>
           <a class="chip" href="#/bench">compose a run</a>
           <button type="button" class="chip" id="archiveRun">${
             RUN.archived ? "restore" : "archive"}</button>
@@ -1107,11 +1357,9 @@ function render(query){
 
   $("archiveRun").addEventListener("click", archiveRun);
   $("deleteRun").addEventListener("click", deleteRun);
-  $("markToggle").addEventListener("click", () => {
-    MARK = MARK === "mid" ? "liq" : "mid";
-    replace({mark: MARK});
-    render({...query, mark: MARK});
-  });
+  $("markToggle").addEventListener("click", () => setMark(MARK === "mid" ? "liq" : "mid"));
+  $("scaleToggle").addEventListener("click",
+    () => setScale(SCALE === "log" ? "linear" : "log"));
   for(const button of $("view-run").querySelectorAll("[data-tab]"))
     button.addEventListener("click", () => {
       // A step, not a replace: the addendum asks that view state in the URL make back and
@@ -1139,6 +1387,9 @@ function render(query){
   }
   recompute();
   renderTab(tab, query);
+  // The card is part of the reading a link carries, so a link that says the card was open
+  // opens it. After the tab, because locating the trade on the chart needs the stack built.
+  if(query.card && PICKED) openCard(PICKED);
 }
 
 /* ── archiving and deleting ──────────────────────────────────────────────────────
@@ -1670,4 +1921,10 @@ function robustnessTab(){
 
 export function leave(){
   if(STACK){ STACK.destroy(); STACK = null; }
+  // Everything this page registered globally comes off with it. A key bound to a run that is
+  // no longer on screen is the quietest kind of bug: it acts on the record the module still
+  // holds, and the page it acts on is somebody else's.
+  if(UNBIND){ UNBIND(); UNBIND = null; }
+  if(UNPROVIDE){ UNPROVIDE(); UNPROVIDE = null; }
+  if(cardOpen()) closeDrawer();
 }

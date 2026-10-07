@@ -37,7 +37,7 @@ warnings.filterwarnings("ignore")
 
 from meta import _describe_gaps, _meta_payload, _tradeoff  # noqa: E402
 from runner import (  # noqa: E402
-    STORE, SYNTHETIC_WARNING, VALIDATIONS, _finite, run_backtest, validate,
+    STORE, SYNTHETIC_WARNING, VALIDATIONS, _finite, ideas, run_backtest, validate,
     validations_for,
 )
 from store import VERDICTS  # noqa: E402
@@ -152,9 +152,16 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path == "/api/meta":
             return self._json(self._meta())
         if url.path == "/api/runs":
+            # `archived=1` asks for the hidden ones too. The design plan: archived runs are
+            # "hidden by default and still count toward the idea's trials", so the list needs
+            # a way to show them — a filter that cannot be turned off is a filter that makes
+            # the trial count in the header look wrong.
             return self._json({"runs": STORE.runs(
                 strategy_name=q.get("strategy"), symbol=q.get("symbol"),
-                verdict=q.get("verdict"), limit=int(q.get("limit", 200)))})
+                verdict=q.get("verdict"), limit=int(q.get("limit", 200)),
+                include_archived=q.get("archived") in ("1", "true"))})
+        if url.path == "/api/ideas":
+            return self._json({"ideas": ideas(), "verdicts": VERDICTS})
         if url.path == "/api/run":
             try:
                 run_id = int(q.get("id", ""))

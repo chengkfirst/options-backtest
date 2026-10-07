@@ -54,6 +54,7 @@ export const API = {
   meta: "/api/meta",
   run: "/api/run",
   runs: "/api/runs",
+  ideas: "/api/ideas",
   validate: "/api/validate",
   tradeoff: "/api/tradeoff",
   note: "/api/note",

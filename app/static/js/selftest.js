@@ -254,7 +254,17 @@ suite("axis — stack, brush and holding-period shading", async () => {
   ok(box.querySelectorAll("svg").length > 0, "the stack draws");
   ok(box.querySelector("rect.holdout"), "a declared hold-out is hatched");
   stack.setHeld({from: "2023-01-02", to: "2023-01-03"});
-  ok(box.querySelector("rect.held"), "a selected trade shades its holding period");
+  const held = box.querySelector("rect.held");
+  ok(held, "a selected trade shades its holding period");
+  // **The measurement, not the element.** This asserted only that the rect was there, and it
+  // was — with `height="undefined"`, which SVG draws as nothing. The band was in the document
+  // and invisible for as long as the case was green.
+  ok(Number(held.getAttribute("height")) > 0,
+     `the band has a height (got ${held.getAttribute("height")})`);
+  ok(Number(held.getAttribute("width")) > 0,
+     `and a width (got ${held.getAttribute("width")})`);
+  ok(box.querySelector("rect.holdout").getAttribute("fill").startsWith("url(#"),
+     "the hold-out is filled with the hatch pattern, not a flat tint");
   stack.setHeld(null);
   ok(!box.querySelector("rect.held"), "and clears");
   stack.setBrush({from: "2023-01-02", to: "2023-01-04"});
@@ -493,6 +503,194 @@ suite("views — one link restores the whole reading, on any tab", async () => {
   ok(chip.textContent.includes(from), "the range is named");
   if(reason) ok(doc.getElementById("clearClosed"), "the slot filter has its own way out");
   ok(doc.getElementById("clearRange"), "and so does the range");
+  frame.remove();
+});
+
+/* ── the comparison's building blocks ── */
+suite("configdiff — leaves, absence and code", async () => {
+  const d = await import("./configdiff.js");
+  const flat = d.flatten({a: 1, b: {c: 2, d: null}, e: [1, 2]});
+  eq(flat["b.c"], 2, "a nested leaf keeps its path");
+  eq(flat["b.d"], null, "a cleared field is a leaf, not a missing one");
+  eq(flat.e, "1, 2", "a list is one leaf");
+  const items = d.diff([{x: 1, y: 1}, {x: 2, y: 1}]);
+  eq(items.length, 1, "only the leaf that moved is reported");
+  eq(items[0].path, "x", "and it is named by its path");
+  eq(d.shown("x", null), "—", "absence never prints as a value");
+  ok(d.shown("entry_code", "a\nb\nc").includes("lines"),
+     "code is reported as a length, not pasted into a cell");
+  // A field one side does not have at all must read as absent rather than as equal.
+  const added = d.diff([{}, {only: 5}]);
+  eq(added.length, 1, "a field present on one side only is a difference");
+  eq(d.shown("only", added[0].values[0]), "—", "and reads as absent on the other");
+  eq(d.summary({a: 1}, {a: 1}), "", "two identical configurations differ in nothing");
+});
+
+/* ── the keyboard: one table, and typing always wins ── */
+suite("keys — a bare letter belongs to whatever is being typed in", async () => {
+  const k = await import("./ui/keys.js");
+  k.startKeys();
+  let plain = 0, modified = 0;
+  const off = k.bind("probe", [
+    {keys: ["q"], does: "count a bare letter", run: () => { plain++; }},
+    {keys: ["mod+q"], does: "count a modified one", run: () => { modified++; }},
+  ]);
+  const input = document.createElement("input");
+  document.getElementById("sandbox").append(input);
+  input.focus();
+  input.dispatchEvent(new KeyboardEvent("keydown", {key: "q", bubbles: true}));
+  eq(plain, 0, "a bare letter inside an input is text, not a shortcut");
+  input.dispatchEvent(new KeyboardEvent("keydown", {key: "q", metaKey: true, bubbles: true}));
+  eq(modified, 1, "a modified one still acts from inside the box");
+  document.body.dispatchEvent(new KeyboardEvent("keydown", {key: "q", bubbles: true}));
+  eq(plain, 1, "and outside a box the bare letter acts");
+  ok(k.shortcuts().some(b => b.does === "count a bare letter"),
+     "every binding is discoverable, which is what the palette lists");
+  off();
+  document.body.dispatchEvent(new KeyboardEvent("keydown", {key: "q", bubbles: true}));
+  eq(plain, 1, "and a scope that was taken off acts no more");
+  ok(k.pretty("mod+shift+c").length > 0, "a binding can be written out for a reader");
+  input.remove();
+});
+
+/* ── the drawer: detail without losing the place it was opened from ── */
+suite("drawer — opens, expands, and gives the scroll back", async () => {
+  const d = await import("./ui/drawer.js");
+  const body = d.openDrawer({title: "trade 1", subtitle: "x", body: "<p>hello</p>"}, () => {});
+  ok(d.isOpen(), "it opens");
+  ok(body.textContent.includes("hello"), "with the content it was given");
+  ok(document.body.classList.contains("drawer-open"),
+     "and the page makes room rather than being covered");
+  d.toggleFull();
+  ok(document.querySelector(".drawer.full"), "and expands to the full window");
+  d.toggleFull();
+  let closed = false;
+  d.openDrawer({title: "trade 2", subtitle: "y", body: "<p>next</p>"}, () => { closed = true; });
+  ok(document.querySelector(".drawer-head h3").textContent === "trade 2",
+     "walking to the next trade replaces the card");
+  d.closeDrawer();
+  ok(!d.isOpen() && closed, "closing tells the caller, so the selection can follow");
+  ok(!document.body.classList.contains("drawer-open"), "and the page takes its room back");
+});
+
+/* ── the palette: every source, and no source can break it ── */
+suite("palette — gathers, survives a bad source, and runs one thing", async () => {
+  const p = await import("./ui/palette.js");
+  const k = await import("./ui/keys.js");
+  let ran = 0;
+  const offKeys = k.bind("probe2", [
+    {keys: ["z"], does: "a probe command", run: () => { ran++; }},
+  ]);
+  // A source answers the query it is given, which is what makes an empty result possible —
+  // the first version of this case returned a row whatever was typed, so the palette could
+  // never be empty and the case that checks the empty state passed against nothing.
+  const stop = p.provide("probe", query =>
+    String(query).includes("probe")
+      ? [{kind: "probe", label: `thing ${query}`, hint: "", run: () => { ran += 10; }}]
+      : []);
+  const broken = p.provide("broken", () => { throw new Error("no"); });
+  p.open();
+  ok(p.isOpen(), "it opens");
+  const input = document.getElementById("paletteQuery");
+  input.value = "probe";
+  input.dispatchEvent(new Event("input"));
+  const rows = document.querySelectorAll(".palette-row");
+  ok(rows.length >= 1, "a source's entries are listed even with another source throwing");
+  ok(document.getElementById("paletteList").textContent.includes("probe command"),
+     "and a shortcut is findable by what it does, not only by its key");
+  rows[0].click();
+  ok(ran > 0, "choosing a row runs it");
+  ok(!p.isOpen(), "and closes the box");
+  input.value = "nothing matches this";
+  p.open();
+  document.getElementById("paletteQuery").value = "zzzznothing";
+  document.getElementById("paletteQuery").dispatchEvent(new Event("input"));
+  ok(document.querySelector(".palette-empty"), "an empty result says what is in there");
+  p.close();
+  stop(); broken(); offKeys();
+});
+
+/* ── the trade card: every block, and the gaps named rather than left blank ── */
+suite("trade — the card reads the row and names what the record lacks", async () => {
+  const t = await import("./views/trade.js");
+  const net = await import("./net.js");
+  const runs = await net.getJSON(net.API.runs);
+  const run = await net.getJSON(net.API.run, {id: runs.runs[0].id});
+  const row = (run.rows || [])[0];
+  if(!row) return;                                   // a run with no trades
+  const parts = t.contractParts(row.contract);
+  ok(parts.underlying && parts.underlying !== "—", "the underlying is read from the contract");
+  ok(parts.readable.includes(parts.underlying), "and the readable form names it");
+  eq(t.contractParts("nonsense").underlying, "—",
+     "a contract id in an unknown shape is not guessed at");
+  const html = t.card(row, {config: run.config, position: 1, total: run.rows.length});
+  ok(!/\bundefined\b|\bNaN\b/.test(html), "no absence leaks as a word");
+  for(const block of ["what it was", "how it ran", "its life", "legs",
+                      "what it was bought on"])
+    ok(html.includes(block), `the card has its ${block} block`);
+  ok(html.includes("TradeBook"), "and says which blocks the record cannot fill yet");
+  ok(t.actions(row).includes("copy link"), "the card offers its own actions");
+});
+
+/* ── the two new surfaces render against the real record ── */
+suite("views — the experiment log groups runs under their idea", async () => {
+  const frame = document.createElement("iframe");
+  frame.style.cssText = "width:1400px;height:900px;border:0";
+  document.getElementById("sandbox").append(frame);
+  frame.src = "/#/log";
+  await new Promise(r => { frame.onload = r; setTimeout(r, 2500); });
+  await new Promise(r => setTimeout(r, 1800));
+  const doc = frame.contentDocument;
+  ok(doc.querySelectorAll(".idea").length >= 1, "there is at least one idea");
+  ok(doc.querySelector(".idea-trials"), "whose header carries the size of the search");
+  ok(doc.querySelector(".log-filters"), "and a filter bar");
+  const issues = doc.getElementById("issues");
+  ok(!issues || issues.textContent.trim() === "",
+     `the log raised a notice: ${issues && issues.textContent.trim().slice(0, 140)}`);
+  const text = doc.getElementById("view-log").textContent;
+  ok(!/\bundefined\b|\bNaN\b/.test(text), "nothing leaked an undefined or a NaN");
+  // Opening a group shows its runs, and ticking two raises the comparison.
+  doc.querySelector(".idea-head").click();
+  await new Promise(r => setTimeout(r, 300));
+  const ticks = [...doc.querySelectorAll("[data-tick]")];
+  ok(ticks.length >= 1, "an opened idea lists its runs");
+  if(ticks.length >= 2){
+    ticks[0].click(); ticks[1].click();
+    await new Promise(r => setTimeout(r, 300));
+    ok(frame.contentDocument.getElementById("compareGo"),
+       "ticking two runs offers the comparison");
+    ok(frame.contentWindow.location.hash.includes("runs="),
+       "and the ticked pair is in the URL, so the link carries it");
+  }
+  frame.remove();
+});
+
+suite("views — the comparison leads with the differences", async () => {
+  const net = await import("./net.js");
+  const runs = (await net.getJSON(net.API.runs)).runs;
+  if(runs.length < 2) return;
+  const pair = `${runs[0].id},${runs[1].id}`;
+  const frame = document.createElement("iframe");
+  frame.style.cssText = "width:1400px;height:900px;border:0";
+  document.getElementById("sandbox").append(frame);
+  frame.src = `/#/compare?runs=${pair}`;
+  await new Promise(r => { frame.onload = r; setTimeout(r, 2500); });
+  await new Promise(r => setTimeout(r, 2000));
+  const doc = frame.contentDocument;
+  const sections = [...doc.querySelectorAll(".cmp-section h3")].map(h => h.textContent);
+  eq(sections.slice(0, 2), ["what differs", "the results"],
+     "the differences come before the results");
+  ok(doc.querySelectorAll(".cmp-col").length === 2, "one column per run");
+  ok(doc.querySelector(".cmp-col.base"), "with a baseline column marked");
+  const text = doc.getElementById("view-compare").textContent;
+  ok(!/\bundefined\b|\bNaN\b/.test(text), "nothing leaked an undefined or a NaN");
+  const issues = doc.getElementById("issues");
+  ok(!issues || issues.textContent.trim() === "",
+     `the comparison raised a notice: ${issues && issues.textContent.trim().slice(0, 140)}`);
+  // Two runs, so one line per run, each with its own dash pattern.
+  const lines = doc.querySelectorAll("#cmpStack .series");
+  ok(lines.length >= 2 || doc.querySelector("#cmpStack .hint"),
+     "either both curves are drawn or it says why they are not");
   frame.remove();
 });
 

@@ -694,3 +694,81 @@ def _opt_float(v):
 
 #: These types must carry a charset. Without one the browser guesses with its own
 #: default encoding and non-ASCII text comes out garbled.
+
+
+# ── the experiment log's groups ──────────────────────────────────────────────────────
+#
+# The design plan groups runs by **idea**, not by date, "because the idea's trial count is
+# what the Deflated Sharpe needs and what keeps research honest". So the group header is not
+# a label: it carries the size of the search that produced the best result under it.
+#
+# Everything here is read from the record. The count comes from
+# `backtest.research.tracker`, which is the same counter the deflated Sharpe uses, so the
+# number in the header and the number in the deflation cannot disagree.
+
+
+def ideas() -> list[dict[str, Any]]:
+    """Every idea in the store, with the size of the search under it.
+
+    Three counts rather than one, because they answer different questions and a single
+    "runs" number hides both of the others:
+
+    - ``runs`` is how many times a backtest finished under this name, **archived included**.
+      Archiving is the researcher saying they are done looking; it is not the run
+      un-happening, and a trial count that shrank when a failure was tidied away would
+      report the survivor as more significant than the work supports.
+    - ``distinct`` is how many different configurations that was. A rerun of one
+      configuration is not a second trial.
+    - ``unplaced`` is how many rows carry no reproducibility fingerprint, which are rows
+      saved before the column existed. They cannot be told from a rerun, so they are left
+      out of ``distinct`` and counted here instead — which makes ``distinct`` a **lower
+      bound** and says so rather than quietly rounding up.
+    """
+    from backtest.research import tracker
+
+    rows = STORE.runs(limit=10_000, include_archived=True)
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        idea = row["strategy_name"]
+        group = out.setdefault(idea, {
+            "idea": idea, "runs": 0, "archived": 0, "symbols": set(),
+            "last": "", "best_sharpe": None, "hold_out": None, "hold_out_touched": False,
+            "verdicts": {},
+        })
+        group["runs"] += 1
+        group["archived"] += 1 if row.get("archived") else 0
+        group["symbols"].add(row["symbol"])
+        group["last"] = max(group["last"], str(row["started"]))
+        sharpe = row.get("sharpe_annualised")
+        if sharpe is not None and (group["best_sharpe"] is None
+                                  or sharpe > group["best_sharpe"]):
+            group["best_sharpe"] = float(sharpe)
+        verdict = row.get("last_verdict") or "open"
+        group["verdicts"][verdict] = group["verdicts"].get(verdict, 0) + 1
+        # The hold-out is declared per run in the manifest. An idea's hold-out is the one its
+        # runs reserved; a disagreement between them is itself worth seeing, so the first one
+        # found is reported and `hold_out_mixed` says whether the others matched.
+        held = ((row.get("manifest") or {}).get("provenance") or {}).get("hold_out") or {}
+        window = held.get("hold_out")
+        if window:
+            if group["hold_out"] is None:
+                group["hold_out"] = window
+            elif group["hold_out"] != window:
+                group["hold_out_mixed"] = True
+            if held.get("touched"):
+                group["hold_out_touched"] = True
+
+    for idea, group in out.items():
+        records = STORE.run_records(idea)
+        placed = [r for r in records if r["run_id"]]
+        group["unplaced"] = len(records) - len(placed)
+        if placed:
+            trials = tracker.count_trials(placed, idea=idea)
+            group["distinct"] = trials.distinct
+            group["reruns"] = trials.runs - trials.distinct
+        else:
+            group["distinct"] = 0
+            group["reruns"] = 0
+        group["symbols"] = sorted(group["symbols"])
+
+    return sorted(out.values(), key=lambda g: g["last"], reverse=True)

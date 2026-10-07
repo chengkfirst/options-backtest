@@ -153,6 +153,42 @@ def main() -> int:
         elif state is EMPTY:
             unchecked.append(f"run.{path}")
 
+    # ── the list endpoints the experiment log and the comparison read ──────────────────
+    #
+    # A different shape from the run record, and checked against a real response for the same
+    # reason: the list carries what a row needs to be *read*, and a renamed column there fails
+    # in a place nothing else looks. The sample run above was saved into the temporary store,
+    # so both of these come back with exactly one real row in them.
+    from app.runner import STORE, ideas
+    rows = STORE.runs(limit=5, include_archived=True)
+    if not rows:
+        problems.append(
+            "the temporary store holds no run after the sample backtest, so no /api/runs "
+            "field could be checked -- a guard that checks nothing passes for the wrong reason"
+        )
+    for path in spec.get("runs", []) + spec.get("runs_when_set", []):
+        if not rows:
+            break
+        state, where = resolve(rows[0], path)
+        if state is MISSING:
+            problems.append(f"the experiment log needs runs.{path}, which /api/runs does "
+                            f"not supply (it stops at {where})")
+        elif state is EMPTY:
+            unchecked.append(f"runs.{path}")
+
+    groups = ideas()
+    if not groups:
+        problems.append("ideas() returned nothing for a store with a run in it")
+    for path in spec.get("ideas", []):
+        if not groups:
+            break
+        state, where = resolve(groups[0], path)
+        if state is MISSING:
+            problems.append(f"an idea's header needs ideas.{path}, which /api/ideas does "
+                            f"not supply (it stops at {where})")
+        elif state is EMPTY:
+            unchecked.append(f"ideas.{path}")
+
     meta = _meta_payload()
     for path in spec.get("meta", []):
         state, where = resolve(meta, path)
@@ -198,6 +234,8 @@ def main() -> int:
     print(f"the front/back contract check passed "
           f"({len(spec.get('run', []))} run fields · "
           f"{len(spec.get('run_optional', []))} event-driven fields · "
+          f"{len(spec.get('runs', [])) + len(spec.get('runs_when_set', []))} list fields · "
+          f"{len(spec.get('ideas', []))} idea fields · "
           f"{len(spec.get('meta', []))} meta fields · "
           f"{len(spec.get('sizing_methods', []))} sizing methods)")
     if unchecked:

@@ -33,7 +33,10 @@ COVERED_BY_THE_PAGE_CASES = {
     # The views are exercised the only way that means anything: the real page, in a frame,
     # one case per tab. Importing them here would run their module body without the shell
     # they address by id and prove nothing.
-    "views/bench.js", "views/run.js",
+    #
+    # `views/trade.js` is **not** on this list: it is pure markup from one trade row, so it
+    # is imported and called directly like any other renderer.
+    "views/bench.js", "views/run.js", "views/log.js", "views/compare.js",
 }
 
 
