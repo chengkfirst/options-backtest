@@ -173,8 +173,12 @@ class TestDescribe:
         # list it replaces, which excused a field from the check without establishing that
         # anything read it -- and so would have passed a field the interface forgot to
         # wire, which is the failure this test is for.
-        bench = (_Path(__file__).resolve().parent.parent / "app" / "static" / "bench.js")
-        front = bench.read_text(encoding="utf-8")
+        # **Every frontend module, not one named file.** This read `app/static/bench.js`,
+        # which the interface split into `app/static/js/` some time ago -- so the test
+        # stopped reading the composer and started raising FileNotFoundError. Reading the
+        # tree means the next move does not break it either.
+        js = _Path(__file__).resolve().parent.parent / "app" / "static" / "js"
+        front = "\n".join(f.read_text(encoding="utf-8") for f in sorted(js.rglob("*.js")))
 
         # A field that exists only to decide which *other* fields are shown. It never
         # reaches the backend and should not: `exit_mode` switches the form between a

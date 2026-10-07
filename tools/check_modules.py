@@ -176,13 +176,56 @@ def _template(src: str, start: int) -> tuple[str, int]:
                     k = src.find("*/", j + 2)
                     j = n if k < 0 else k + 2
                     continue
+                # **A regex literal, before the quote check below.** A hole holds real code
+                # and real code holds patterns, and a pattern holds quotes:
+                # `` `"${s.replace(/"/g, '""')}"` `` has a double quote inside a regex
+                # inside a hole. Read as a string, it ran to the next quote in the file and
+                # swallowed the end of the template, so every export after it was blanked
+                # and reported as missing from a module that plainly had it.
+                if src[j] == "/" and _is_regex_here(src, j):
+                    k = j + 1
+                    in_class = False
+                    while k < n:
+                        if src[k] == "\\":
+                            k += 2
+                            continue
+                        if src[k] == "[":
+                            in_class = True
+                        elif src[k] == "]":
+                            in_class = False
+                        elif src[k] == "/" and not in_class:
+                            k += 1
+                            break
+                        elif src[k] == "\n":
+                            break      # an unterminated regex: not one after all
+                        k += 1
+                    while k < n and src[k].isalpha():
+                        k += 1         # the flags
+                    j = k
+                    continue
                 if src[j] == "{":
                     depth += 1
                 elif src[j] == "}":
                     depth -= 1
                     if not depth:
                         break
-                elif src[j] in "\"'`":
+                elif src[j] == "`":
+                    # **A nested template: skipped as a template, not as a string.**
+                    #
+                    # Treating it as a quoted run from backtick to backtick works only until
+                    # the nested template has a hole of its own with a *third* template in
+                    # it, which is the ordinary shape of a table: a row template inside a
+                    # cell template inside the table's. The scan then stopped at the third
+                    # backtick, carried on counting braces in what it thought was code, and
+                    # closed the outer hole at the first `}` of some markup — after which
+                    # real code was read as template text and blanked. Every import used only
+                    # below that point was reported as unused, with the file plainly using
+                    # them.
+                    #
+                    # Recursing gets the end of the nested template however deep it goes.
+                    _, j = _template(src, j)
+                    continue
+                elif src[j] in "\"'":
                     # A string inside the hole: skipped here and blanked by the recursive
                     # call below, so its contents cannot close the hole early.
                     quote, j = src[j], j + 1
@@ -215,8 +258,15 @@ def exports(src: str) -> set[str]:
     return found
 
 
-def imports(src: str) -> list[tuple[set[str], str]]:
-    """Each import's names and the path it came from."""
+def imports(src: str) -> list[tuple[set[str], set[str], str]]:
+    """Each import's names and the path it came from.
+
+    Two sets, because ``import {isOpen as cardOpen}`` means two different names and the
+    check needs both: **the exported name** is what the target module has to offer, and
+    **the local name** is what this file then uses. Taking the alias for both reported
+    `drawer.js` as not exporting `cardOpen`, which it never claimed to -- a finding about
+    the code that was really a bug in the reader.
+    """
     clean = strip_noise(src)
     out = []
     # The path survives in the stripped source only as blanks, so the paths are read from
@@ -224,8 +274,14 @@ def imports(src: str) -> list[tuple[set[str], str]]:
     paths = re.findall(r"import\s*\{[^}]*\}\s*from\s*[\"']([^\"']+)[\"']", src)
     names = re.findall(r"import\s*\{([^}]*)\}\s*from", clean)
     for block, path in zip(names, paths):
-        got = {p.strip().split(" as ")[-1].strip() for p in block.split(",") if p.strip()}
-        out.append((got, path))
+        wanted, local = set(), set()
+        for part in block.split(","):
+            if not part.strip():
+                continue
+            halves = [h.strip() for h in part.split(" as ")]
+            wanted.add(halves[0])
+            local.add(halves[-1])
+        out.append((wanted, local, path))
     return out
 
 
@@ -301,6 +357,17 @@ PARSER_CASES: tuple[tuple[str, str, bool], ...] = (
     ("a slash inside a character class",
      'const a = s.split(/[/]/);\nconst b = SURVIVES(6);', True),
     ("division is not a regex", "const a = (x) / y; const b = SURVIVES(7);", True),
+    # A regex containing a quote, **inside a template hole**. The top-level case above does
+    # not reproduce it: the hole has its own scanner, and that one skipped comments and
+    # strings but not patterns.
+    # Three templates deep, which is what a table is: the table's, a cell's, and a span's
+    # inside that. The hole scanner skipped a nested template as if it were a quoted string,
+    # so it stopped at the third backtick and closed the hole at the next `}` in the markup.
+    ("a template nested two deep inside a hole",
+     'const a = `<t>${ xs.map(c => `<td${ c.on ? `<b>${c.n}</b>` : "" }</td>`).join("") }'
+     '</t>`;\nconst b = SURVIVES(9);', True),
+    ("a quote inside a regex inside a hole",
+     'const a = `x${ s.replace(/"/g, \'""\') }y`;\nconst b = SURVIVES(8);', True),
 )
 
 
@@ -348,18 +415,19 @@ def main() -> int:
         here = str(f.relative_to(JS))
         own = defined(src)
         got: set[str] = set()
-        for names, path in imports(src):
+        for wanted, local, path in imports(src):
             target = (f.parent / path).resolve()
             if not target.exists():
                 problems.append(f"{here} imports from {path}, and there is no such file")
                 continue
-            missing = names - exported.get(target, set())
+            missing = wanted - exported.get(target, set())
             if missing:
                 problems.append(
                     f"{here} imports {', '.join(sorted(missing))} from {path}, which "
                     f"does not export {'it' if len(missing) == 1 else 'them'}"
                 )
-            got |= names
+            # The **local** names, because that is what the rest of the file can mention.
+            got |= local
         for local, path in namespace_imports(src):
             if not (f.parent / path).resolve().exists():
                 problems.append(f"{here} imports * as {local} from {path}, and there is "
