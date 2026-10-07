@@ -213,6 +213,20 @@ THRESHOLDS: dict[str, Threshold] = {
         "none, so the cells are left empty",
         "portfolio.scenarios.stress_grid",
     ),
+    "cash_interest_share": Threshold(
+        "cash_interest_share", 1.0, "realism",
+        "the share of the risk-free rate the account's idle cash actually earns",
+        "paying the full Treasury rate on every dollar of cash is an **assumption about "
+        "the broker, not a fact about the market**, and it runs the wrong way: a retail "
+        "sweep usually pays below Treasury, and cash pledged against a position pays "
+        "nothing. On a long-options book most of the capital sits in cash, so this term "
+        "is large next to the trading result -- the fixture earns thousands of interest "
+        "against a strategy P&L of hundreds. 1.0 is the optimistic end of the range and "
+        "is the default because it is the one figure that is defensible without knowing "
+        "the broker; it is sensitivity-tested, never tuned, because a lower share makes "
+        "the account look worse and the strategy no better",
+        "accounting.ledger.accrue_interest",
+    ),
     "attribution_residual_warning": Threshold(
         "attribution_residual_warning", 0.35, "realism",
         "the residual share above which an attribution is not trustworthy",

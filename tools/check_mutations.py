@@ -317,6 +317,84 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
     ),
     Mutation(
+        # The cost section listed three fees and totalled them, for a book whose largest
+        # cost is the spread and is not a fee.
+        "the spread is part of the cost total",
+        "backtest/research/metrics.py",
+        "    total = fee_total + (spread_dollars if spread_known else 0.0)",
+        "    total = fee_total",
+        ("tests/test_cost_truth.py::TestTheSpreadIsInTheTotal",
+         "tests/test_cost_truth.py::TestTheAnomalyRuleCanSeeIt"),
+    ),
+    Mutation(
+        # `total / abs(gross)` on a losing run is "fees as a share of the loss", printed
+        # as "% of gross".
+        "a losing run gets no cost-to-gross ratio",
+        "backtest/research/metrics.py",
+        "    if gross_at_mid > 0:",
+        "    if True:",
+        ("tests/test_cost_truth.py::TestTheDenominator",),
+    ),
+    Mutation(
+        # The rule read fees_pct_of_gross, so the spread could never be in the numerator.
+        "the cost rule measures the edge before costs",
+        "backtest/research/anomaly.py",
+        '    pct = costs.get("cost_pct_of_gross_at_mid")',
+        '    pct = costs.get("fees_pct_of_premium")',
+        ("tests/test_cost_truth.py::TestTheAnomalyRuleCanSeeIt",),
+    ),
+    Mutation(
+        # The ledger keeps interest as its own term and the report folded it back in.
+        "the strategy's return is reported apart from the account's",
+        "backtest/accounting/tradebook.py",
+        '                    "strategy_equity": s.equity_mid - s.interest,',
+        '                    "strategy_equity": s.equity_mid,',
+        ("tests/test_return_separation.py::TestTheEquityFrameCarriesWhatSeparatesThem",
+         "tests/test_return_separation.py::TestThreeReturnsWithThreeNames"),
+    ),
+    Mutation(
+        # The risk-free rate was added once through the interest and subtracted never.
+        "sharpe is on the excess return",
+        "backtest/api/sdk.py",
+        "        sharpe = excess_annual / vol if vol and np.isfinite(vol) else float(\"nan\")",
+        "        sharpe = annual / vol if vol and np.isfinite(vol) else float(\"nan\")",
+        ("tests/test_return_separation.py::TestThreeReturnsWithThreeNames",),
+    ),
+    Mutation(
+        # Paying the full Treasury rate on every dollar of cash is a claim about the
+        # broker, and it runs in the flattering direction.
+        "the share of the rate the cash earns is an assumption, not 1.0 in the code",
+        "backtest/accounting/ledger.py",
+        '        rate = rate * float(get("cash_interest_share"))',
+        "        rate = rate * 1.0",
+        ("tests/test_return_separation.py::TestTheCashRateIsAnAssumption",),
+    ),
+    Mutation(
+        # A signed total as the denominator reverses every term's sign.
+        "an attribution share is of the movement, not of the signed total",
+        "backtest/accounting/attribution.py",
+        "            \"share\": {k: (v / self.magnitude if self.magnitude else float(\"nan\"))",
+        "            \"share\": {k: (v / gross if gross else float(\"nan\"))",
+        ("tests/test_attribution_daily.py::TestTheSharesAreMagnitudes",),
+    ),
+    Mutation(
+        # Without the spread as its own term it sits in the residual, where it cannot be
+        # told from the expansion failing.
+        "the spread is an attribution term rather than part of the residual",
+        "backtest/accounting/attribution.py",
+        '        terms["spread"] = -(',
+        '        terms["spread"] = 0.0 * -(',
+        ("tests/test_attribution_daily.py::TestTheSpreadIsItsOwnTerm",),
+    ),
+    Mutation(
+        # The exposure limit had unit tests, a live call site, and no way in.
+        "the exposure limit can be set from run()",
+        "backtest/api/sdk.py",
+        "            limits=_exposure_from(exposure),",
+        "            limits=None,",
+        ("tests/test_reachable.py::TestTheExposureLimitActuallyBinds",),
+    ),
+    Mutation(
         # Two runs that cleaned the data differently shared one id, so a sensitivity
         # test over cleaning -- which the register asks for by name -- read as one run
         # repeated.

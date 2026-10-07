@@ -244,7 +244,19 @@ class EventDrivenResult:
 
     @property
     def equity(self) -> pd.DataFrame:
-        """Both equity curves plus capital utilisation."""
+        """Both equity curves, capital utilisation, and **what the account earned that
+        the strategy did not**.
+
+        `interest` and `premium_at_risk` are on the snapshots and were dropped from this
+        frame, which left every reader of the exported curve unable to separate the
+        strategy's result from the account's. The ledger goes to some trouble to keep
+        interest as its own term of the accounting identity; a curve that folds it back in
+        and does not carry the column undoes that silently.
+
+        `strategy_equity` is the curve with the cash interest removed -- what the trading
+        actually produced. The two differ by a figure that is not small: on three years of
+        $100,000 at 4.5% the interest is around $9,300.
+        """
         return pd.DataFrame(
             [
                 {
@@ -252,6 +264,12 @@ class EventDrivenResult:
                     "equity_mid": s.equity_mid, "equity_liq": s.equity_liq,
                     "option_value": s.option_value_mid, "stock_value": s.stock_value,
                     "positions": s.n_positions, "deployed": s.deployed,
+                    #: Cumulative interest earned on the cash balance to this session.
+                    "interest": s.interest,
+                    #: What the book can lose: the premium paid on everything long.
+                    "premium_at_risk": s.premium_at_risk,
+                    #: Equity with the interest taken out -- the strategy on its own.
+                    "strategy_equity": s.equity_mid - s.interest,
                 }
                 for s in self.snapshots
             ]

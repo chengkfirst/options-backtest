@@ -108,8 +108,39 @@ def histogram(trades: pd.DataFrame, bins: int = 20) -> pd.DataFrame:
 
 
 def cost_breakdown(trades: pd.DataFrame) -> dict[str, Any]:
-    """Costs broken out, before and after. In aggregate nothing looks wrong;
-    broken out, it is clear what ate the money."""
+    """Every cost, including the one that is not a fee.
+
+    ## The spread belongs here, and was not here
+
+    **For an option buyer the spread is the largest cost by a wide margin** — measured on
+    this project's own fixture it is several times the commission — and it is not a fee.
+    It is paid inside the fill: a buy at the ask and a sell at the bid, which is correct
+    modelling and already in `net_pnl`. But a section headed "costs" that lists
+    commission, regulatory and slippage and totals them reads as *the* cost of trading,
+    and with `slippage_per_contract` at its default of 0 the row said the cost of trading
+    was negligible.
+
+    So the spread is reported here beside the fees, and `total` is the sum of both. The
+    fee-only figure stays available as `fees` for anyone who needs the two apart — the
+    point is that the default reading is the true one.
+
+    ## Why the denominator changed
+
+    `total / abs(gross)` is meaningless when gross is negative: it is "fees as a share of
+    the size of the loss", and it was printed as "% of gross". Worse for the rule that
+    reads it, the spread could never be in the numerator **or** the denominator, since
+    gross P&L is computed from fill prices that already have the spread in them.
+
+    The primary denominator is now the **premium traded** — what was paid to open the
+    positions. It is defined whatever the sign of the result, it is the figure an option
+    buyer thinks in ("the spread cost me 3% of what I paid"), and the spread is not
+    inside it.
+
+    `cost_pct_of_gross_at_mid` keeps the gross comparison honest for a profitable run by
+    rebuilding gross at the **mid** — so the spread is in the numerator and not in the
+    denominator. It is absent, with a reason, when gross at mid is not positive: there is
+    no edge for a cost to be a share of.
+    """
     if trades.empty:
         return {"total": 0.0}
     gross = float(trades["gross_pnl"].sum())
@@ -118,17 +149,52 @@ def cost_breakdown(trades: pd.DataFrame) -> dict[str, Any]:
         "regulatory": float(trades["fee_regulatory"].sum()),
         "slippage": float(trades["fee_slippage"].sum()),
     }
-    total = sum(fees.values())
+    fee_total = sum(fees.values())
     net = float(trades["net_pnl"].sum())
-    return {
+
+    spread = spread_paid(trades)
+    spread_dollars = float(spread.get("spread_dollars", 0.0))
+    # A trade table recorded before the quote was kept beside the fill cannot report the
+    # spread. Said, rather than reported as zero -- a 0 here is the exact misreading this
+    # function exists to remove.
+    spread_known = spread.get("count", 0) > 0
+    total = fee_total + (spread_dollars if spread_known else 0.0)
+
+    premium = float((trades["entry_price"] * trades["quantity"].abs()
+                     * trades["multiplier"]).sum())
+    out: dict[str, Any] = {
         **fees,
+        "fees": fee_total,
+        "spread": spread_dollars if spread_known else None,
+        "spread_note": ("" if spread_known else
+                        "this run has no quote recorded beside its fills, so the spread "
+                        "paid cannot be measured. It is not zero"),
         "total": total,
+        "premium_traded": premium,
+        "cost_pct_of_premium": (total / premium) if premium else float("inf"),
+        "fees_pct_of_premium": (fee_total / premium) if premium else float("inf"),
         "gross_pnl": gross,
         "net_pnl": net,
-        "fees_pct_of_gross": (total / abs(gross)) if gross else float("inf"),
         # Gross positive but net negative: the edge does not cover the costs.
         "eaten_by_costs": gross > 0 > net,
     }
+
+    # Gross with the spread added back is gross as a frictionless fill would have made
+    # it, which is the only gross a cost can be a share of without appearing on both
+    # sides of the division.
+    gross_at_mid = gross + (spread_dollars if spread_known else 0.0)
+    if gross_at_mid > 0:
+        out["gross_pnl_at_mid"] = gross_at_mid
+        out["cost_pct_of_gross_at_mid"] = total / gross_at_mid
+    else:
+        out["gross_pnl_at_mid"] = gross_at_mid
+        out["cost_pct_of_gross_at_mid"] = None
+        out["gross_note"] = (
+            "gross P&L before costs is not positive, so there is no edge for a cost to "
+            "be a share of. Read cost_pct_of_premium instead -- a ratio to a loss is "
+            "not a cost ratio"
+        )
+    return out
 
 
 def spread_paid(trades: pd.DataFrame) -> dict[str, Any]:

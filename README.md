@@ -378,6 +378,67 @@ The figure worth knowing: over three years on $100,000 at 4.5%, **interest is ar
 strategy reads as a profitable one — which is why the accounting identity carries each
 as its own term, and why it refused the first session after interest was booked.
 
+## What trading actually cost
+
+```python
+# skip (needs a finished run)
+r.costs()      # the spread beside the fees, over the premium traded
+r.spread()     # per-trade: what each fill paid away from the mid
+```
+
+**The spread is the cost that matters and it is not a fee.** It is paid inside the fill —
+a buy at the ask, a sell at the bid — so it never appears on a fee line. On this project's
+own fixture over six years the fees come to 506 and the spread to 3,396: **six and a half
+times**. A cost section that listed only the fees said trading was nearly free.
+
+Measured against two denominators, because neither alone is honest:
+
+- **of the premium traded** — defined whether the run won or lost, and the figure a buyer
+  thinks in ("the spread cost me 2% of what I paid")
+- **of gross P&L rebuilt at the mid** — the edge before costs. The spread is inside every
+  fill price, so a ratio to plain gross would have it on both sides of the division; and
+  when there is no edge, the ratio is absent with a reason rather than printed as a
+  percentage of a loss
+
+## Three returns, and which one a Sharpe is on
+
+```python
+# skip (needs a finished run)
+m = r.equity_metrics()
+m["strategy_total_return"]   # the trading, interest removed
+m["account_total_return"]    # what a statement would show
+m["excess_annualised"]       # the account less the risk-free rate
+m["sharpe"]                  # on the excess return
+```
+
+The ledger keeps interest as its own term of the accounting identity for a reason: a book
+that sat in cash all year would earn it. The equity curve is cash plus holdings, and the
+cash carries every dollar of it — so a single "total return" is the **account's** figure
+being read as the strategy's. On a long-options book most of the capital sits in cash, so
+this is not a rounding difference.
+
+Sharpe and Sortino are on the excess return, which is their definition. On a curve that
+includes the interest, a ratio to the raw return adds the risk-free rate once and
+subtracts it never — flattering twice over.
+
+`cash_interest_share` is in the register's group 1: paying the full Treasury rate on every
+idle dollar is a claim about the broker, not about the market, and it runs in the
+optimistic direction.
+
+## Where the P&L came from
+
+```python
+# skip (needs an event-driven run)
+print(r.attribution_daily().text())
+```
+
+Stepped **day by day**, on each day's own greeks, with the spread as its own line. The
+one-step version (`r.attribution()`) expands once from entry to exit on the entry greeks;
+over a three-week option hold its residual runs to tens of percent, and the system says as
+much about its own stress grid — past a 10% move a second-order expansion gets the
+direction wrong. A residual has to be read against the method, so each result says which
+it used.
+
 ## How much of this is the cost assumption
 
 ```python

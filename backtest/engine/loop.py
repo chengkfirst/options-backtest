@@ -963,6 +963,15 @@ class EventDrivenEngine:
                 "shadow_days": self.shadow_days,
                 # It blocks entries, so it changes which trades happen. Fifth time
                 # something that moves the result has had to be added here explicitly.
+                # Seventh. Same reason as the premium budget below it, and this one was
+                # worse: the limit could not be set at all, so it reached neither the
+                # fingerprint nor the caller.
+                "exposure": (
+                    {"max_delta_pct": self.limits.max_delta_pct,
+                     "max_vega_pct": self.limits.max_vega_pct,
+                     "max_positions": self.limits.max_positions,
+                     "on_breach": self.limits.on_breach}
+                    if self.limits is not None else None),
                 # Sixth. It blocks entries, so two runs that differ only in their
                 # premium budget are different runs and the fingerprint has to say so.
                 "premium_budget": (
@@ -1090,7 +1099,17 @@ class EventDrivenEngine:
                 "mae_so_far": trade.mae,
                 "underlying": self.market.spot(day).or_else(float("nan")),
                 "iv": float(row["iv"]) if row is not None and "iv" in row else float("nan"),
-                "delta": float(row["delta"]) if row is not None and "delta" in row else float("nan"),
+                # **All four greeks, not only delta.** The daily path carried the
+                # underlying, the IV and delta, which is three of the five inputs a
+                # Taylor term needs -- so attribution had to be computed from the
+                # *entry* greeks across the whole holding period, and its residual ran
+                # to 40% of gross. Gamma, vega and theta cost one dict lookup each on a
+                # row that is already being read.
+                #
+                # The quantity and multiplier are on the trade record, so the scale does
+                # not need repeating here.
+                **{g: (float(row[g]) if row is not None and g in row else float("nan"))
+                   for g in ("delta", "gamma", "vega", "theta")},
                 "tag": trade.tag,
             })
 

@@ -748,8 +748,12 @@ RESEARCH: tuple[Clause, ...] = (
            ("backtest/research/metrics.py",), needle="def turnover"),
     Clause("Metrics", "share of profit from the top N trades",
            ("backtest/research/sweep.py",), needle="top"),
+    # Against gross rebuilt at the **mid**: the spread is inside every fill price, so a
+    # ratio to plain gross has it on both sides of the division -- and a ratio to a
+    # negative gross is "cost as a share of the loss", which was being printed as a cost
+    # ratio. The premium-traded denominator is the one that is defined either way.
     Clause("Metrics", "costs as a share of gross P&L",
-           ("backtest/research/metrics.py",), needle="fees_pct_of_gross"),
+           ("backtest/research/metrics.py",), needle="cost_pct_of_gross_at_mid"),
     Clause("Metrics", "average spread paid as a share of premium",
            ("backtest/research/metrics.py",), needle="def spread_paid"),
     Clause("Metrics", "IV at entry against realised volatility over the holding period",

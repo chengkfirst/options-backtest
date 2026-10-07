@@ -220,6 +220,15 @@ class Ledger:
         """
         if rate <= 0 or self._cash <= 0 or days <= 0:
             return 0.0
+        # **The share of the rate the cash actually earns**, a realism assumption rather
+        # than a fact: a retail sweep usually pays below Treasury and pledged cash pays
+        # nothing. 1.0 by default, in the register's group 1, sensitivity-tested only --
+        # see `core/thresholds.py`.
+        from backtest.core.thresholds import get
+
+        rate = rate * float(get("cash_interest_share"))
+        if rate <= 0:
+            return 0.0
         earned = self._cash * rate * days / 365.0
         self._cash += earned
         self.total_interest += earned
