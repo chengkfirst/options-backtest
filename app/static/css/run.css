@@ -132,10 +132,10 @@
   color: inherit;
   cursor: pointer;
 }
-.ev-toggle h3 { margin: 0; font-size: var(--font-sm); font-weight: 600; }
+.ev-toggle h3 { margin: 0; font-size: var(--font-sm); font-weight:var(--weight-medium); }
 .ev-toggle:hover h3 { color: var(--accent); }
 .evidence.open .ev-toggle .subj-caret { transform: rotate(90deg) translateX(1px); }
-.ev-head h3 { margin: 0; font-size: var(--font-sm); font-weight: 600; }
+.ev-head h3 { margin: 0; font-size: var(--font-sm); font-weight:var(--weight-medium); }
 .evidence:not(.open) .ev-head { border-bottom: 0; }
 .ev-why { font-size: var(--font-xs); color: var(--text-muted); }
 .ev-all {
@@ -178,8 +178,8 @@ button.subj-head:hover { background: var(--surface-2); }
 }
 .subj.open .subj-caret { transform: rotate(90deg) translateX(1px); }
 
-.subj-name { font-size: var(--font-sm); font-weight: 600; color: var(--text-primary); }
-.subj.ok .subj-name { font-weight: 400; color: var(--text-secondary); }
+.subj-name { font-size: var(--font-sm); font-weight:var(--weight-medium); color: var(--text-primary); }
+.subj.ok .subj-name { font-weight:var(--weight-regular); color: var(--text-secondary); }
 
 /* The subject's rows as dots, worst first. A shape the eye reads before any word: it says
    how many and how bad at once, which two separate counts do not. */
@@ -221,7 +221,7 @@ button.subj-head:hover { background: var(--surface-2); }
   padding: var(--space-2) var(--space-3);
   text-align: left;
   vertical-align: top;
-  font-weight: 400;
+  font-weight:var(--weight-regular);
   white-space: normal;
   overflow-wrap: anywhere;
   border-bottom: 0;
@@ -243,7 +243,7 @@ button.subj-head:hover { background: var(--surface-2); }
 }
 .always {
   margin-left: 5px;
-  font-size: 9.5px;
+  font-size:var(--font-xs);
   padding: 0 4px;
   border-radius: 2px;
   background: var(--surface-2);
@@ -255,7 +255,7 @@ button.subj-head:hover { background: var(--surface-2); }
   color: var(--text-primary);
 }
 .sheet-so { font-size: var(--font-xs); line-height: 1.5; color: var(--text-secondary); }
-.sheet-so b { color: var(--text-primary); font-weight: 600; }
+.sheet-so b { color: var(--text-primary); font-weight:var(--weight-medium); }
 
 /* Colour on the serious rows only. Colouring every one made the column a single shade of
    red, and a page where everything is emphasised emphasises nothing. */
@@ -306,9 +306,14 @@ button.subj-head:hover { background: var(--surface-2); }
    equal cells rather than eight boxes of different heights. The earlier version let each
    card size to its own content: two rows, the second orphaned, and a column of dead space
    under every card without an interval. */
+/* **Four across, or eight.** `auto-fit` fitted as many as the width allowed, which at most
+   window sizes is seven — leaving the eighth alone on a second row beside a hand's width of
+   nothing. Eight divides by four and by eight and by nothing else useful, so the band is one
+   of those two: four and four at ordinary widths, which also gives the four that lead a row
+   of their own, and all eight across when there is genuinely room for them. */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
   margin: var(--space-4) 0 0;
   border: 1px solid var(--border);
@@ -368,7 +373,7 @@ button.subj-head:hover { background: var(--surface-2); }
 
 /* The four that lead are set larger, and sit on the panel rather than the page, so the
    eye lands on them before the rest. Eight cells of one weight give it nowhere to land. */
-.card.lead dd { font-size: 26px; }
+.card.lead dd { font-size: var(--font-display); }
 .card.lead dt { color: var(--text-secondary); }
 .card.lead { background: var(--surface-2); }
 
@@ -431,7 +436,7 @@ button.subj-head:hover { background: var(--surface-2); }
   line-height: 1.5;
   color: var(--text-secondary);
 }
-.verdict-spread b { color: var(--text-primary); font-weight: 600; }
+.verdict-spread b { color: var(--text-primary); font-weight:var(--weight-medium); }
 .verdict-spread.crosses { color: var(--warning); }
 .verdict-spread.crosses b { color: var(--warning); }
 
@@ -791,7 +796,7 @@ td.bar span {
 
 /* An input's constraint, beside the field rather than behind it. It is what the field
    will accept, which is not an explanation and does not belong in a tooltip. */
-.vhint { font-weight: 400; color: var(--text-muted); }
+.vhint { font-weight:var(--weight-regular); color: var(--text-muted); }
 
 /* ── archiving and deleting ─────────────────────────────────────────────────────
  *
@@ -952,7 +957,7 @@ td.bar span {
 .tc-pnl {
   margin: 0;
   font-family: var(--mono);
-  font-size: 24px;
+  font-size: var(--font-display);
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
 }
@@ -1093,3 +1098,10 @@ td.bar span {
    inside the card rather than being cut off at the edge, where the fees column simply
    disappeared with nothing to say it had. */
 .tc-scroll { overflow-x: auto; border: 0; border-radius: 0; background: none; }
+
+
+/* Eight across only where the window can hold eight without crushing a label; below that the
+   band is four and four, which is where it reads best anyway. */
+@media (min-width: 1500px) {
+  .cards { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+}

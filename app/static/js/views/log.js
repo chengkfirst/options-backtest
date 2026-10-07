@@ -69,13 +69,25 @@ const FILTERS_SPEC = [
 
 /** The columns, in reading order: what it is, then what it did, then what it rests on. */
 const COLUMNS = [
+  // **A badge marks an exception, not a rule.** Every row carried `event` and `synthetic`,
+  // which on a store where every run is both is 222 pills saying nothing — and a badge that
+  // is always there is one the eye stops seeing, including on the row where it matters. What
+  // they all share is said once in the group's header; a row is marked only where it differs
+  // from the rest of its idea.
   {key: "id", name: "run", left: true,
    text: r => `${r.id}`,
-   html: r => `<a class="run-link" href="#/runs/${r.id}">${r.id}</a>
-     <span class="log-badge">${r.config?.engine === "event_driven" ? "event" : "table"}</span>
-     ${r.synthetic ? `<span class="log-badge syn" data-tip="The option prices came from the
-        synthetic chain, so no option-side number here describes a traded market.">synthetic</span>` : ""}
-     ${r.archived ? `<span class="log-badge arch">archived</span>` : ""}`},
+   html: r => {
+     const norm = NORM.get(r.strategy_name) || {};
+     const engine = r.config?.engine === "event_driven" ? "event driven" : "trade table";
+     return `<a class="run-link" href="#/runs/${r.id}">${r.id}</a>
+       ${norm.engine && norm.engine !== engine
+         ? `<span class="log-badge" data-tip="The rest of this idea ran on the ${
+             esc(norm.engine)} engine.">${esc(engine)}</span>` : ""}
+       ${norm.data && norm.data !== (r.synthetic ? "synthetic" : "real")
+         ? `<span class="log-badge syn" data-tip="The rest of this idea used ${
+             esc(norm.data)} option prices.">${r.synthetic ? "synthetic" : "real quotes"}</span>` : ""}
+       ${r.archived ? `<span class="log-badge arch">archived</span>` : ""}`;
+   }},
   {key: "started", name: "when", left: true,
    text: r => String(r.started).slice(0, 10),
    html: r => `<span data-tip="${esc(String(r.started))}">${
@@ -91,8 +103,16 @@ const COLUMNS = [
      if(!base) return `<span class="log-none">no baseline in this idea</span>`;
      if(base.id === r.id) return `<span class="log-base">the baseline</span>`;
      const line = diffLine(base.config, r.config, 3);
-     return line ? `<span data-tip="Against run ${base.id}, this idea's baseline.">${
-       esc(line)}</span>` : `<span class="log-none">nothing — same configuration</span>`;
+     if(line) return `<span data-tip="Against run ${base.id}, this idea's baseline.">${
+       esc(line)}</span>`;
+     // Identical to the baseline's configuration. Saying "nothing" leaves two rows of
+     // identical figures looking like the list is showing a duplicate; a rerun is a real
+     // thing and is **not** a second trial, which is the distinction the header counts on.
+     const twin = RUNS.find(o => o.id !== r.id && o.strategy_name === r.strategy_name
+       && !diffLine(o.config, r.config, 1) && o.id > r.id);
+     return `<span class="log-none" data-tip="The same configuration, run again. A rerun is
+       not a second trial: the header counts distinct configurations.">${
+       twin ? `a rerun of ${twin.id}` : "the same configuration as the baseline"}</span>`;
    }},
   {key: "n_trades", name: "trades", num: true, text: r => r.n_trades,
    html: r => thinEvidence(r)
@@ -108,7 +128,7 @@ const COLUMNS = [
   // the first row that carries one, and the column says plainly when nothing carries one.
   {key: "interval", name: () => {
      const one = RUNS.map(interval).find(iv => iv && !absent(iv.level));
-     return one ? `${Math.round(one.level * 100)}% of redraws` : "redraws";
+     return one ? `${Math.round(one.level * 100)}% interval` : "interval";
    }, num: true,
    text: r => interval(r)?.low ?? null,
    html: r => {
@@ -117,7 +137,7 @@ const COLUMNS = [
      const thin = thinEvidence(r);
      const crosses = iv.low <= 0 && 0 <= iv.high;
      return `<span class="log-iv${thin ? " thin" : ""}${crosses ? " crosses" : ""}"
-       data-tip="${Math.round((iv.level ?? 0.95) * 100)}% of resamples landed in this range.${
+       data-tip="The bootstrap interval: ${Math.round((iv.level ?? 0.95) * 100)}% of resamples of this run's trades landed in this range.${
          crosses ? " It spans zero, so the sign is not established." : ""}${
          thin ? ` Muted: ${r.n_trades} trades is below the ${floor()} this project requires.`
               : ""}">${esc(moneyShort(iv.low))} … ${esc(moneyShort(iv.high))}</span>`;
@@ -131,23 +151,48 @@ const COLUMNS = [
   {key: "sortino", name: "Sortino", num: true,
    text: r => r.analysis?.investor?.Sortino ?? null,
    html: r => num(r.analysis?.investor?.Sortino)},
-  {key: "realism", name: "rests on", left: true,
+  {key: "realism", name: "fills assume", left: true,
    text: r => realism(r).map(c => c.text).join(" "),
    html: r => realism(r).map(c =>
      `<span class="log-chip" data-tip="${esc(c.why)}">${esc(c.text)}</span>`).join("")},
+  // **A cell, not a form.** Both of these were a `<select>` and an `<input>` on every row —
+  // two hundred and twenty controls for something a researcher sets on a handful of runs, and
+  // a wall of chrome down the right of a table whose job is to be read. They are text until
+  // they are clicked, and the control appears in the one cell being edited.
   {key: "verdict", name: "verdict", left: true,
    text: r => r.last_verdict || "open",
-   html: r => `<select class="log-verdict" data-verdict="${r.id}">${
-     Object.entries(VERDICTS).map(([key, says]) =>
-       `<option value="${esc(key)}"${(r.last_verdict || "open") === key ? " selected" : ""}
-        >${esc(says)}</option>`).join("")}</select>`},
-  {key: "note", name: "note", left: true, wide: true,
-   text: r => "",
-   html: r => `<input class="log-note" data-note="${r.id}" type="text"
-     placeholder="${r.n_notes ? `${r.n_notes} already written — add another` : "add a note"}"
-     data-tip="Written to the run's record, with the verdict beside it. Notes are kept; a
-               new one does not replace the last.">`},
+   html: r => `<button type="button" class="log-cell verdict-${esc(r.last_verdict || "open")}"
+     data-verdict="${r.id}"
+     data-tip="What this run is taken to show. Click to change it; it is written to the
+               run's record.">${esc(VERDICTS[r.last_verdict || "open"] || "open")}</button>`},
+  {key: "note", name: "note", left: true,
+   text: r => r.n_notes || 0,
+   html: r => `<button type="button" class="log-cell${r.n_notes ? "" : " empty"}"
+     data-note="${r.id}"
+     data-tip="Notes are kept, and a new one does not replace the last. Click to write one.">${
+       r.n_notes ? `${r.n_notes} note${r.n_notes === 1 ? "" : "s"}` : "—"}</button>`},
 ];
+
+/** idea -> what its runs share, where they share it: {engine, data}.
+ *
+ * A value is set only when **every** run under that name agrees; otherwise it is undefined and
+ * each row says for itself. This is what lets the header carry the rule and a badge carry the
+ * exception. */
+const NORM = new Map();
+
+function readNorms(){
+  NORM.clear();
+  for(const r of RUNS){
+    const engine = r.config?.engine === "event_driven" ? "event driven" : "trade table";
+    const data = r.synthetic ? "synthetic" : "real";
+    const at = NORM.get(r.strategy_name);
+    if(!at) NORM.set(r.strategy_name, {engine, data});
+    else {
+      if(at.engine !== engine) at.engine = null;
+      if(at.data !== data) at.data = null;
+    }
+  }
+}
 
 const floor = () => META?.thresholds?.bootstrap_min_observations?.value ?? 0;
 const thinEvidence = r => r.n_trades < floor();
@@ -160,12 +205,13 @@ function realism(r){
   const lam = r.manifest?.config?.costs?.adverse_fraction;
   const lag = r.manifest?.execution?.execution_lag_days;
   return [
-    {text: absent(lam) ? "λ —" : `λ ${num(lam)}`,
-     why: "How much of the spread the fill paid. 1.00 is the whole spread, the pessimistic "
-        + "end; below it assumes an edge in getting filled."},
-    {text: lag == null ? "lag —" : `lag ${lag}`,
-     why: "Sessions between the signal and the fill. 0 means filled on the close that "
-        + "produced the signal, which cannot be traded."},
+    {text: absent(lam) ? "spread —" : `spread ${pct(lam)}`,
+     why: "How much of the quoted bid-ask spread each fill paid — the architecture's λ. "
+        + "100% is the pessimistic end, the whole spread; below it assumes an edge in "
+        + "getting filled."},
+    {text: lag == null ? "fill —" : lag === 0 ? "fill same day" : `fill +${lag}d`,
+     why: "Trading days between the signal and the fill. Same day means filled on the close "
+        + "that produced the signal, which cannot be traded."},
   ];
 }
 
@@ -307,13 +353,18 @@ function ideaHead(idea, shownRuns){
         + "happened, and the deflated Sharpe is deflated by how much searching was done."
       }">${idea.distinct === 0 && lower
         ? `${idea.runs} runs, none placed`
-        : `${idea.distinct}${lower ? "+" : ""} tried${
-            idea.reruns ? ` · ${idea.reruns} rerun${idea.reruns === 1 ? "" : "s"}` : ""}`
+        : `${idea.distinct} tried · ${idea.reruns} rerun${idea.reruns === 1 ? "" : "s"}${
+            lower ? ` · ${idea.unplaced} unplaced` : ""}`
       }</span>
     <span class="idea-best" data-tip="The best annualised Sharpe among this idea's runs. It
       is **not** deflated for the size of the search — the deflation needs the period count
       in years, which the robustness tab asks for rather than assumes.">${
       idea.best_sharpe == null ? "no Sharpe" : `best Sharpe ${num(idea.best_sharpe)}`}</span>
+    <span class="idea-common">${[
+      (NORM.get(idea.idea) || {}).engine,
+      (NORM.get(idea.idea) || {}).data === "synthetic" ? "synthetic chain"
+        : (NORM.get(idea.idea) || {}).data === "real" ? "real quotes" : null,
+    ].filter(Boolean).map(esc).join(" · ") || "mixed engines and data"}</span>
     <span class="idea-holdout">hold-out: ${holdOut}</span>
     <span class="idea-count">${shownRuns} shown of ${idea.runs}</span>
   </button>`;
@@ -348,6 +399,7 @@ function table(rows){
 }
 
 function render(){
+  readNorms();
   const rows = sortRows(kept());
   const byIdea = new Map();
   for(const r of rows){
@@ -497,18 +549,62 @@ function wire(){
   for(const id of ["clearFilters", "clearFiltersEmpty"])
     $(id)?.addEventListener("click", clearFilters);
 
-  // Metadata is the one thing the plan allows an optimistic update for: the row shows the
-  // new verdict at once and the write is reported only if it fails.
-  for(const select of document.querySelectorAll("[data-verdict]"))
-    select.addEventListener("change", () => saveNote(select.dataset.verdict, "", select.value));
-  for(const input of document.querySelectorAll("[data-note]"))
-    input.addEventListener("change", () => {
-      if(!input.value.trim()) return;
-      const verdict = document.querySelector(`[data-verdict="${input.dataset.note}"]`)?.value;
-      saveNote(input.dataset.note, input.value.trim(), verdict || "open");
-      input.value = "";
-      input.placeholder = "written";
-    });
+  // Metadata is the one thing the plan allows an optimistic update for: the cell shows the
+  // new value at once and the write is reported only if it fails.
+  for(const cell of document.querySelectorAll("[data-verdict]"))
+    cell.addEventListener("click", () => editVerdict(cell));
+  for(const cell of document.querySelectorAll("[data-note]"))
+    cell.addEventListener("click", () => editNote(cell));
+}
+
+/** Turn one verdict cell into a chooser, and back when it has been answered. */
+function editVerdict(cell){
+  const id = cell.dataset.verdict;
+  const row = RUNS.find(r => String(r.id) === String(id));
+  const now = row?.last_verdict || "open";
+  const select = document.createElement("select");
+  select.className = "log-edit";
+  select.innerHTML = Object.entries(VERDICTS).map(([key, says]) =>
+    `<option value="${esc(key)}"${key === now ? " selected" : ""}>${esc(says)}</option>`).join("");
+  cell.replaceWith(select);
+  select.focus();
+  const done = () => {
+    if(select.value !== now) saveNote(id, "", select.value);
+    if(row) row.last_verdict = select.value;
+    cell.textContent = VERDICTS[select.value] || select.value;
+    cell.className = `log-cell verdict-${select.value}`;
+    select.replaceWith(cell);
+  };
+  select.addEventListener("change", done);
+  select.addEventListener("blur", done);
+  select.addEventListener("keydown", e => { if(e.key === "Escape") select.replaceWith(cell); });
+}
+
+/** The same for a note: a box in the one cell, written on Enter and abandoned on Escape. */
+function editNote(cell){
+  const id = cell.dataset.note;
+  const row = RUNS.find(r => String(r.id) === String(id));
+  const input = document.createElement("input");
+  input.className = "log-edit";
+  input.type = "text";
+  input.placeholder = row?.n_notes
+    ? `${row.n_notes} already written — add another` : "what this run showed";
+  cell.replaceWith(input);
+  input.focus();
+  const close = () => {
+    cell.textContent = row?.n_notes ? `${row.n_notes} note${row.n_notes === 1 ? "" : "s"}` : "—";
+    cell.className = `log-cell${row?.n_notes ? "" : " empty"}`;
+    input.replaceWith(cell);
+  };
+  input.addEventListener("keydown", e => {
+    if(e.key === "Escape") close();
+    if(e.key === "Enter" && input.value.trim()){
+      saveNote(id, input.value.trim(), row?.last_verdict || "open");
+      if(row) row.n_notes = (row.n_notes || 0) + 1;
+      close();
+    }
+  });
+  input.addEventListener("blur", close);
 }
 
 /** Every filter off, in the URL as well as in memory. */

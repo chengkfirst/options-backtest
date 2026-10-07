@@ -339,9 +339,11 @@ function trades(){
   const {byKey: right, repeated: rightRepeat} = index(b.rows);
   const onlyLeft = [...left.keys()].filter(k => !right.has(k));
   const onlyRight = [...right.keys()].filter(k => !left.has(k));
-  const changed = [...left.keys()].filter(k => right.has(k)
-    && (String(left.get(k).exit_date) !== String(right.get(k).exit_date)
-        || left.get(k).exit_reason !== right.get(k).exit_reason));
+  const bothTook = [...left.keys()].filter(k => right.has(k));
+  const changed = bothTook.filter(k =>
+    String(left.get(k).exit_date) !== String(right.get(k).exit_date)
+    || left.get(k).exit_reason !== right.get(k).exit_reason);
+  const unchanged = bothTook.length - changed.length;
 
   const row = (key, t, other) => `<tr>
     <td class="left mono">${esc(String(t.entry_date).slice(0, 10))}</td>
@@ -381,6 +383,10 @@ function trades(){
       "The same contract on the same day, closed by a different rule or on a different day. "
       + "This is the direct readout of what the change did.",
       changed.map(k => row(k, left.get(k), right.get(k))))}
+    ${unchanged ? `<p class="hint"><b>${unchanged} more</b> were taken by both and closed the
+      same way on the same day; they are not listed because nothing about them changed. With
+      the lists above that accounts for all ${(a.rows || []).length} of run ${a.id}'s trades
+      and all ${(b.rows || []).length} of run ${b.id}'s.</p>` : ""}
     ${!onlyLeft.length && !onlyRight.length && !changed.length
       ? `<p class="hint">Every trade matches on both sides, and each closed the same way on
          the same day. Whatever differs in the results is not a difference in the trades.</p>`

@@ -107,14 +107,20 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
 
     def end_headers(self):
-        """Every static file is revalidated against the server.
+        """Every static file is fetched again, every time.
 
         Without this, Chrome caches js/css heuristically and a reload after an edit still
-        runs the old code, raising nothing. A local tool does not care about the
-        bandwidth; correctness comes first.
+        runs the old code, raising nothing. A local tool does not care about the bandwidth;
+        correctness comes first.
+
+        **`no-store`, not `no-cache`.** `no-cache` means "revalidate", and the index stamps
+        only the files it names itself -- `js/app.js?v=...`. Every module those import is
+        requested at its bare path, and the browser was serving those out of its cache after
+        an edit: the page then runs a mixture of old and new modules, which is worse than
+        either, and the symptom is a screen that disagrees with the source in front of you.
         """
         if not self.path.startswith("/api/"):
-            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
     def guess_type(self, path):

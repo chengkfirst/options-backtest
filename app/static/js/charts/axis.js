@@ -494,8 +494,14 @@ export function lineLayer({key, title, hint, height, values, second, secondTitle
       out += `<path class="series" d="${path(values)}" fill="none" stroke="${colour}"/>`;
       // The labels carry the **values**, never the transform: on a log axis `hi` is a
       // logarithm, and printing it would put "5.1" on an axis of dollars.
-      const rawHi = Math.max(...finite, ...others);
-      const rawLo = Math.min(...finite, ...others);
+      //
+      // And they are **this series' own extremes**, not the pair's. The scale is shared with
+      // the comparison line, so the top label used to be whichever of the two happened to be
+      // higher — on a run that lost against the underlying, the number at the top of the
+      // equity chart was the benchmark's peak, printed where every other layer prints its own
+      // value. It read as the strategy's best moment.
+      const rawHi = Math.max(...finite);
+      const rawLo = Math.min(...finite);
       for(const v of [rawHi, rawLo])
         out += `<text class="y-label" x="${scale.plot.left - 6}" y="${y(v) + 3.5}"
                   text-anchor="end">${format ? format(v) : v.toFixed(0)}</text>`;

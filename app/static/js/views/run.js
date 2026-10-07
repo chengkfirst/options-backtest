@@ -297,9 +297,10 @@ function verdict(){
   if(base && !absent(base.excess)){
     const under = esc(RUN.config?.symbol || "the underlying");
     tone = base.excess > 0 ? "good" : "bad";
-    line = `${verb} ${size(made)}; the same exposure in ${under} shares would have
-      ${base.baseline >= 0 ? "made" : "lost"} ${size(base.baseline)}.
-      <b>The options ${base.excess > 0 ? "added" : "cost"} ${size(base.excess)}.</b>`;
+    line = `${verb} ${size(made)}; the same first-order exposure in ${under} shares would
+      have ${base.baseline >= 0 ? "made" : "lost"} ${size(base.baseline)}.
+      <b>Choosing options over shares ${base.excess > 0 ? "gained" : "gave up"}
+      ${size(base.excess)}.</b>`;
   } else if(!absent(inv.buy_and_hold) && !absent(inv.strategy_total)){
     tone = inv.strategy_total > inv.buy_and_hold ? "good" : "bad";
     line = `${verb} ${size(made)} — ${pct(inv.strategy_total)} where holding
@@ -350,10 +351,12 @@ function spread(){
   const crosses = iv.low <= 0 && 0 <= iv.high;
   const level = Math.round(iv.level * 100);
   return `<p class="verdict-spread${crosses ? " crosses" : ""}">These ${RUN.n_trades}
-    trades are one draw: redrawing them lands between <b>${moneyShort(iv.low)}</b> and
-    <b>${moneyShort(iv.high)}</b> ${level} times in 100${crosses
-      ? ", <b>which spans zero</b> — this run has not established even the sign of its"
-        + " result" : ""}.</p>`;
+    trades are one draw: resampling them puts the total between <b>${moneyShort(iv.low)}</b>
+    and <b>${moneyShort(iv.high)}</b> ${level} times in 100 — the <b>bootstrap interval</b>${
+      crosses ? ", and it <b>spans zero</b>, so this run has not established even the sign of"
+        + " its result" : ""}${iv.caveat
+          ? ` — though the resampling treats the trades as independent, and ${mark(iv.caveat)
+              .replace(/^trades resampled as if independent;\s*/, "")}` : ""}.</p>`;
 }
 
 /* ── three blocks, three jobs ────────────────────────────────────────────────────
@@ -883,7 +886,11 @@ function metricCards(){
      missing: "needs the event-driven engine"},
     {lead: true, name: "max drawdown", value: eq && pct(eq.max_drawdown), better: "closer to zero",
      means: "the deepest fall from a peak of the account at any point in the run",
-     note: eq && `at the bid: ${pct(eq.max_drawdown_liq)}`,
+     // The bid-marked figure is worth a line only when it **differs** at the precision it is
+     // printed at. It read "−90.2%  at the bid: −90.2%", which spends a line to say the two
+     // marks agree and reads as a number that failed to update.
+     note: eq && pct(eq.max_drawdown_liq) !== pct(eq.max_drawdown)
+       ? `at the bid: ${pct(eq.max_drawdown_liq)}` : "",
      missing: "needs the event-driven engine"},
     {lead: true, name: "Sortino", value: inv && num(inv.Sortino), better: "higher",
      means: "return per unit of **downside** volatility; upside swings are not penalised",
@@ -945,7 +952,8 @@ function metricCards(){
         ? ` data-tip="Muted: ${RUN.n_trades} trades is below the ${floor} this project `
           + `requires before a statistic carries an interval."` : ""}>
       <dt>${esc(c.name)}${c.better
-        ? `<span class="card-dir" aria-hidden="true">${
+        ? `<span class="card-dir" data-tip="Which way is better for this metric: ${
+            esc(c.better)}.">${
             c.better === "higher" ? "↑" : c.better === "lower" ? "↓" : "→0"}</span>` : ""}</dt>
       <dd>${absentCard ? "—" : esc(c.value)}</dd>
       ${absentCard ? "" : intervalBar(c.interval, c.format)}
@@ -1240,7 +1248,12 @@ function paintDetail(){
     }).join("")
   }</tr>`).join("")}</tbody></table>${
     rows.length > shown.length
-      ? `<p class="hint">The first ${shown.length} are shown.</p>` : ""}`;
+      ? `<p class="hint">The first ${shown.length} of ${rows.length.toLocaleString()} are
+           drawn, in the order the table is sorted by — ${SORT.key
+             ? `${esc(COLUMNS.find(c => c.key === SORT.key)?.name || SORT.key)}, ${
+                 SORT.dir < 0 ? "largest first" : "smallest first"}`
+             : "the order they happened in"}. Sort or narrow the range to bring others into
+           it.</p>` : ""}`;
 
   for(const th of box.querySelectorAll("[data-sort]"))
     th.addEventListener("click", () => {
@@ -1402,7 +1415,7 @@ function render(query){
     <section class="tier-mid" id="tierMid"></section>
 
     <section class="tier-detail">
-      <header class="tier-head"><h3>every trade</h3>
+      <header class="tier-head"><h3>the trades</h3>
         <p class="hint tier-count" id="runDetailNote"></p></header>
       <div class="scroll" id="runDetail"></div>
     </section>`;

@@ -28,6 +28,12 @@
   /* ── type: 13 px base, two weights only ── */
   --font-xs: 11px; --font-sm: 12px; --font-base: 13px;
   --font-md: 14px; --font-lg: 16px; --font-xl: 20px;
+  /* One step past the design plan's table. Its scale stops at 20 px, which is right for a
+     number in a band of eight and too small for the one figure a page is *about* — the
+     verdict's amount, a lead metric, a trade's P&L. Set by eye at the size the project had
+     already been using before the scale was applied, and kept here so it is still one place
+     that decides. */
+  --font-display: 26px;
   --weight-regular: 400;
   --weight-medium: 500;
   --line-body: 1.5;

@@ -44,6 +44,25 @@ export function contractParts(id){
   };
 }
 
+/** What the trade actually returned on its premium, from the two quoted prices.
+ *
+ * Subtraction of two stored columns, not a statistic — and the card needs it for one reason:
+ * the engine's `mfe` and `mae` do **not** bound it. On this project's own data a third of
+ * trades close outside the excursion the engine reports for them, which means a card that
+ * printed only the excursions would be telling the reader the trade never got as bad as it
+ * demonstrably did. */
+const closedAt = row =>
+  absent(row.entry_price) || absent(row.exit_price) || !row.entry_price
+    ? null : row.exit_price / row.entry_price - 1;
+
+/** Whether this trade finished outside the excursions reported for it. */
+function outsideExcursion(row){
+  const at = closedAt(row);
+  if(at == null) return false;
+  if(!absent(row.mae) && at < row.mae - 1e-9) return true;
+  return !absent(row.mfe) && at > row.mfe + 1e-9;
+}
+
 /** One marker on the lifecycle strip: when, which slot, what it did. */
 function markers(row){
   const closing = SLOT_OF_EXIT[row.exit_reason];
@@ -81,9 +100,7 @@ function lifecycle(row, config){
   return `<div class="tc-life">
     <ol class="tc-states">${states.map((s, i) =>
       `<li class="tc-state${i >= 2 ? " reached" : " assumed"}">${s}</li>`).join("")}</ol>
-    <p class="hint">Idle and armed are not recorded per trade — the candidate states before
-      an open are in the preview, which has no endpoint yet. Open and closed are this
-      trade's own dates.</p>
+    <p class="hint">Only the open and the close are recorded per trade.</p>
     <ul class="tc-actions">${markers(row).map(m => `
       <li class="tc-action">
         <span class="tc-dot" style="${m.slot != null
@@ -136,9 +153,7 @@ function legs(row){
       <td class="n">${num(row.exit_price)}</td>
       <td class="n">${num(row.fees)}</td>
     </tr></tbody></table></div>
-    <p class="hint">One leg: this engine opens one position per trade, so there is no hedge
-      leg to split the P&amp;L against. The spread actually paid is in the run's execution
-      tab, which has it for the whole book rather than per fill.</p>`;
+    <p class="hint">One position per trade, so there is no hedge leg to split against.</p>`;
 }
 
 /**
@@ -154,9 +169,9 @@ export function card(row, {config, position, total} = {}){
   return `
     <section class="tc-conclusion ${row.net_pnl >= 0 ? "good" : "bad"}">
       <p class="tc-pnl">${esc(money(row.net_pnl))}</p>
-      <p class="tc-split">${esc(size(row.gross_pnl))} before costs, less
+      <p class="tc-split">${esc(money(row.gross_pnl))} before costs, less
         ${esc(size(row.fees))} in fees${position && total
-          ? ` · trade ${position} of ${total} in this order` : ""}</p>
+          ? ` · ${position} of ${total} in the table's current order` : ""}</p>
       <p class="tc-closed">closed by <b>${esc(REASON[row.exit_reason] || row.exit_reason
         || "—")}</b>${closing != null ? ` — the ${esc(SLOT[closing])} slot` : ""}</p>
     </section>
@@ -178,18 +193,24 @@ export function card(row, {config, position, total} = {}){
     <section class="tc-block">
       <h4>how it ran</h4>
       <dl class="tc-facts">
-        <dt>best it reached</dt><dd class="pos">${esc(pct(row.mfe))}</dd>
-        <dt>worst it reached</dt><dd class="neg">${esc(pct(row.mae))}</dd>
+        <dt>best excursion</dt><dd class="pos">${esc(pct(row.mfe))}</dd>
+        <dt>worst excursion</dt><dd class="neg">${esc(pct(row.mae))}</dd>
+        <dt>closed at</dt><dd class="${closedAt(row) >= 0 ? "pos" : "neg"}">${
+          esc(pct(closedAt(row)))}</dd>
         <dt>spot</dt><dd>${esc(num(row.entry_underlying_price))} →
           ${esc(num(row.exit_underlying_price))}</dd>
         <dt>delta</dt><dd>${esc(num(row.entry_delta, 2))} →
           ${esc(num(row.exit_delta, 2))}</dd>
         <dt>IV</dt><dd>${esc(pct(row.entry_iv))} → ${esc(pct(row.exit_iv))}</dd>
       </dl>
-      <p class="hint">Both excursions are the engine's own, in premium terms, and the date
-        each happened on is not kept with them. The price and P&amp;L path over the hold
-        needs the TradeBook endpoint, and the dashed shadow-tracking tail after the exit
-        needs the prices the engine keeps past it — neither is served yet.</p>
+      ${outsideExcursion(row) ? `<p class="hint warn-text"><b>This trade closed outside the
+        excursions the engine reported.</b> It finished at ${esc(pct(closedAt(row)))} of
+        premium against a ${closedAt(row) < 0 ? `worst of ${esc(pct(row.mae))}`
+          : `best of ${esc(pct(row.mfe))}`}, so the excursion is measured on something
+        narrower than the fill — most likely the closes before the exit. Read it as "how far
+        it ran while it was open", not as a bound on the result.</p>` : ""}
+      <p class="hint">Excursions are in premium terms and the date each happened on is not
+        kept with them. The price path over the hold is not stored per trade.</p>
     </section>
 
     <section class="tc-block">
@@ -204,8 +225,7 @@ export function card(row, {config, position, total} = {}){
 
     <section class="tc-block">
       <h4>what it was bought on</h4>
-      <p class="hint">Every measurement the engine wrote at entry. This is the trade's
-        context: the values the setup and entry slots saw when they acted.</p>
+      <p class="hint">What the setup and entry slots saw at the moment they acted.</p>
       ${context(row)}
     </section>`;
 }

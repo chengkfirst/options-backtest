@@ -647,8 +647,25 @@ suite("trade — the card reads the row and names what the record lacks", async 
   ok(!/\bundefined\b|\bNaN\b/.test(html), "no absence leaks as a word");
   for(const block of ["what it was", "how it ran", "its life", "legs",
                       "what it was bought on"])
-    ok(html.includes(block), `the card has its ${block} block`);
-  ok(html.includes("TradeBook"), "and says which blocks the record cannot fill yet");
+    ok(html.replace(/\s+/g, " ").includes(block), `the card has its ${block} block`);
+  ok(html.replace(/\s+/g, " ").includes("not stored per trade"),
+     "and says which blocks the record cannot fill");
+  // The sign of a loss before costs. `size` is unsigned, and using it here printed a
+  // $596.47 loss as "$596.47 before costs", which reads as a gain.
+  const losing = run.rows.find(r => r.gross_pnl < 0);
+  if(losing)
+    ok(t.card(losing, {config: run.config}).includes("−$"),
+       "a loss before costs keeps its sign");
+  // The engine's excursions do not bound the realised return on this project's own data, so
+  // a trade that closed outside them has to say so rather than let the card read as a bound.
+  const outside = run.rows.find(r => r.entry_price
+    && (r.exit_price / r.entry_price - 1) < r.mae - 1e-9);
+  // Matched on the text with its whitespace collapsed: the markup is a template literal and
+  // a phrase that happens to straddle a line break is not a change in what the card says.
+  const flat = html => html.replace(/\s+/g, " ");
+  if(outside)
+    ok(flat(t.card(outside, {config: run.config})).includes("closed outside the excursions"),
+       "a trade that closed outside its reported excursions says so");
   ok(t.actions(row).includes("copy link"), "the card offers its own actions");
 });
 

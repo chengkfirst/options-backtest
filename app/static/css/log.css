@@ -72,7 +72,7 @@
 .idea-head {
   width: 100%;
   display: grid;
-  grid-template-columns: 10px minmax(8rem, 1fr) auto auto auto auto;
+  grid-template-columns: 10px minmax(8rem, 1fr) auto auto auto auto auto;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -111,7 +111,7 @@
   white-space: nowrap;
 }
 
-.idea-trials, .idea-best, .idea-holdout, .idea-count {
+.idea-trials, .idea-best, .idea-holdout, .idea-count, .idea-common {
   font-size: var(--font-xs);
   color: var(--text-secondary);
   white-space: nowrap;
@@ -219,15 +219,40 @@
 .log-iv.crosses { color: var(--warning); }
 .log-iv.thin { color: var(--text-muted); }
 
-.log-verdict, .log-note {
+/* A cell that can be edited, drawn as text. The control only exists while it is being
+   used, so the right-hand side of the table is readable rather than a column of boxes. */
+.log-cell {
+  background: none;
+  border: 0;
+  border-bottom: 1px dotted var(--border-strong);
+  border-radius: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-xs);
+  padding: 0;
+  text-align: left;
+}
+
+.log-cell:hover { color: var(--text-primary); border-bottom-color: var(--accent); }
+.log-cell.empty { color: var(--text-muted); border-bottom-color: transparent; }
+.log-cell.empty:hover { border-bottom-color: var(--accent); }
+
+/* The four verdicts are a scale, not a palette: open is neutral, and the three that are a
+   judgement carry the semantic colour that judgement already has everywhere else. */
+.verdict-promising { color: var(--success); }
+.verdict-rejected { color: var(--text-muted); text-decoration: line-through; }
+.verdict-inconclusive { color: var(--warning); }
+
+.log-edit {
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-family: var(--sans);
   font-size: var(--font-xs);
   padding: 2px var(--space-1);
-  max-width: 22ch;
+  min-width: 18ch;
 }
 
 /* ── the compare bar ──
