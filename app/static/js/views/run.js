@@ -896,7 +896,7 @@ function paintRangeChip(){
   if(!RANGE){ host.innerHTML = ""; return; }
   host.innerHTML = `<span class="chip-range">${esc(RANGE.from)} → ${esc(RANGE.to)}</span>
     <span class="chip-n">${VIEW.length} of ${(RUN.rows || []).length} trades</span>
-    <button type="button" id="clearRange">clear</button>`;
+    <button type="button" id="clearRange">clear range</button>`;
   $("clearRange").addEventListener("click", () => {
     if(STACK) STACK.setBrush(null);
     applyBrush(null);
@@ -1208,7 +1208,7 @@ function renderTab(tab, query){
     host.innerHTML = `<div class="layer-error">
       <h4>this tab could not be drawn</h4>
       <p>${esc(e.message)}</p>
-      <button type="button" id="retryTab">try again</button>
+      <button type="button" id="retryTab">draw it again</button>
     </div>`;
     $("retryTab").addEventListener("click", () => renderTab(tab, query));
     // Still reported, so a failure that happens once is in the record rather than only on
@@ -1370,7 +1370,7 @@ function settingsTab(){
   const c = RUN.config || {};
   const form = META?.form;
   if(!form || !form.length)
-    return `<p class="hint">The component definitions could not be fetched, so there is
+    return `<p class="hint">The slot definitions could not be fetched, so there is
       nothing to lay these settings out against.</p>`;
 
   // Every place a field's value might have been filed. Searched in order; the first hit

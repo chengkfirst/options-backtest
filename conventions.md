@@ -47,6 +47,7 @@ python -m tools.check --fast    # for a small change, skipping the slow ones
 | **modules** | an interface module importing a name nothing exports, or using one it did not import. There is no bundler, so that raises only when the code path runs | fast |
 | **evidence** | the standing-assumptions sheet going stale or going quiet: a row that writes its value instead of reading the record, one that cannot report a good state, or a permanent limitation of the platform left undeclared. Checking is the backend's; this holds the sheet that says what the machinery assumed | fast |
 | **selftest** | the browser self-test losing a module. It runs every frontend module against the cases that have broken them — absence printed as a number, a chart given no rows, an escape safe in text and not in an attribute — at `/selftest.html`; this holds that it still covers the tree | fast |
+| **words** | two words for one concept on screen, a button that names a verb and no object, an exclamation mark or a "please". The design plan's terms table exists because a reader who meets both "component" and "slot" has to work out whether they are the same thing | fast |
 | **baseline** | an unintended change in results | 8 s |
 | **test suite** | behavioural regression | 2 min |
 | **doc examples** | the snippets in the README not running | 1 min |

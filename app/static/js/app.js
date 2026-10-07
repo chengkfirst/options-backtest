@@ -29,7 +29,7 @@ const SURFACES = [
   {path: "/compare", icon: "◫", name: "compare", view: "view-pending",
    what: "two to four runs side by side, differences first",
    pending: "needs the experiment log to pick runs from"},
-  {path: "/registry", icon: "◈", name: "components", view: "view-pending",
+  {path: "/registry", icon: "◈", name: "variants", view: "view-pending",
    what: "every registered variant by slot, with its parameter schema",
    pending: "the registry exists; no endpoint serves it yet"},
   {path: "/data", icon: "◴", name: "data", view: "view-pending",
