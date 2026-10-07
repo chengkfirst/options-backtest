@@ -28,7 +28,7 @@ import {$, esc} from "../dom.js";
 import {API, getJSON, notice, postJSON} from "../net.js";
 import {checkIdeas, checkRuns} from "../contract.js";
 import {absent, bare, moneyShort, num, pct} from "../fmt.js";
-import {summary as diffLine} from "../configdiff.js";
+import {flatten, summary as diffLine} from "../configdiff.js";
 import {go, replace} from "../router.js";
 import {bind} from "../ui/keys.js";
 
@@ -102,17 +102,15 @@ const COLUMNS = [
      const base = baselineFor(r);
      if(!base) return `<span class="log-none">no baseline in this idea</span>`;
      if(base.id === r.id) return `<span class="log-base">the baseline</span>`;
+     const twin = RERUN_OF.get(r.id);
+     if(twin != null)
+       return `<span class="log-none" data-tip="The same configuration as run ${twin}, run
+         again. A rerun is not a second trial: the count in the header is of distinct
+         configurations, and this one was already counted.">a rerun of ${twin}</span>`;
      const line = diffLine(base.config, r.config, 3);
      if(line) return `<span data-tip="Against run ${base.id}, this idea's baseline.">${
        esc(line)}</span>`;
-     // Identical to the baseline's configuration. Saying "nothing" leaves two rows of
-     // identical figures looking like the list is showing a duplicate; a rerun is a real
-     // thing and is **not** a second trial, which is the distinction the header counts on.
-     const twin = RUNS.find(o => o.id !== r.id && o.strategy_name === r.strategy_name
-       && !diffLine(o.config, r.config, 1) && o.id > r.id);
-     return `<span class="log-none" data-tip="The same configuration, run again. A rerun is
-       not a second trial: the header counts distinct configurations.">${
-       twin ? `a rerun of ${twin.id}` : "the same configuration as the baseline"}</span>`;
+     return `<span class="log-none">the same configuration as the baseline</span>`;
    }},
   {key: "n_trades", name: "trades", num: true, text: r => r.n_trades,
    html: r => thinEvidence(r)
@@ -173,6 +171,15 @@ const COLUMNS = [
        r.n_notes ? `${r.n_notes} note${r.n_notes === 1 ? "" : "s"}` : "—"}</button>`},
 ];
 
+/** run id -> the id of the newest run that carries the same configuration, when there is one.
+ *
+ * Three rows of identical figures read as the list showing a duplicate. They are reruns — the
+ * same configuration run again — which is a real and ordinary thing, and the distinction
+ * matters more here than anywhere: a rerun is **not** a second trial, and the trial count in
+ * the header depends on telling them apart. Computed once per render from a key, rather than
+ * by diffing every pair, which on a hundred rows would be ten thousand diffs. */
+const RERUN_OF = new Map();
+
 /** idea -> what its runs share, where they share it: {engine, data}.
  *
  * A value is set only when **every** run under that name agrees; otherwise it is undefined and
@@ -182,6 +189,15 @@ const NORM = new Map();
 
 function readNorms(){
   NORM.clear();
+  RERUN_OF.clear();
+  // The list arrives newest first, so the first run seen under a key is the newest one
+  // carrying that configuration, and every later one is a rerun of it.
+  const firstWithKey = new Map();
+  for(const r of RUNS){
+    const key = `${r.strategy_name}|${JSON.stringify(flatten(r.config || {}))}`;
+    if(firstWithKey.has(key)) RERUN_OF.set(r.id, firstWithKey.get(key));
+    else firstWithKey.set(key, r.id);
+  }
   for(const r of RUNS){
     const engine = r.config?.engine === "event_driven" ? "event driven" : "trade table";
     const data = r.synthetic ? "synthetic" : "real";
