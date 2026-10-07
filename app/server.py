@@ -228,7 +228,8 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_HEAD()
 
     def do_POST(self):
-        if self.path not in ("/api/run", "/api/note", "/api/run/delete", "/api/validate"):
+        if self.path not in ("/api/run", "/api/note", "/api/run/delete",
+                             "/api/run/archive", "/api/run/deletion", "/api/validate"):
             return self._json({"error": f"unknown endpoint {self.path}"}, 404)
         try:
             length = int(self.headers.get("Content-Length", 0))
@@ -247,12 +248,31 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": str(exc)}, 400)
             return self._json({"note": note})
 
-        if self.path == "/api/run/delete":
+        # Archiving and deleting are different operations with different consequences for
+        # the record, so they are different endpoints rather than a flag on one.
+        if self.path == "/api/run/archive":
             try:
-                STORE.delete_run(self._run_id(payload))
+                STORE.archive_run(self._run_id(payload),
+                                  bool(payload.get("archived", True)))
             except (ValueError, KeyError) as exc:
                 return self._json({"error": str(exc)}, 400)
             return self._json({"ok": True})
+
+        # What a delete would take, without taking it. The interface asks this before it
+        # asks the researcher, so the question it puts to them names what is at stake
+        # rather than only asking whether they meant it.
+        if self.path == "/api/run/deletion":
+            try:
+                return self._json(STORE.deletion_takes(self._run_id(payload)))
+            except (ValueError, KeyError) as exc:
+                return self._json({"error": str(exc)}, 400)
+
+        if self.path == "/api/run/delete":
+            try:
+                took = STORE.delete_run(self._run_id(payload))
+            except (ValueError, KeyError) as exc:
+                return self._json({"error": str(exc)}, 400)
+            return self._json({"ok": True, "took": took})
 
         if self.path == "/api/validate":
             try:

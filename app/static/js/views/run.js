@@ -22,8 +22,9 @@
 "use strict";
 
 import {$, esc, mark} from "../dom.js";
-import {API, getJSON, postJSON} from "../net.js";
+import {API, getJSON, notice, postJSON} from "../net.js";
 import {checkContract} from "../contract.js";
+import {go} from "../router.js";
 import {EXCLUDE, REASON, absent, fmtVal, label, money, moneyShort, num, pct, size}
   from "../fmt.js";
 import {areaLayer, chartStack, lineLayer, underwaterLayer} from "../charts/axis.js";
@@ -815,8 +816,12 @@ function render(query){
           <button type="button" class="chip" id="markToggle"
             >showing the ${MARK === "liq" ? "bid" : "mid"} mark</button>
           <a class="chip" href="#/bench">compose a run</a>
+          <button type="button" class="chip" id="archiveRun">${
+            RUN.archived ? "restore" : "archive"}</button>
+          <button type="button" class="chip danger" id="deleteRun">delete</button>
         </div>
       </header>
+      <div id="deleteBox"></div>
       ${verdict()}
       ${metricCards()}
       ${evidence()}
@@ -834,6 +839,8 @@ function render(query){
       <div class="scroll" id="runDetail"></div>
     </section>`;
 
+  $("archiveRun").addEventListener("click", archiveRun);
+  $("deleteRun").addEventListener("click", deleteRun);
   $("markToggle").addEventListener("click", () => {
     MARK = MARK === "mid" ? "liq" : "mid";
     replace({mark: MARK});
@@ -848,6 +855,94 @@ function render(query){
   renderTab(tab, query);
   paintDetail();
 }
+
+/* ── archiving and deleting ──────────────────────────────────────────────────────
+ *
+ * Two operations, and which one is right turns on a question about the **record**, not
+ * about the run:
+ *
+ *   archive   research that did not work out. It stays in the trial count, because
+ *             `count_trials` deflates the best result by how much searching produced it —
+ *             a search that quietly shrinks every time a failure is tidied away reports
+ *             the survivor as more significant than the work supports. Reversible.
+ *   delete    a record that was never research: a guard's own test run, a configuration
+ *             with a typo, a curl aimed at the wrong port. Those must **not** be archived,
+ *             because a search size inflated by somebody else's test runs understates the
+ *             result just as surely as a deleted failure overstates it. Not reversible.
+ *
+ * The design plan said archive and never delete, and for research that is right. It did
+ * not account for a store that accumulates runs nobody performed — twenty-seven of this
+ * one's hundred and seventy-one came from a guard that ran a real backtest on every
+ * invocation. Deleting those is not tidying away evidence, it is removing something that
+ * was never evidence.
+ */
+async function archiveRun(){
+  const now = !RUN.archived;
+  try{
+    await postJSON(API.runArchive, {id: RUN.id, archived: now});
+  }catch(e){ notice(`could not ${now ? "archive" : "restore"} run ${RUN.id}: ${e.message}`); return; }
+  RUN.archived = now ? 1 : 0;
+  render({tab: TAB, mark: MARK});
+}
+
+/** Delete, having first said what that takes.
+ *
+ * Two steps in the page rather than a `confirm()`. A browser dialog can hold one line and
+ * the question it asks is "did you mean it", which the reader has already answered by
+ * pressing the button; the question they actually have is **what else goes with this**,
+ * and that is a list. It stays on screen, where it can be read twice and where the
+ * alternative — archiving — is one click away rather than behind a dismissed modal. */
+async function deleteRun(){
+  const host = $("deleteBox");
+  if(host.dataset.armed === "yes"){ host.innerHTML = ""; host.dataset.armed = ""; return; }
+
+  let takes;
+  try{
+    takes = await postJSON(API.runDeletion, {id: RUN.id});
+  }catch(e){ notice(`could not read what deleting run ${RUN.id} would take: ${e.message}`); return; }
+
+  const lines = [
+    `${takes.strategy} · ${takes.n_trades} trades · ${money(takes.net_pnl)} · ${
+      String(takes.started).slice(0, 10)}`,
+    takes.notes ? `${takes.notes} note${takes.notes === 1 ? "" : "s"} written about it`
+      : "no notes",
+    takes.files.length ? takes.files.join(", ") : "no files on disk",
+  ];
+  // The case where deleting changes what every other run under this name means.
+  const cost = takes.last_of_version && takes.counted_as_a_trial
+    ? `<p class="del-cost">This is the only run of that configuration. Deleting it takes
+       one trial out of the search under <b>${esc(RUN.strategy_name || "untitled")}</b>,
+       and every other run's deflated result rises to match.</p>`
+    : "";
+
+  host.dataset.armed = "yes";
+  host.innerHTML = `<div class="del">
+    <h4>Delete run ${takes.run_id} permanently</h4>
+    <ul>${lines.map(l => `<li>${esc(l)}</li>`).join("")}</ul>
+    ${cost}
+    <p class="del-alt"><b>Archive instead</b> if this was research that did not work —
+      archiving hides it and keeps it in the trial count. Delete is for records that were
+      never research: a guard's test run, a typo'd configuration, a request aimed at the
+      wrong port.</p>
+    <div class="del-row">
+      <button type="button" class="chip danger" id="deleteGo">delete permanently</button>
+      <button type="button" class="chip" id="deleteNo">keep it</button>
+    </div>
+  </div>`;
+
+  $("deleteNo").addEventListener("click", () => {
+    host.innerHTML = ""; host.dataset.armed = "";
+  });
+  $("deleteGo").addEventListener("click", async () => {
+    try{
+      const out = await postJSON(API.runDelete, {id: RUN.id});
+      notice(`run ${out.took.run_id} deleted, with ${out.took.notes} note(s) and `
+        + `${out.took.files.length} file(s).`);
+    }catch(e){ notice(`could not delete run ${RUN.id}: ${e.message}`); return; }
+    go("/bench");
+  });
+}
+
 
 function renderTab(tab, query){
   TAB = tab;

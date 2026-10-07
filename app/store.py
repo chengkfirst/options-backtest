@@ -193,6 +193,13 @@ class Store:
         # rather than twenty, because none of it is queried — it is read whole, for one
         # run, by one page.
         ("run", "analysis", "TEXT"),
+        # Archived, not deleted. A run that is no longer worth looking at is still part of
+        # how much searching produced the one that is: `count_trials` deflates the best
+        # result by the size of the search, so dropping the failures out of the record
+        # makes the survivor look better than the work supports. Hiding and forgetting are
+        # different operations and the store offers both, with `delete_run` for records
+        # that were never research at all.
+        ("run", "archived", "INTEGER NOT NULL DEFAULT 0"),
     )
 
     #: The daily curve, kept beside the trade log. Parquet rather than JSON in the row: a
@@ -391,8 +398,14 @@ class Store:
         symbol: str | None = None,
         verdict: str | None = None,
         limit: int = 200,
+        include_archived: bool = False,
     ) -> list[dict[str, Any]]:
         where, args = [], []
+        # Archived rows are hidden here and **nowhere else**. `run_records`, which feeds
+        # the trial counter, deliberately does not filter: see its docstring. The
+        # asymmetry is the whole point of archiving and would read as a bug without this.
+        if not include_archived:
+            where.append("COALESCE(r.archived, 0) = 0")
         if strategy_name:
             where.append("r.strategy_name = ?"); args.append(strategy_name)
         if symbol:
@@ -511,6 +524,13 @@ class Store:
         and the integer key is new on every rerun. A row saved before the column existed
         carries an empty hash, and the counter **raises** on it rather than counting it as
         distinct -- the honest outcome, because that row genuinely cannot be placed.
+
+        **Archived runs are included here, deliberately.** They are hidden from
+        :meth:`runs` because the researcher is done looking at them; they are counted here
+        because they still happened. `count_trials` deflates the best result by the size of
+        the search, so a search that quietly shrinks every time a failure is tidied away
+        would report a survivor as more significant than the work supports. Filtering
+        `archived` into this query would look like consistency and would be the bug.
         """
         sql = ("SELECT strategy_name, fingerprint, sharpe_annualised, started, "
                "n_trades, net_pnl, synthetic FROM run")
@@ -529,14 +549,83 @@ class Store:
             "synthetic": bool(r["synthetic"]),
         } for r in rows]
 
-    def delete_run(self, run_id: int) -> None:
-        row = self._db.execute("SELECT trades_file FROM run WHERE id=?", (run_id,)).fetchone()
+    def archive_run(self, run_id: int, archived: bool = True) -> None:
+        """Hide a run from the list, keeping it in the record.
+
+        The right operation for research that did not work out. The run stays in
+        :meth:`run_records`, so the trial counter still knows it happened and the deflated
+        best result still accounts for it; it simply stops filling the list of things to
+        look at. Reversible, because "I am done with this" is a judgement that can change
+        and the record should not depend on it being right.
+        """
+        if self._db.execute("SELECT 1 FROM run WHERE id=?", (run_id,)).fetchone() is None:
+            raise KeyError(f"there is no run {run_id}")
+        self._db.execute("UPDATE run SET archived=? WHERE id=?", (1 if archived else 0, run_id))
+        self._db.commit()
+
+    def deletion_takes(self, run_id: int) -> dict[str, Any]:
+        """What :meth:`delete_run` would remove, without removing it.
+
+        A delete that only says "are you sure" is asking the wrong question — the reader
+        knows they pressed delete and does not know what else is attached. This answers the
+        question they actually have.
+        """
+        row = self._db.execute(
+            "SELECT id, strategy_name, strategy_ver, started, n_trades, net_pnl,"
+            " fingerprint, trades_file FROM run WHERE id=?", (run_id,)).fetchone()
         if row is None:
             raise KeyError(f"there is no run {run_id}")
+        notes = self._db.execute(
+            "SELECT COUNT(*) FROM note WHERE run_id=?", (run_id,)).fetchone()[0]
+        siblings = self._db.execute(
+            "SELECT COUNT(*) FROM run WHERE strategy_name=? AND strategy_ver=? AND id<>?",
+            (row["strategy_name"], row["strategy_ver"], run_id)).fetchone()[0]
+        files = []
+        if row["trades_file"] and (self.trades_dir / row["trades_file"]).exists():
+            files.append(f"trades/{row['trades_file']}")
+        equity = self.home / self.EQUITY_DIR / f"run_{run_id:05d}.parquet"
+        if equity.exists():
+            files.append(f"{self.EQUITY_DIR}/{equity.name}")
+        return {
+            "run_id": run_id,
+            "strategy": f"{row['strategy_name']} v{row['strategy_ver']}",
+            "started": row["started"],
+            "n_trades": row["n_trades"],
+            "net_pnl": row["net_pnl"],
+            "notes": notes,
+            "files": files,
+            # The trial counter works on the reproducibility fingerprint, so deleting the
+            # only run that carries one for a configuration removes that configuration from
+            # the search — which is the thing that makes the surviving result look better
+            # than it is.
+            "last_of_version": siblings == 0,
+            "counted_as_a_trial": bool(row["fingerprint"]),
+        }
+
+    def delete_run(self, run_id: int) -> dict[str, Any]:
+        """Remove a run and everything attached to it. **Not reversible.**
+
+        For records that were never research: a guard's own test run, a configuration with
+        a typo in it, a curl that went to the wrong port. Those should not be archived —
+        archiving keeps them in the trial count, and a search size inflated by other
+        people's test runs understates the result just as surely as a deleted failure
+        overstates it.
+
+        For research that did not work, use :meth:`archive_run`.
+
+        Returns what it took, so the caller can say so rather than reporting a bare
+        success. The notes go with it through `ON DELETE CASCADE`; the parquet files have
+        to be unlinked here, and the equity curve was being left behind — a run deleted
+        before this left its daily curve on disk with nothing pointing at it.
+        """
+        took = self.deletion_takes(run_id)
+        row = self._db.execute("SELECT trades_file FROM run WHERE id=?", (run_id,)).fetchone()
         if row["trades_file"]:
             (self.trades_dir / row["trades_file"]).unlink(missing_ok=True)
+        (self.home / self.EQUITY_DIR / f"run_{run_id:05d}.parquet").unlink(missing_ok=True)
         self._db.execute("DELETE FROM run WHERE id=?", (run_id,))
         self._db.commit()
+        return took
 
     # ── verdicts ──────────────────────────────────────────
     def add_note(self, run_id: int, body: str, verdict: str = "open") -> dict[str, Any]:

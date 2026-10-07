@@ -45,6 +45,10 @@ export const CONTRACT = {
         "diagnostics.*.last", "diagnostics.*.reasons",
         // The conclusion tier of the analysis page. Every one of these is a number the
         // backend computed; the page renders them and derives none of its own.
+        // Whether this run has been archived. The run page reads it to decide whether its
+        // control says archive or restore, so a rename would silently leave the button
+        // offering the wrong one.
+        "archived",
         "analysis", "analysis.intervals", "analysis.investor", "analysis.costs",
         "analysis.by_exit_reason", "analysis.excursion",
         // The headline comparison: the same first-order exposure held in shares. A list,

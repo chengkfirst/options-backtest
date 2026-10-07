@@ -59,6 +59,9 @@ export const API = {
   note: "/api/note",
   notes: "/api/notes",
   strategies: "/api/strategies",
+  runArchive: "/api/run/archive",
+  runDeletion: "/api/run/deletion",
+  runDelete: "/api/run/delete",
 };
 
 /** A GET returning JSON.

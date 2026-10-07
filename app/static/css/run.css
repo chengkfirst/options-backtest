@@ -654,3 +654,36 @@ td.bar span {
 /* An input's constraint, beside the field rather than behind it. It is what the field
    will accept, which is not an explanation and does not belong in a tooltip. */
 .vhint { font-weight: 400; color: var(--text-muted); }
+
+/* ── archiving and deleting ─────────────────────────────────────────────────────
+ *
+ * The confirmation is in the page, not a `confirm()`. A browser dialog holds one line and
+ * asks "did you mean it", which the reader answered by pressing the button; the question
+ * they have is what else goes with the run, and that is a list. Here it can be read twice,
+ * and the alternative sits beside it rather than behind a dismissed modal. */
+.chip.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.chip.danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+
+.del {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface-1));
+}
+.del h4 { margin: 0 0 var(--space-2); font-size: var(--font-sm); color: var(--danger); }
+.del ul { margin: 0; padding-left: var(--space-4); }
+.del li {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.del-cost, .del-alt {
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.del-cost { color: var(--warning); }
+.del-row { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
