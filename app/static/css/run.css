@@ -757,3 +757,21 @@ td.bar span {
 /* One trade's holding period, shaded across every layer of the stack. Under the lines, so
    it reads as a region of the chart rather than as another series. */
 .held { fill: color-mix(in srgb, var(--accent) 13%, transparent); }
+
+/* A sortable column header. A button, not a styled cell, so the keyboard reaches it and a
+   screen reader announces it as the control it is. */
+.sortby {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 3px;
+  align-items: baseline;
+}
+.sortby:hover { color: var(--text-primary); }
+.sortby.on { color: var(--accent); }

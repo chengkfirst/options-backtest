@@ -836,7 +836,34 @@ const COLUMNS = [
   {key: "holding_days", name: "held", fmt: v => num(v, 0)},
   {key: "entry_iv", name: "IV in", fmt: pct},
   {key: "entry_delta", name: "Δ in", fmt: v => num(v, 3)},
+  // How far the trade ran in favour and against while it was open. Both are named in the
+  // design plan's default columns and both reach the page as "—" on a run stored before
+  // `mfe`/`mae` were passed through, which is a fact about that run rather than a gap here.
+  {key: "mfe", name: "best", fmt: pct, sign: true},
+  {key: "mae", name: "worst", fmt: pct, sign: true},
 ];
+
+/* Which column the table is ordered by, and which way. The plan asks for sorting and the
+   table had none, so the only order available was the one the trades happened in — which
+   answers "what happened next" and never "which was the worst". */
+let SORT = {key: null, dir: -1};
+
+/** The rows in the order the header asks for. A column with no value sorts to the end
+ *  whichever way the arrow points: an absent number is not a small one, and letting it
+ *  float to the top of a descending sort would read as the extreme. */
+function sorted(rows){
+  if(!SORT.key) return rows;
+  const col = COLUMNS.find(c => c.key === SORT.key);
+  const val = r => r[SORT.key];
+  return [...rows].sort((a, b) => {
+    const x = val(a), y = val(b);
+    if(absent(x) && absent(y)) return 0;
+    if(absent(x)) return 1;
+    if(absent(y)) return -1;
+    return (typeof x === "number" && typeof y === "number"
+      ? x - y : String(x).localeCompare(String(y))) * SORT.dir;
+  });
+}
 
 function paintDetail(){
   const box = $("runDetail");
@@ -850,10 +877,14 @@ function paintDetail(){
       brush by clicking once on a chart.</p>`;
     return;
   }
-  const shown = rows.slice(0, 400);
+  const shown = sorted(rows).slice(0, 400);
   box.innerHTML = `<table class="trades"><thead><tr>${
-    COLUMNS.map(c => `<th${c.left ? ' class="left"' : ""}>${esc(c.name)}</th>`).join("")
-  }</tr></thead><tbody>${shown.map((r, i) => `<tr tabindex="0" data-row="${i}"${
+    COLUMNS.map(c => `<th${c.left ? ' class="left"' : ""}><button type="button"
+      class="sortby${SORT.key === c.key ? " on" : ""}" data-sort="${esc(c.key)}"
+      >${esc(c.name)}${SORT.key === c.key
+        ? `<span aria-hidden="true">${SORT.dir < 0 ? "↓" : "↑"}</span>` : ""}</button></th>`).join("")
+  }</tr></thead><tbody>${shown.map((r, i) => `<tr tabindex="0" data-row="${i}"
+    data-trade-id="${esc(String(r.trade_id ?? ""))}"${
     r === PICKED ? ' class="picked" aria-selected="true"' : ""}>${
     COLUMNS.map(c => {
       const raw = r[c.key];
@@ -866,6 +897,15 @@ function paintDetail(){
   }</tr>`).join("")}</tbody></table>${
     rows.length > shown.length
       ? `<p class="hint">The first ${shown.length} are shown.</p>` : ""}`;
+
+  for(const th of box.querySelectorAll("[data-sort]"))
+    th.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      // Same column flips the direction; a new one starts descending, because the first
+      // question of a sorted column is almost always "which are the biggest".
+      SORT = SORT.key === key ? {key, dir: -SORT.dir} : {key, dir: -1};
+      paintDetail();
+    });
 
   for(const tr of box.querySelectorAll("tbody tr")){
     tr.addEventListener("click", () => pick(shown[+tr.dataset.row]));
@@ -910,7 +950,7 @@ function pick(row){
   const box = $("runDetail");
   if(!box) return;
   for(const tr of box.querySelectorAll("tbody tr")){
-    const on = VIEW[+tr.dataset.row] === PICKED && PICKED !== null;
+    const on = PICKED !== null && tr.dataset.tradeId === String(PICKED.trade_id ?? "");
     tr.classList.toggle("picked", on);
     if(on) tr.setAttribute("aria-selected", "true");
     else tr.removeAttribute("aria-selected");

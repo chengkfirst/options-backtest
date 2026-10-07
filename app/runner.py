@@ -48,6 +48,12 @@ COLUMNS = [
     # actually made at order time**, not one imposed afterwards from the outcome —
     # without it the interface can only group by numeric bands.
     "tag", "note",
+    # How far each trade ran in favour and against while it was open. The design plan
+    # lists both among the trade table's default columns, and the excursion study is built
+    # on them — but they were not in this list, so the one surface that could show them
+    # per trade never received them. Only the event-driven engine collects them; under the
+    # trade table the column is simply absent, which the interface reads as "not recorded".
+    "mfe", "mae",
 ]
 #: Signal columns come through by prefix, so custom signals arrive automatically.
 SIGNAL_PREFIX = "entry_sig_"
