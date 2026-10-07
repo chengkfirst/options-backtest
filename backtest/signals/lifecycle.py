@@ -202,6 +202,40 @@ class Lifecycle:
     #: which ``__post_init__`` enforces rather than silently ignoring.
     cooldown_sessions: int | None = None
 
+    #: **Which exit wins when a stop and a take-profit both fire on one day.**
+    #:
+    #: The document's "Override" influence channel: "two slots issue conflicting actions
+    #: in the same period", with the mechanism given as "conflict policy in the lifecycle
+    #: config". The policy existed and was a constant in `core/types.py`, so the one
+    #: research tool the document asks for here -- 6.3's "compare Open-state run orders
+    #: and conflict policies" -- had nothing to compare.
+    #:
+    #: ``stop_first`` is the default and is what the system has always done: a daily bar
+    #: does not say which level was touched first, and assuming the losing side came
+    #: first cannot flatter the strategy. ``take_profit_first`` is the other reading of
+    #: the same ambiguity, and the gap between them is a number rather than an argument.
+    #:
+    #: **With the built-in rules this can never bind**, and that is worth knowing before
+    #: a sweep over it reports no difference and gets read as "the choice does not
+    #: matter". Both rules test the *same* daily premium ratio -- one for ``>= target``
+    #: and one for ``<= -stop`` -- and a single number cannot satisfy both. The conflict
+    #: is reachable only when the two slots read different things, which is what a
+    #: component variant is for: ``stop_loss/underlying`` fires on the underlying's move
+    #: while ``take_profit/premium`` fires on the premium, and an IV spike can move those
+    #: in opposite directions on one session.
+    conflict_policy: str = "stop_first"
+
+    #: **The order the Open-state slots are consulted in**, or None for the document's
+    #: own order. Figure 2 of the architecture document marks this "order TBD", and the
+    #: same research tool asks for it to be comparable.
+    #:
+    #: It does not change which exit wins -- that is the conflict policy above, applied
+    #: after every slot has been asked. What it changes is **what each slot can see**:
+    #: under the pass-through channel a slot writes to the trade context and later slots
+    #: read it, so a headwind that runs before the stop is an input to it and one that
+    #: runs after is not.
+    open_order: tuple[str, ...] | None = None
+
     def __post_init__(self) -> None:
         from backtest.core.errors import StartupError
 
@@ -210,6 +244,21 @@ class Lifecycle:
                 f"{self.reentry_policy!r} is not a reentry policy; one of "
                 f"{', '.join(REENTRY_POLICIES)}"
             )
+        from backtest.core.types import CONFLICT_POLICIES
+
+        if self.conflict_policy not in CONFLICT_POLICIES:
+            raise StartupError(
+                f"{self.conflict_policy!r} is not a conflict policy; one of "
+                f"{', '.join(sorted(CONFLICT_POLICIES))}"
+            )
+        if self.open_order is not None:
+            wanted, allowed = tuple(self.open_order), RUNS_IN[State.OPEN]
+            if sorted(wanted) != sorted(allowed):
+                raise StartupError(
+                    f"open_order must be a reordering of the Open-state slots "
+                    f"{allowed}, and {wanted} is not. A slot left out would silently "
+                    f"stop running, and one added here does not run in this state"
+                )
         if self.reentry_policy == "cooldown" and not self.cooldown_sessions:
             raise StartupError(
                 "reentry_policy='cooldown' needs cooldown_sessions -- how long to wait "

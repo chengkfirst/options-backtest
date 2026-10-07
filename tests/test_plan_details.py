@@ -25,7 +25,7 @@ import pathlib
 import pytest
 
 from tests.kinds import kind, labels
-from tests.plan_details import CLAUSES
+from tests.plan_details import CLAUSES, FIGURES
 
 #: What a failure here means, and where it is. See ``tests/kinds.py``.
 pytestmark = labels("architecture", "cross")
@@ -116,6 +116,42 @@ class TestEveryClauseIsCheckedAgainstItsOwnFiles:
                     f"one of its detail clauses is built, so the name-level inventory "
                     f"is understating what exists"
                 )
+
+
+class TestTheFiguresWereRead:
+    """**The check that would have caught three figures going unread for the whole
+    project.**
+
+    The plan is a PDF; the working copy used to build every inventory here is a text
+    extraction, and a text extraction drops images. Nothing noticed, because nothing was
+    comparing the inventory against the document in a form that contained them.
+
+    So the figure count is read from the PDF itself. A figure added to the document fails
+    this, which is the only way "we read the whole plan" stays true as the plan changes.
+    """
+
+    PLAN = pathlib.Path("Plan/backtest-system-architecture.pdf")
+
+    @kind("guard")
+    def test_every_figure_in_the_pdf_is_in_the_inventory(self):
+        pytest.importorskip("pypdf")
+        if not self.PLAN.exists():
+            pytest.skip(f"{self.PLAN} is not in this checkout")
+        import pypdf
+
+        reader = pypdf.PdfReader(str(self.PLAN))
+        pages = sorted({i + 1 for i, page in enumerate(reader.pages) if page.images})
+        recorded = sorted({page for page, _ in FIGURES})
+        assert pages == recorded, (
+            f"the document has figures on pages {pages} and the inventory records "
+            f"{recorded}. A figure that is in the document and not here has never been "
+            f"read against the code -- the text extraction does not contain it"
+        )
+
+    def test_each_figure_says_what_it_shows(self):
+        """A page number alone records that a figure exists, not that anybody read it."""
+        for page, says in FIGURES:
+            assert len(says) > 40, f"the figure on page {page} is recorded as {says!r}"
 
 
 class TestWhatTheDetailsSay:

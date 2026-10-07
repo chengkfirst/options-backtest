@@ -846,6 +846,65 @@ INTERFACES: tuple[Clause, ...] = (
 )
 
 
+#: Layer 0 and the cross-cutting figures.
+#:
+#: **The plan is a PDF and the working copy here is a text extraction, which drops
+#: images.** Every inventory in this repo was built from that extraction, so for a long
+#: time three figures' worth of requirements were never checked against anything --
+#: including one, the slot-interaction diagram, that the text does not restate.
+#:
+#: ``FIGURES`` below is checked against the PDF itself, so a figure added to the document
+#: fails the guard rather than being quietly skipped again.
+FIGURES: tuple[tuple[int, str], ...] = (
+    (2, "layers and event flow: what each layer emits, the engine driving all of them, "
+        "and the fixed nine-stage order within one timestamp"),
+    (3, "the candidate lifecycle: Idle, Armed, Open, Closed, and which slots run in each"),
+    (6, "slot interaction: the trade context between the seven slots, what it holds, "
+        "and the five influence channels"),
+)
+
+
+DIAGRAMS: tuple[Clause, ...] = (
+    Clause("EventLoop", "corporate actions are ordered before anything is priced",
+           ("backtest/core/events.py",), needle="EventType.CORPORATE_ACTION: 10"),
+    Clause("SetupRule", "Positioning runs in Armed, beside the entry trigger",
+           ("backtest/signals/lifecycle.py",), needle='State.ARMED: ("setup", "entry"'),
+    Clause("SetupRule", "the Closed state runs nothing; the record is finalised",
+           ("backtest/signals/lifecycle.py",), needle="State.CLOSED: ()"),
+    Clause("SignalCombiner", "gate: one slot decides whether another may run",
+           ("backtest/signals/lifecycle.py",), needle="RUNS_IN"),
+    Clause("SignalCombiner", "pass-through: one slot's output is written to the trade "
+                             "context and read by later slots",
+           ("backtest/core/trade_context.py",), needle="class SlotWriter"),
+    Clause("SignalCombiner", "shared context: market state visible to every slot",
+           ("backtest/core/dataview.py",), needle="class DataView"),
+    Clause("SignalCombiner", "override: a conflict policy in the lifecycle config",
+           ("backtest/signals/lifecycle.py",), needle="conflict_policy"),
+    Clause("SignalCombiner", "the Open-state run order is a lifecycle setting",
+           ("backtest/signals/lifecycle.py",), needle="open_order"),
+    Clause("TradeContext", "holds read-only book state, positions, P&L, greeks and "
+                           "fill status",
+           ("backtest/signals/exit_context.py",), needle="book: Any = None"),
+    Clause("TradeContext", "every write is timestamped and logged",
+           ("backtest/core/trade_context.py",), needle="def writes"),
+    Clause("TradeContext", "a constraint's outcome is written back so slots can see it",
+           ("backtest/engine/loop.py",), needle="_last_entry_veto"),
+    Clause("SignalCombiner", "request: one slot asks another to act",
+           ("backtest/core/actions.py",),
+           absent="the action vocabulary has HEDGE_ADD and REDUCE, and nothing **routes** "
+                  "an action to the slot that owns it -- the document's example is a "
+                  "headwind asking Hedge to attach a leg. It needs the hedge slot, which "
+                  "is blocked on multi-leg, and a router that does not exist"),
+    Clause("EventLoop", "a sequence number as the third sort key",
+           ("backtest/core/events.py",),
+           absent="the figure says the engine orders events by time, **phase, seq**. "
+                  "Within a phase the order is publication order, kept by the list rather "
+                  "than written on the event -- equivalent while the stream lives in "
+                  "memory, and not equivalent the moment a persisted stream has to be "
+                  "re-sorted after loading, when the order would depend on the storage"),
+)
+
+
 CLAUSES: tuple[Clause, ...] = (ACCOUNTING + EXECUTION + DATA
                                + SIGNALS + PORTFOLIO + ENGINE
-                               + RESEARCH + INTERFACES)
+                               + RESEARCH + INTERFACES + DIAGRAMS)

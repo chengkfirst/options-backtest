@@ -83,11 +83,47 @@ _EXIT_RANK: Mapping[ExitReason, int] = MappingProxyType(
 )
 
 
-def resolve_exit_reason(reasons: "list[ExitReason] | tuple[ExitReason, ...]") -> ExitReason:
-    """Pick one reason when several hold on the same day, by fixed precedence."""
+#: The optimistic reading of the same ambiguous day: the take-profit is assumed to have
+#: been touched first. Identical to ``EXIT_PRIORITY`` except that the two swap.
+#:
+#: **Both orders are defensible and they cannot both be checked**, which is exactly why
+#: the document puts the conflict policy in the lifecycle config rather than in the
+#: platform: on a daily bar nothing says which level was touched first, and the choice
+#: is worth a measurable amount on any strategy that sets both.
+_TAKE_PROFIT_FIRST: tuple[ExitReason, ...] = (
+    ExitReason.RISK_FORCED,
+    ExitReason.TAKE_PROFIT,
+    ExitReason.STOP_LOSS,
+) + EXIT_PRIORITY[3:]
+
+#: policy name -> precedence. ``stop_first`` is the default and is what the system has
+#: always done; see the note on ``EXIT_PRIORITY``.
+CONFLICT_POLICIES: Mapping[str, tuple[ExitReason, ...]] = MappingProxyType({
+    "stop_first": EXIT_PRIORITY,
+    "take_profit_first": _TAKE_PROFIT_FIRST,
+})
+
+
+def resolve_exit_reason(
+    reasons: "list[ExitReason] | tuple[ExitReason, ...]",
+    policy: str = "stop_first",
+) -> ExitReason:
+    """Pick one reason when several hold on the same day.
+
+    ``policy`` is the lifecycle's conflict policy. It changes only which of a
+    simultaneous stop and take-profit is recorded -- every other pair keeps its order,
+    because every other pair has a reason that is not a guess about intraday sequence.
+    """
     if not reasons:
         raise ValueError("at least one exit reason is required")
-    return min(reasons, key=lambda r: _EXIT_RANK[r])
+    order = CONFLICT_POLICIES.get(policy)
+    if order is None:
+        raise ValueError(
+            f"{policy!r} is not a conflict policy; one of "
+            f"{', '.join(sorted(CONFLICT_POLICIES))}"
+        )
+    rank = {reason: i for i, reason in enumerate(order)}
+    return min(reasons, key=lambda r: rank[r])
 
 
 @dataclass(frozen=True, slots=True, order=True)

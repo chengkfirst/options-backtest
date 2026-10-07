@@ -317,6 +317,40 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
     ),
     Mutation(
+        # Three figures' worth of requirements were never read, because the text
+        # extraction every inventory was built from drops images.
+        "the inventory is checked against the figures in the PDF itself",
+        "tests/plan_details.py",
+        "    (6, \"slot interaction: the trade context between the seven slots, what it holds, \"",
+        "    (99, \"slot interaction: the trade context between the seven slots, what it holds, \"",
+        ("tests/test_plan_details.py::TestTheFiguresWereRead",),
+    ),
+    Mutation(
+        # The slot diagram says the context also holds read-only book state; the engine
+        # built every one of them with an empty mapping.
+        "a slot can read the book it is trading",
+        "backtest/engine/loop.py",
+        "                    equity=snap.equity_mid, cash=snap.cash,",
+        "                    cash=snap.cash,",
+        ("tests/test_figures.py::TestTheContextHoldsTheBook",),
+    ),
+    Mutation(
+        # "The outcome is written back to the trade context so slots can see it."
+        "a constraint's veto reaches the slots",
+        "backtest/engine/loop.py",
+        "                    vetoed=self._last_entry_veto,",
+        '                    vetoed="",',
+        ("tests/test_figures.py::TestThePortfolioVerdictReachesTheSlots",),
+    ),
+    Mutation(
+        # The policy existed as a constant, so the research tool had nothing to compare.
+        "the conflict policy comes from the lifecycle",
+        "backtest/engine/loop.py",
+        "        self._conflict_policy = strategy.lifecycle.conflict_policy",
+        '        self._conflict_policy = "stop_first"',
+        ("tests/test_conflict_policy.py::TestTheEngineAppliesIt",),
+    ),
+    Mutation(
         # The cost section listed three fees and totalled them, for a book whose largest
         # cost is the spread and is not a fee.
         "the spread is part of the cost total",

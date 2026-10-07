@@ -47,6 +47,10 @@ from backtest.data.market import MarketData
 from backtest.signals.plan import Context, Plan
 from backtest.signals.review import Add, Close, PositionView, Reduce
 from backtest.signals.exit_context import exit_context
+from backtest.signals.lifecycle import RUNS_IN as _RUNS_IN, State as _State
+
+#: The document's own order for the Open state, used when the lifecycle names none.
+OPEN_SLOTS: tuple[str, ...] = _RUNS_IN[_State.OPEN]
 from backtest.signals.lifecycle import Candidate, State
 from backtest.signals.strategy import ExitRule
 from backtest.engine.runner import Checkpoint
@@ -287,6 +291,11 @@ class EventDrivenEngine:
         #: budget is headwind's job and is not built.
         self.budget = budget
         self.brake = brake
+        #: The lifecycle's conflict policy, set by ``run()`` from the strategy. Defaulted
+        #: here so the engine is usable before a run, and deliberately **not** reset per
+        #: session -- it is a property of the run, and resetting it there silently undid
+        #: what ``run()`` had just read from the strategy.
+        self._conflict_policy = "stop_first"
         #: How many trading days to keep quoting a contract **after** its trade closed.
         #:
         #: This is the one thing counterfactual exit research cannot do without, and the
@@ -347,6 +356,10 @@ class EventDrivenEngine:
         compares against.
         """
         self._guard(strategy)
+        # The lifecycle's conflict policy, read once. It changes which exit is recorded
+        # when a stop and a take-profit both fire, so it is in the run fingerprint
+        # through `Lifecycle` -- which the manifest hashes whole.
+        self._conflict_policy = strategy.lifecycle.conflict_policy
         if resume_from is not None:
             if resume_from.strategy_name != strategy.name:
                 raise StartupError(
@@ -402,6 +415,12 @@ class EventDrivenEngine:
             else {self.config.symbol: Candidate(symbol=self.config.symbol)})
         self._brake_state = counters.get("brake_state", "none")
         self._risk = NOTHING
+        #: Why the portfolio layer last refused an entry **this session**, or "".
+        #:
+        #: Cleared at the top of each session, so a veto from three days ago cannot read
+        #: as current -- which is the way a written-back outcome goes wrong: it is more
+        #: misleading stale than absent.
+        self._last_entry_veto = ""
         self._daily_return = counters.get("daily_return", 0.0)
         self._prev_equity = counters.get("prev_equity", 0.0)
         self._last_greeks = None
@@ -621,6 +640,44 @@ class EventDrivenEngine:
                                  self.market.spot(day).or_else(float("nan")), snap.equity_mid)
             greeks_daily.append(g)
             self._last_greeks = g
+            # **The book state every open trade's slots can read**, and the session their
+            # writes are stamped with. The document's slot diagram says the trade context
+            # also holds read-only book state, positions, P&L, greeks and fill status;
+            # the engine built each context with an empty mapping, so a stop loss could
+            # read what the setup wrote and nothing about the account it was trading.
+            for trade in open_trades.values():
+                position = ledger.position(trade.contract)
+                trade.slot_record.on(day).with_book(
+                    equity=snap.equity_mid, cash=snap.cash,
+                    premium_at_risk=snap.premium_at_risk,
+                    positions=len(ledger), drawdown=self._drawdown,
+                    delta=g.delta, gamma=g.gamma, vega=g.vega, theta=g.theta,
+                    # This trade's own fill status, which is what distinguishes the book
+                    # state from a quantity the slot already knows: filled is what the
+                    # ledger holds now, intended is what the trade asked for.
+                    filled=position.quantity if position is not None else 0,
+                    intended=trade.quantity,
+                    # **The portfolio layer's verdict, written back where slots can see
+                    # it.** The document's slot-links table asks for exactly this: a
+                    # constraint or risk rule may "scale, veto or force actions; the
+                    # outcome (for example 'vetoed by premium limit') is written back to
+                    # the trade context so slots can see it". It was recorded in the
+                    # event log and emitted on the bus, and neither of those is readable
+                    # by a component deciding. A headwind that should back off while the
+                    # book is already halted had no way to know it was halted.
+                    risk_action=self._risk.action.value,
+                    entries_blocked=bool(self._risk.blocks_entries),
+                    risk_reason=getattr(self._risk, "reason", "") or "",
+                    # The portfolio layer's most recent refusal, whatever refused it --
+                    # the premium budget, an exposure limit or a scenario limit. An open
+                    # trade's slots cannot be refused directly (nothing here reduces a
+                    # position from the portfolio layer), so what this tells them is
+                    # "the book is at a limit and cannot take anything new", which is a
+                    # real input to a headwind or a stop.
+                    #
+                    # It is the **previous** session's refusal: see the clear below.
+                    vetoed=self._last_entry_veto,
+                )
             # 4  the book-wide risk rule. Its verdict is one of the document's four
             # actions, and **it acts on the book** -- scaling down reduces the positions
             # that are open, not only the size of the next entry. The brake used to do the
@@ -672,6 +729,17 @@ class EventDrivenEngine:
                 break
             self._track_excursions(ledger, open_trades, quotes, day, paths)
             self._track_shadow(shadowing, day, shadow)
+            # **Cleared after the book was written and before today's decisions**, which
+            # makes what a slot reads the *previous* session's refusal.
+            #
+            # That is the only causally sound answer and it is deliberate: today's entry
+            # veto happens later in this same session, after the exits have been
+            # evaluated, so a slot reading it would be reading a decision that had not
+            # been made yet. One session of lag, like every other thing a component sees.
+            #
+            # Cleared rather than left standing, because a veto from three days ago read
+            # as current is worse than no veto at all.
+            self._last_entry_veto = ""
 
             # 6-7  signals -> the strategy
             view = self.signals.on(day)
@@ -732,7 +800,8 @@ class EventDrivenEngine:
                     # exit reason by precedence, or the review's own kind when the review
                     # acted. Crediting "exit" for all of them would make attribution by
                     # component useless, which is the whole reason the field exists.
-                    first = resolve_exit_reason(list(reasons)) if reasons else None
+                    first = (resolve_exit_reason(list(reasons), self._conflict_policy)
+                                 if reasons else None)
                     slot = _SLOT_FOR_EXIT.get(first, "exit")
                     targets.want(Adjustment(
                         contract=pos.contract, quantity=0, slot=slot, when=day,
@@ -811,7 +880,15 @@ class EventDrivenEngine:
                 # wants is what the candidate saw **when it opened**, and a context
                 # carrying three months of arming decisions would answer a different
                 # question. Sessions it spent armed are the candidate's own counters.
-                candidate_ctx = market_only({})
+                candidate_ctx = market_only({}).with_book(
+                    # What the portfolio layer last said about this candidate's entries.
+                    # The slot-links table: the outcome is written back to the trade
+                    # context so slots can see it -- and an entry slot is exactly the
+                    # one that should stop trying while a limit is refusing it.
+                    entries_blocked=bool(self._risk.blocks_entries),
+                    risk_action=self._risk.action.value,
+                    vetoed=self._last_entry_veto,
+                )
                 setup_note = candidate_ctx.writer("setup")
                 armed = bool(strategy.setup(
                     replace(self._market_ctx(day, ledger), write=setup_note)))
@@ -1277,6 +1354,10 @@ class EventDrivenEngine:
                 # variant may read more **within** it.
                 view=DataView.at(day, market=self.market, signals=self.signals,
                                  chain=self.chain),
+                # The book, as the slot diagram says the context carries it. Taken from
+                # the context the day's bookkeeping already filled, so there is one
+                # source for it rather than two that can disagree.
+                book=trade.slot_record.book,
             )
             # **Each slot writes only into its own namespace.** The writer is bound to
             # the slot name and has nowhere else to put anything, so two slots both
@@ -1287,32 +1368,51 @@ class EventDrivenEngine:
             # slot that ran is never indistinguishable from a slot that did not. A form
             # that wants to add its own reasoning takes `ctx["write"]`, which is the same
             # bound writer: the component writes, and it cannot write elsewhere.
-            take = strategy.components.get("take_profit")
-            stop = strategy.components.get("stop_loss")
+            # **The Open-state slots run in the lifecycle's order.** Figure 2 of the
+            # architecture document marks the order "TBD" and 6.3 asks for it to be
+            # comparable; it was the order these two blocks happened to be written in.
+            #
+            # It does not decide which exit wins -- the conflict policy does that, after
+            # every slot has been asked. What it decides is what each slot can **see**:
+            # a slot writes to the trade context and later slots read it, so running the
+            # stop before the take-profit makes the stop's note an input to the
+            # take-profit's decision and not the other way round.
+            def _take_profit() -> None:
+                take = strategy.components.get("take_profit")
+                note = trade.slot_record.writer("take_profit")
+                note.update({"premium_ratio": ratio,
+                             "level": rule.take_profit,
+                             "form": "component" if take is not None else "rule"})
+                if take is not None:
+                    hit = bool(take({**ctx, "write": note,
+                                     "slots": trade.slot_record}))
+                else:
+                    hit = rule.take_profit is not None and ratio >= rule.take_profit
+                note.write("fired", hit)
+                if hit:
+                    reasons.append(ExitReason.TAKE_PROFIT)
 
-            tp_note = trade.slot_record.writer("take_profit")
-            tp_note.update({"premium_ratio": ratio,
-                            "level": rule.take_profit,
-                            "form": "component" if take is not None else "rule"})
-            if take is not None:
-                fired = bool(take({**ctx, "write": tp_note}))
-            else:
-                fired = rule.take_profit is not None and ratio >= rule.take_profit
-            tp_note.write("fired", fired)
-            if fired:
-                reasons.append(ExitReason.TAKE_PROFIT)
+            def _stop_loss() -> None:
+                stop = strategy.components.get("stop_loss")
+                note = trade.slot_record.writer("stop_loss")
+                note.update({"premium_ratio": ratio,
+                             "level": rule.stop_loss,
+                             "form": "component" if stop is not None else "rule"})
+                if stop is not None:
+                    hit = bool(stop({**ctx, "write": note,
+                                     "slots": trade.slot_record}))
+                else:
+                    hit = rule.stop_loss is not None and ratio <= -rule.stop_loss
+                note.write("fired", hit)
+                if hit:
+                    reasons.append(ExitReason.STOP_LOSS)
 
-            sl_note = trade.slot_record.writer("stop_loss")
-            sl_note.update({"premium_ratio": ratio,
-                            "level": rule.stop_loss,
-                            "form": "component" if stop is not None else "rule"})
-            if stop is not None:
-                fired = bool(stop({**ctx, "write": sl_note}))
-            else:
-                fired = rule.stop_loss is not None and ratio <= -rule.stop_loss
-            sl_note.write("fired", fired)
-            if fired:
-                reasons.append(ExitReason.STOP_LOSS)
+            runs = {"take_profit": _take_profit, "stop_loss": _stop_loss}
+            order = strategy.lifecycle.open_order or OPEN_SLOTS
+            for slot in order:
+                run_slot = runs.get(slot)
+                if run_slot is not None:
+                    run_slot()
         # `time_exit` is the holding cap and the days-to-expiry floor. It records in its
         # own namespace for the reason the whole partition exists: its exits were once
         # credited to the stop-loss slot, and nothing structural tied the recorded fact to
@@ -1349,6 +1449,7 @@ class EventDrivenEngine:
             if not allowed:
                 self.events.record(EventKind.CANDIDATE_DROPPED, day,
                                    f"exposure limit: {why}")
+                self._last_entry_veto = f"exposure limit: {why}"
                 return None
         target = self.market.calendar.shift(day, self.config.execution_lag_days)
         if target is None or target > self.config.end:
@@ -1416,6 +1517,8 @@ class EventDrivenEngine:
                     EventKind.CANDIDATE_DROPPED, day,
                     describe(blocked, self.scenario_limit,
                              greeks_model_derived=modelled), str(contract))
+                self._last_entry_veto = (
+                    f"scenario limit: {blocked[0].describe()}")
                 self.bus.emit(
                     EventType.RISK, day, "portfolio", component_id="headwind",
                     reason=f"the scenario limit blocked an entry: "
@@ -1438,6 +1541,7 @@ class EventDrivenEngine:
             if not allowed:
                 self.events.record(EventKind.CANDIDATE_DROPPED, day,
                                    f"premium budget: {why}", str(contract))
+                self._last_entry_veto = f"premium budget: {why}"
                 self.bus.emit(
                     EventType.RISK, day, "portfolio", component_id="headwind",
                     reason=f"the premium budget blocked an entry: {why}",
@@ -1924,7 +2028,8 @@ class EventDrivenEngine:
         # trade_id reused later inherits a closed trade's high-water mark.
         for bound in self._stateful_components().values():
             bound.forget(intent.trade_id)
-        reason = resolve_exit_reason(list(intent.exit_reasons)) if intent.exit_reasons else ExitReason.TIME_EXIT
+        reason = (resolve_exit_reason(list(intent.exit_reasons), self._conflict_policy)
+                  if intent.exit_reasons else ExitReason.TIME_EXIT)
         return self._record(trade, exit_day=day, exit_price=price, exit_fees=fees,
                             exit_deferred=self.market.calendar.sessions_between(
                                 intent.execute_on, day),

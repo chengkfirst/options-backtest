@@ -150,6 +150,12 @@ COMPONENTS: tuple[Component, ...] = (
     Component("RollRule", "signals", "replace legs with a later expiry or new strike",
               absent="one logical trade would have to span several contracts, which "
                      "`TradeRecord` does not express -- it is keyed to one contract"),
+    Component("TradeContext", "signals",
+              "one per trade_id: each slot writes its own namespace and reads all of "
+              "them, over read-only book state, positions, P&L, greeks and fill status",
+              # From the slot-interaction figure (p6), which the text extraction dropped
+              # and no inventory had ever read.
+              needle="class TradeContext"),
     Component("SignalCombiner", "signals", "merge actions issued in the same period",
               needle="class TargetPortfolio"),
 
