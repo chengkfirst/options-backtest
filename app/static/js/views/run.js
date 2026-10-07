@@ -169,7 +169,7 @@ function bindKeys(){
         || String(r.contract || "").toLowerCase().includes(q))
       .slice(0, 8)
       .map(r => ({
-        kind: "trade", label: `trade ${r.trade_id} · ${contractParts(r.contract).readable}`,
+        kind: "trade", label: `${r.trade_id} · ${contractParts(r.contract).readable}`,
         hint: money(r.net_pnl), run: () => openCard(r),
       }));
   });

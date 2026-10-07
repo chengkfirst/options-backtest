@@ -110,12 +110,29 @@ catchPageErrors();
 initTheme();
 startKeys();
 
+/* Every run, reachable from anywhere.
+ *
+ * The experiment log offers its own rows while it is open, and that is not enough: the plan
+ * asks the palette to reach a run "from anywhere", and the moment a reader needs one by
+ * number is the moment they are on another page reading about it. `null` means "not read
+ * yet"; opening the palette sets it back to `null` so the list is current.
+ */
+let KNOWN_RUNS = null;
+
 /* The keys that belong to no one surface. Registered first, so a surface's own Escape
    shadows this one while that surface is open — the registry looks at the most recently
    registered scope first. */
 bind("global", [
   {keys: ["mod+k"], does: "open the command palette",
-   run: () => palette.isOpen() ? palette.close() : palette.open()},
+   // Opening re-reads the run list. It was read once and kept for the session, so a
+   // researcher who ran six backtests after opening the box once could not find any of them
+   // in it — the one list that must be current is the one you reach for when you have lost
+   // your place. One small request to a local service, and only when the box is opened.
+   run: () => {
+     if(palette.isOpen()){ palette.close(); return; }
+     KNOWN_RUNS = null;
+     palette.open();
+   }},
   {keys: ["Escape"], does: "close the command palette",
    run: palette.close, where: palette.isOpen},
   // Deliberately no single-letter navigation. A bare key that leaves the page is the one
@@ -131,15 +148,6 @@ palette.provide("surfaces", query => {
                 run: () => (s.external ? window.location.assign(s.external) : go(s.path))}));
 });
 
-/* Every run, from anywhere.
- *
- * The experiment log offers its own rows while it is open, and that is not enough: the plan
- * asks the palette to reach a run "from anywhere", and the moment a reader needs one by
- * number is the moment they are on a different page reading about it. Fetched once, on the
- * first search that could match a run, because the shell must not spend a request on a box
- * nobody has opened.
- */
-let KNOWN_RUNS = null;
 palette.provide("runs", query => {
   const q = String(query || "").trim().toLowerCase();
   if(!q) return [];
@@ -159,7 +167,7 @@ palette.provide("runs", query => {
       || String(r.strategy_name).toLowerCase().includes(q)
       || String(r.symbol).toLowerCase().includes(q))
     .slice(0, 8)
-    .map(r => ({kind: "run", label: `run ${r.id} · ${r.strategy_name} · ${r.symbol}`,
+    .map(r => ({kind: "run", label: `${r.id} · ${r.strategy_name} · ${r.symbol}`,
                 hint: String(r.started).slice(0, 10), run: () => go(`/runs/${r.id}`)}));
 });
 // The page explains itself by hovering, so the explanation is a real component rather
