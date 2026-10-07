@@ -282,14 +282,13 @@ const REGISTERED_REACH = {
   entry: "the condition fires an OPEN. It cannot decline on the contracts it then finds.",
   select: "a feasible region and one ranking target, applied inside Entry.",
   position: "one size, at entry. It is not asked again when a review adds or reduces.",
-  take_profit: "every registered form **closes**. To reduce in stages, or to move the stop "
-             + "as the trade runs, write it in the daily review instead — one function "
-             + "for slots 3, 4, 5 and 6.",
-  stop_loss: "every registered form **closes**. A partial stop is a `Reduce` in the daily "
-           + "review; there is nowhere to record a stop level that moves.",
+  // These three say what the registered forms reach and stop there. Where they stop is the
+  // daily review, and the review is now on the board with a link from each of these cards,
+  // so naming it a third time in prose is the sentence the reader learns to skip.
+  take_profit: "every registered form **closes**, all of it, at one level.",
+  stop_loss: "every registered form **closes**, all of it, at a level fixed at entry.",
   headwind: "the two registered forms are the **book-level** rule — scale down, halt, "
-          + "liquidate. The per-trade headwind is the daily review, which can close, "
-          + "reduce or add.",
+          + "liquidate. Neither looks at an individual position.",
   hedge: "nothing is registered at either level.",
 };
 
@@ -298,6 +297,44 @@ const COLUMN_HEAD = {
   armed: {name: "Armed", what: "a setup has fired; these decide what is bought and how much"},
   open: {name: "Open", what: "a position is on; these are asked in this order, every day"},
 };
+
+/** The daily review, drawn once under the slots it serves.
+ *
+ * Not a fourth card: it is not a slot. It is the engine's own dynamic form of four of them,
+ * asked of every open position every snapshot, and it is the only path to an action other
+ * than closing — `Close`, `Reduce` and `Add`, with the reason recorded against whichever
+ * slot's reasoning produced it.
+ */
+function reviewBlock(all, planMode){
+  const field = all.flatMap(c => c.inputs || []).find(i => i.name === REVIEW_FIELD);
+  // Nothing to draw if the plan has taken over every slot the review serves: there is then
+  // no slot left on the board for it to be the dynamic form of.
+  if(!field) return "";
+  if(planMode && all.every(c => !REVIEW_SLOTS.has(c.key) || c.in_plan)) return "";
+  const mode = all.flatMap(c => c.inputs || []).find(i => i.name === MODE_FIELD);
+  return `<section class="review" id="reviewBlock">
+    <h4 class="comp-h">the daily review</h4>
+    ${mode ? `<div class="review-mode">${fieldHtml(mode)}</div>` : ""}
+    <p class="comp-contract">
+      <span class="comp-level" data-tip="The engine calls review(ctx, pos) for every open
+        position on every snapshot, after the registered forms of slots 3 to 6 have had their
+        say and before the next day is priced.">every open position · every snapshot</span>
+      <span class="comp-emits" data-tip="What the review may return. A struck-through action
+        is one the engine cannot execute yet.">${
+        ["close", "reduce", "add", "roll", "set_stop"].map(actionCode).join(" ")}</span>
+      <span class="comp-wired">${mark("the dynamic form of take profit, stop loss, "
+        + "headwind and positioning — **the only way to act in stages**, and the only way "
+        + "to decide size after entry. Written, not configured: it is code, so it is not a "
+        + "parameter and **cannot be swept or ablated**.")}</span></p>
+    <p class="comp-note" data-depends="${MODE_FIELD}=fixed">the exits are fixed ratios set at
+      entry. Switch to <b>a rule, reviewed daily</b> above to write one instead — the
+      holding cap and the days-to-expiry floor stay in force either way.</p>
+    ${fieldHtml(field)}
+    <p class="hint" data-depends="${MODE_FIELD}=${MODE_RULE}"><button type="button"
+      class="link" id="reviewHelp">hide the reference</button></p>
+    <pre class="help" id="reviewHelpBody" data-depends="${MODE_FIELD}=${MODE_RULE}"></pre>
+  </section>`;
+}
 
 function renderComponents(){
   const planMode = strategyMode() === "plan";
@@ -313,7 +350,11 @@ function renderComponents(){
       ${here.map(c => compBlock(c, planMode)).join("")
         || `<p class="hint col-empty">no slot acts here yet</p>`}
     </section>`;
-  }).join("");
+  }).join("")
+  // Across the board rather than in a column. It serves four slots standing in two of the
+  // three columns, and it is the one configuration that is **written**: Python in a 313 px
+  // column, beside a reference of its own, is not a thing anyone writes in.
+  + reviewBlock(all, planMode);
   // A slot the mapping does not place would vanish silently, which is the one way a
   // generated board can lie about the strategy.
   const placed = new Set(Object.keys(COLUMNS_BY_SLOT));
@@ -334,19 +375,24 @@ function renderComponents(){
  * slot is. The line says what it may emit and, underneath, what of that is actually wired, so
  * the difference between the design and the engine is on the card rather than in a document.
  */
+/** One action from the shared vocabulary.
+ *
+ * An action the engine cannot execute is struck through and carries the engine's own reason.
+ * It stays on the card: the architecture gives this slot that action, and a card that listed
+ * only what runs would read as though the slot were smaller than it is.
+ */
+function actionCode(text){
+  const missing = (META.actions || {}).missing || {};
+  const key = text.replace(/^request /, "").split(" ")[0].toLowerCase();
+  const why = missing[key];
+  return why
+    ? `<code class="not-built" data-tip="Not implemented: ${esc(why)}">${esc(text)}</code>`
+    : `<code>${esc(text)}</code>`;
+}
+
 function contractLine(slot, place){
   if(!place.level) return "";
-  const missing = (META.actions || {}).missing || {};
-  // An action the engine cannot execute is struck through and carries the engine's own reason.
-  // It stays on the card: the architecture gives this slot that action, and a card that
-  // listed only what runs would read as though the slot were smaller than it is.
-  const action = text => {
-    const key = text.replace(/^request /, "").split(" ")[0].toLowerCase();
-    const why = missing[key];
-    return why
-      ? `<code class="not-built" data-tip="Not implemented: ${esc(why)}">${esc(text)}</code>`
-      : `<code>${esc(text)}</code>`;
-  };
+  const action = actionCode;
   return `<p class="comp-contract">
     <span class="comp-level" data-tip="Where this slot acts, and when the engine asks it: ${
       esc(place.when.replace(/\*\*/g, ""))}">${mark(place.level)}</span>
@@ -375,8 +421,16 @@ function compBlock(c, planMode){
   // safety net that applies whichever way the stop is expressed, and a rule written wrong — or
   // a stop switched off — must not be able to drag a position into expiry.
   const own = c.inputs.filter(i => i.name === c.key);
-  const kept = off || byForm ? c.inputs.filter(i => i.name !== c.key) : c.inputs;
-  const body = taken
+  // Whether this slot's own setting is only asked while the exits are fixed ratios — which
+  // is to say, whether the daily review takes the slot over rather than merely adding to it.
+  const byMode = own.some(i => i.depends === `${MODE_FIELD}=fixed`);
+  const kept = (off || byForm ? c.inputs.filter(i => i.name !== c.key) : c.inputs)
+    .filter(i => i.name !== REVIEW_FIELD && i.name !== MODE_FIELD);
+  // Split, because only part of a card belongs to the mode. The picker and the notes about
+  // what decides this slot go away when the review takes it over; the fields that are left
+  // do not — slot 4's holding cap and days-to-expiry floor carry no `depends` on purpose,
+  // being the safety net that must hold whichever way the exit is expressed.
+  const notes = taken
     ? `<p class="comp-note">→ <code>${c.in_plan}</code></p>`
     : !c.inputs.length && !byForm && !off
       ? `<p class="comp-note">${gapHtml(c)}</p>`
@@ -385,8 +439,10 @@ function compBlock(c, planMode){
               ? `. The settings below still apply` : ""}</p>` : ""}
          ${byForm ? `<p class="comp-note">the <b>${esc(choice)}</b> rule decides this${
             own.length ? `, in place of ${own.map(i => esc(i.label)).join(" and ")}`
-                       : ""}</p>` : ""}
-         ${kept.length ? `<div class="fields">${kept.map(fieldHtml).join("")}</div>` : ""}`;
+                       : ""}</p>` : ""}`;
+  const fields = taken || (!c.inputs.length && !byForm && !off) || !kept.length
+    ? ""
+    : `<div class="fields">${kept.map(fieldHtml).join("")}</div>`;
   const badge = STATUS_MARK[c.status]
     ? `<span class="comp-badge ${c.status}">${STATUS_MARK[c.status]}</span>` : "";
   const place = COLUMNS_BY_SLOT[c.key] || {};
@@ -398,8 +454,20 @@ function compBlock(c, planMode){
              in the engine today.">${place.order}</span>`
         : ""}${c.name}${badge}</h4>
       ${contractLine(c.key, place)}
-      ${taken ? "" : variantPicker(c.key, own)}
-      ${body}
+      ${taken ? "" : byMode
+        // In rule mode the review decides this slot, so its forms go away with its field.
+        // Leaving the picker up showed a form selected on a slot the review had taken —
+        // two answers to one question, and nothing on screen saying which one ran.
+        ? `<div data-depends="${MODE_FIELD}=fixed">${variantPicker(c.key, own)}${notes}</div>`
+        : `${variantPicker(c.key, own)}${notes}`}
+      ${fields}
+      ${!taken && REVIEW_LACK[c.key] ? `<p class="comp-review">
+        <span data-depends="${MODE_FIELD}=fixed">to ${REVIEW_LACK[c.key]}, write it in
+          <button type="button" class="link" data-review>the daily review</button></span>
+        <span data-depends="${MODE_FIELD}=${MODE_RULE}">${byMode
+            ? `the daily review decides this, in place of a fixed ratio`
+            : `the daily review can also ${REVIEW_LACK[c.key]}`} —
+          <button type="button" class="link" data-review>go to it</button></span></p>` : ""}
     </article>`;
 }
 
@@ -426,6 +494,42 @@ function compBlock(c, planMode){
 /** The value that means "this slot does nothing". Not the empty string, which already means
  *  "the plain setting in this card decides it". */
 const OFF = "__off__";
+
+/** The field that is the daily review, and the slots it is the dynamic form of.
+ *
+ * The backend's own help says it: "define review(ctx, pos). Take profit (3), stop loss (4)
+ * and reduce/roll (5) all live here" — and `signals/review.py` adds 6, because taking half
+ * now and adding on confirmation is sizing decided while the trade is open rather than at
+ * entry. It was rendered as one input inside the headwind card, which is where the slot
+ * definition files it and not where it acts: a reader looking at take profit had no way to
+ * know that the only way to stage one is a code box two cards away.
+ *
+ * So it is drawn once, at the foot of the column whose slots it serves, and those slots point
+ * at it. The field name is unchanged, so the payload is the same.
+ */
+const REVIEW_FIELD = "review_code";
+
+/** The switch between a fixed ratio and a rule reviewed daily.
+ *
+ * It was a field on slot 3's card, where it reads as a property of taking profit. It is
+ * not: its `depends` governs slot 3's ratio, slot 4's ratio **and** the review box on slot
+ * 5, so flipping it on the take-profit card silently emptied two other cards. It is the
+ * review's own switch, so it is drawn on the review and the cards it governs say what it
+ * did to them. The field name and value are unchanged; it never reaches the backend —
+ * which fields are sent is the whole of its effect.
+ */
+const MODE_FIELD = "exit_mode";
+const MODE_RULE = "rule";
+
+/** What each of those slots cannot do by configuration — the reason the review exists for it.
+ *  Specific per slot, because "use the daily review" on four cards says nothing about why. */
+const REVIEW_LACK = {
+  take_profit: "take profit in stages, or move the level as the trade runs",
+  stop_loss: "stop out part of the position, or trail the stop",
+  headwind: "act on one position rather than the whole book",
+  position: "add to a position, or cut it back, after it is open",
+};
+const REVIEW_SLOTS = new Set(Object.keys(REVIEW_LACK));
 
 /** The slots the engine accepts **nothing** for.
  *
@@ -607,6 +711,34 @@ function bindFields(){
       if(first) first.hidden = true;
       button.hidden = true;
     }));
+  // A link from a card that cannot express the rule. In fixed mode the editor is hidden, so
+  // the link flips the mode first — otherwise it scrolls to an empty panel and the reader
+  // concludes the feature is missing, which is how this was found.
+  for(const link of $("comps").querySelectorAll("[data-review]"))
+    link.onclick = () => {
+      const sel = $(`f_${MODE_FIELD}`);
+      if(sel && sel.value !== MODE_RULE){
+        sel.value = MODE_RULE;
+        sel.dispatchEvent(new Event("change", {bubbles: true}));
+      }
+      const box = $(`f_${REVIEW_FIELD}`);
+      $("reviewBlock")?.scrollIntoView({block: "center", behavior: "smooth"});
+      box?.focus();
+    };
+  // The reference is **open**, not behind a disclosure. An empty box with no signature was
+  // read as the feature not existing, and a reader who does not know a `pos.mfe_so_far`
+  // exists has no reason to click something offering to describe it. The button puts it
+  // away once it is not needed; `depends` still shuts both in fixed mode.
+  //
+  // Assigned rather than added: this pass runs again on every mode change, and a second
+  // listener on the same button toggles twice — which looks exactly like a dead button.
+  const body = $("reviewHelpBody");
+  if(body) body.textContent = META.review_help || "";
+  const help = $("reviewHelp");
+  if(help) help.onclick = () => {
+    const shut = $("reviewBlock").classList.toggle("ref-off");
+    help.textContent = shut ? "show the reference" : "hide the reference";
+  };
   $("comps").querySelectorAll("[data-param]").forEach(el => {
     const keep = () => { PARAMS[el.dataset.param] = el.value; };
     el.addEventListener("input", keep);
@@ -716,15 +848,39 @@ $("planHelp").addEventListener("click", () => {
    an error after pressing run, say so at once and switch the engine — this is not
    deciding for the user, these two options were always bound together. */
 
+/** Is this control inside something the current mode has switched off?
+ *
+ * `depends` has hidden these on screen since it was written, and the reason recorded beside
+ * it was that the backend cannot tell "not filled in" from "filled in but this method does
+ * not use it". **The payload never acted on it.** So choosing "a rule, reviewed daily" still
+ * sent the fixed take profit and stop loss sitting behind the switch, and the engine applied
+ * a review on top of the ratios rather than instead of them — with the ratios, being fixed
+ * and checked first, deciding most of the exits. The same in reverse: a review written and
+ * then switched back to fixed went on running, because `runner.py` compiles `review_code`
+ * whenever it is non-blank.
+ *
+ * Walks every ancestor rather than the nearest, because a hidden group can hold a field
+ * whose own `depends` is satisfied.
+ */
+function unusedHere(el){
+  for(let n = el.parentElement; n; n = n.parentElement)
+    if(n.hidden && n.hasAttribute("data-depends")) return true;
+  return false;
+}
+
 function formPayload(){
   const f = $("form"), o = {};
-  for(const el of f.elements) if(el.name) o[el.name] = el.value;
+  for(const el of f.elements) if(el.name && !unusedHere(el)) o[el.name] = el.value;
   o.strategy_mode = strategyMode();
   // A slot switched off sends **nothing** for the field it decides, whatever a hidden box
   // still holds. The backend reads an absent value as "no rule of this kind", which is what
   // the choice means, and what the engine has always accepted.
-  for(const [slot, choice] of Object.entries(PICKED))
-    if(choice === OFF) o[slot] = "";
+  for(const [slot, choice] of Object.entries(PICKED)){
+    if(choice !== OFF) continue;
+    const picker = document.querySelector(`[data-pick="${slot}"]`);
+    if(picker && unusedHere(picker)) continue;
+    o[slot] = "";
+  }
   // entry_mode is a real field on the form, so this no longer guesses from whether the
   // code box is empty.
   // Sizing: send only the parameters the current method uses. Sending all of them leaves
@@ -742,6 +898,11 @@ function formPayload(){
   const components = {};
   for(const [slot, variant] of Object.entries(PICKED)){
     if(variant === OFF) continue;
+    // A form picked on a slot the daily review has taken over goes the same way as that
+    // slot's field: unsent. Two things answering one question is the configuration the
+    // engine refuses, and the one it cannot refuse is the one it never sees.
+    const picker = document.querySelector(`[data-pick="${slot}"]`);
+    if(picker && unusedHere(picker)) continue;
     const form = ((META.components || {})[slot] || []).find(f => f.name === variant);
     if(!form) continue;
     const params = {};

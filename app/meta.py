@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from compilers import PLAN_HELP, USER_CODE_HELP
+from compilers import PLAN_HELP, REVIEW_HELP, USER_CODE_HELP
 
 def _tradeoff(q: dict[str, str]) -> dict[str, Any]:
     """One day's moneyness x tenor trade-off surface.
@@ -245,7 +245,29 @@ def _meta_payload() -> dict[str, Any]:
                 "        return rsi.unwrap() < 25\n"
                 "    return rsi.unwrap() < 35\n"
             ),
-            "review_code": "",
+            "review_code": (
+                "def review(ctx, pos):\n"
+                '    """Asked of every open position, every day.\n'
+                "\n"
+                "    Return None to keep holding. Uncomment a line to make\n"
+                "    it a rule. kind= names the slot whose reasoning closed\n"
+                "    the trade, so a staged exit still files under (3).\n"
+                '    """\n'
+                "    # Take profit in stages, not all at one level:\n"
+                "    # if pos.ratio > 0.5:\n"
+                "    #     return Reduce(0.5, \"half off at +50%\")\n"
+                "\n"
+                "    # A stop that moves: out after giving back a third\n"
+                "    # peak = pos.mfe_so_far\n"
+                "    # if peak > 0.4 and pos.ratio < peak * 0.67:\n"
+                "    #     return Close(\"gave a third back\", kind=\"take_profit\")\n"
+                "\n"
+                "    # The thesis failed. Usually fires before a fixed stop\n"
+                "    # if ctx.signal(\"close\") < ctx.signal(\"sma_50\"):\n"
+                "    #     return Close(\"below the 50-day\", kind=\"stop_loss\")\n"
+                "\n"
+                "    return None\n"
+            ),
             "signals_code": (
                 "# Custom signals: name -> function(bars) -> Series\n"
                 "# Always use adjusted(), or ex-dividend days produce false gaps\n"
@@ -257,6 +279,7 @@ def _meta_payload() -> dict[str, Any]:
         },
         "code_help": USER_CODE_HELP,
         "plan_help": PLAN_HELP,
+        "review_help": REVIEW_HELP,
     }
 
 

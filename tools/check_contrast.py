@@ -254,12 +254,37 @@ LABELLED = {
 GROUPS = {**SOLE_CARRIER, **LABELLED}
 
 
+def _braces() -> list[str]:
+    """Every stylesheet closes every block it opens.
+
+    A stray ``}`` is the quietest failure this project has: CSS has no parse error, the
+    browser discards from the stray brace to the end of the enclosing block, and the page
+    renders with some rules simply not applied. It has now cost two debugging sessions —
+    a line of card text rendered at the page's base size for an afternoon — because
+    nothing anywhere said anything. Counting braces is crude and catches exactly this.
+
+    Braces inside strings and comments would make the count lie, so both are stripped
+    first. No stylesheet here has either, but one will.
+    """
+    out: list[str] = []
+    for css in sorted((ROOT / "app" / "static").rglob("*.css")):
+        text = re.sub(r"/\*.*?\*/", "", css.read_text(encoding="utf-8"), flags=re.S)
+        text = re.sub(r"\"[^\"\n]*\"|'[^'\n]*'", "", text)
+        gap = text.count("{") - text.count("}")
+        if gap:
+            where = "unclosed" if gap > 0 else "stray closing"
+            out.append(f"{css.relative_to(ROOT)}: {abs(gap)} {where} brace"
+                       f"{'s' if abs(gap) > 1 else ''}. Everything after it is dropped "
+                       f"by the browser without an error")
+    return out
+
+
 def main() -> int:
     if not TOKENS.exists():
         print(f"the token file is missing: {TOKENS.relative_to(ROOT)}")
         return 1
     themes = _blocks(TOKENS.read_text(encoding="utf-8"))
-    problems: list[str] = []
+    problems: list[str] = _braces()
     notes: list[str] = []
     checked = 0
 

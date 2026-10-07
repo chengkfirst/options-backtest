@@ -64,6 +64,66 @@ The fields of Plan:
 """
 
 
+REVIEW_HELP = """Asked of every open position, every snapshot. It is the
+dynamic form of take profit (3), stop loss (4), headwind (5) and
+sizing (6): all four wanted the same thing — ask the question of
+every position every day, then be able to act — so the engine
+gives them one hook rather than four.
+
+  def review(ctx, pos):
+      ...
+      return None        # keep holding
+
+WHAT pos HOLDS
+Everything *_so_far is as of today. A review cannot see ahead.
+
+  pos.ratio          P&L over the entry price. 0.2 is up 20%
+  pos.mfe_so_far     the best it has reached    <- trailing stops
+  pos.mae_so_far     the worst it has reached      read these
+  pos.days_held      trading days held
+  pos.dte            days to expiry, trading days
+  pos.mark           the current mid
+  pos.entry_price    what was paid, per contract
+  pos.quantity       contracts held now; a Reduce lowers it
+  pos.iv  pos.delta  as of today
+  pos.contract       the contract itself
+  pos.entry_date     the day it opened
+  pos.tag            the tag the plan attached at order time
+
+ctx is the market context a plan function receives — ctx.day,
+ctx.spot, ctx.equity, ctx.drawdown, ctx.positions, and
+ctx.signal(name, default=...). The contract reference has it all.
+
+WHAT IT MAY RETURN
+Close, Reduce and Add are already in scope.
+
+  Close(reason, kind="take_profit")   close the whole position
+  Reduce(fraction, reason)            0.5 removes half
+  Add(contracts, reason)              cost averaged in
+  None                                keep holding
+
+kind= is how a review stays attributable. It names the slot whose
+reasoning closed the trade — take_profit, stop_loss, headwind or
+signal — and it drives the exit grouping, so a staged take profit
+written here still files under (3) on the exits tab. A Close with
+the wrong kind is a trade filed against a slot that did not
+decide it.
+
+BOUNDARIES
+  - The time exits (max holding period, days-to-expiry floor)
+    still apply. They are a safety net a review may not get
+    around, so one rule written wrong cannot drag a position
+    into expiry.
+  - Only the event-driven engine reviews day by day. The trade
+    table computes its exits vectorised and ignores this.
+  - A Reduce files no new trade record: it is one logical trade
+    until it is out entirely, so the win rate and the holding
+    period stay honest.
+  - Rolling is not implemented. Returning Roll() raises rather
+    than quietly closing.
+"""
+
+
 def compile_plan(code: str):
     """Compile the user's Python into a plan function.
 
@@ -101,7 +161,7 @@ def compile_review(code: str):
         exec(compile(code, "<your daily review>", "exec"), namespace)
     except SyntaxError as exc:
         raise ValueError(f"syntax error in the review code, line {exc.lineno}: "
-                         f"{exc.msg}") from exc
+                         f"{exc.msg}\n\n{REVIEW_HELP}") from exc
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"the review code raised: {type(exc).__name__}: {exc}") from exc
     fn = namespace.get("review")
@@ -111,7 +171,7 @@ def compile_review(code: str):
             "def review(ctx, pos):\n"
             "    if pos.mfe_so_far > 0.4 and pos.ratio < pos.mfe_so_far * 0.67:\n"
             "        return Close('gave back a third', kind='take_profit')\n"
-            "    return None"
+            "    return None\n\n" + REVIEW_HELP
         )
     return fn
 

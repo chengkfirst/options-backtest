@@ -403,6 +403,90 @@ suite("views — the composer renders and refuses an incomplete rule", async () 
   frame.remove();
 });
 
+/* The daily review is the only configuration that is written rather than set, and the only
+   path to reducing, adding, or a stop that moves. It was an empty textarea behind a switch
+   on another slot's card, which read as the feature not existing — so what is asserted here
+   is the whole chain a person actually walks: the card that cannot express the rule, the
+   link on it, the mode it flips, the ratios that step aside, the safety net that does not,
+   and a box that has the signature in it. */
+suite("the composer — the daily review is reachable from the slots it serves", async () => {
+  const frame = document.createElement("iframe");
+  frame.style.cssText = "width:1200px;height:800px;border:0";
+  document.getElementById("sandbox").append(frame);
+  frame.src = "/#/bench";
+  await new Promise(r => { frame.onload = r; setTimeout(r, 2500); });
+  await new Promise(r => setTimeout(r, 1200));
+  const doc = frame.contentDocument;
+  const seen = el => el && !el.closest("[hidden]") && el.offsetParent !== null;
+
+  const block = doc.getElementById("reviewBlock");
+  ok(block, "the review is drawn on the board, not buried in a card");
+  ok(block.querySelector("#f_exit_mode"), "and it owns the fixed/rule switch");
+  ok(!doc.querySelector('[data-comp="take_profit"] #f_exit_mode'),
+     "the switch is no longer a property of taking profit");
+
+  // Fixed is the default, and in it the review holds nothing.
+  eq(doc.getElementById("f_exit_mode").value, "fixed", "a fixed ratio is the default");
+  ok(!seen(doc.getElementById("f_review_code")), "the editor stays shut in fixed mode");
+  ok(seen(doc.getElementById("f_take_profit")), "and the ratio is the thing on offer");
+
+  // Each of the four slots the review serves says so, and the link gets you there.
+  const links = [...doc.querySelectorAll("[data-review]")]
+    .map(b => b.closest(".comp").dataset.comp);
+  for(const slot of ["take_profit", "stop_loss", "headwind", "position"])
+    ok(links.includes(slot), `slot ${slot} points at the review`);
+
+  doc.querySelector('[data-comp="stop_loss"] [data-review]').click();
+  await new Promise(r => setTimeout(r, 400));
+  eq(doc.getElementById("f_exit_mode").value, "rule",
+     "the link flips the mode rather than scrolling to a hidden box");
+  ok(seen(doc.getElementById("f_review_code")), "the editor is open");
+  eq(doc.activeElement.id, "f_review_code", "and has the cursor");
+  ok(/def review\(ctx, pos\)/.test(doc.getElementById("f_review_code").value),
+     "with the signature already in it, not an empty box");
+  ok(!seen(doc.getElementById("f_take_profit")) && !seen(doc.getElementById("f_stop_loss")),
+     "both ratios step aside, so no configuration says two things at once");
+  ok(seen(doc.getElementById("f_hold_days")),
+     "the holding cap stays: a rule written wrong may not reach expiry");
+
+  // Open without being asked: a reader who does not know `pos.mfe_so_far` exists has no
+  // reason to click something offering to describe it.
+  const help = doc.getElementById("reviewHelpBody");
+  ok(seen(help) && /pos\.mfe_so_far/.test(help.textContent) && /kind=/.test(help.textContent),
+     "the reference is open beside the box, and says how a close stays attributable");
+  doc.getElementById("reviewHelp").click();
+  await new Promise(r => setTimeout(r, 150));
+  ok(!seen(help), "and can be put away once it is not needed");
+
+  // The substantive half. `depends` had always hidden the fields a mode does not use and
+  // the payload had always sent them anyway, so a run configured as a rule arrived at the
+  // engine carrying the fixed ratios as well — and they, being checked first, decided most
+  // of the exits. What is asserted is the payload, because that is the thing that ran.
+  const sent = () => {
+    doc.querySelector('[data-foot="payload"]').click();
+    return doc.querySelector('[data-panel="payload"]').innerText;
+  };
+  const carries = (text, key) => new RegExp(`"${key}"`).test(text);
+  const asRule = sent();
+  ok(carries(asRule, "review_code"), "a rule sends the review");
+  ok(!carries(asRule, "take_profit") && !carries(asRule, "stop_loss"),
+     "and not the fixed ratios behind the switch, which would have decided the exits first");
+  ok(carries(asRule, "hold_days") && carries(asRule, "dte_floor"),
+     "the time exits still travel: they carry no `depends`, being the safety net");
+
+  doc.getElementById("f_exit_mode").value = "fixed";
+  doc.getElementById("f_exit_mode").dispatchEvent(new frame.contentWindow.Event(
+    "change", {bubbles: true}));
+  await new Promise(r => setTimeout(r, 400));
+  const asFixed = sent();
+  ok(carries(asFixed, "take_profit") && carries(asFixed, "stop_loss"),
+     "back on fixed, the ratios travel");
+  ok(!carries(asFixed, "review_code"),
+     "and the review does not — `runner.py` compiles it whenever it is non-blank, so a "
+     + "rule written and then switched away from would have gone on running");
+  frame.remove();
+});
+
 /* ── the addendum's state and failure rules ── */
 suite("router — a tab switch is a step, a brush is not", async () => {
   const r = await import("./router.js");

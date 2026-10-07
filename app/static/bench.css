@@ -365,3 +365,80 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:v
   text-decoration-color:var(--warn);
   color:var(--ink-3);
 }
+
+/* The daily review: not a slot, so not a card. It sits under the column whose four slots it
+   is the dynamic form of, because that is where it acts. */
+.review{
+  grid-column:1 / -1;
+  border:1px dashed var(--border-strong);
+  border-radius:var(--radius-md);
+  padding:var(--space-4);
+  background:var(--sunk);
+  /* The editor and its reference side by side: the reference is read **while** writing, and
+     a disclosure above the box pushes what you are writing off the screen to read it. */
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  grid-template-areas:
+    "head  link"
+    "wired wired"
+    "mode  mode"
+    "note  note"
+    "box   ref";
+  gap:var(--space-2) var(--space-4);
+  align-content:start;
+}
+.review > .comp-h{grid-area:head;margin:0}
+.review > .comp-contract{grid-area:wired;margin:0}
+/* On a card the whole reach line is amber, because all of it is a limit. Here most of it is
+   simply what the review is; only the two limits are. */
+.review .comp-wired{color:var(--ink-2)}
+.review > .review-mode{grid-area:mode}
+.review > .comp-note{grid-area:note;margin:0}
+.review > .field{grid-area:box;margin:0}
+/* Beside the heading, not under the box: in the "link" row below it the button stretched
+   to the height of whatever the reference left over. */
+.review > .hint{grid-area:link;margin:0;justify-self:end;align-self:center}
+/* Both capped at the same height and both scroll, so the block has a size a screen can
+   hold and the editor and its reference stay level. */
+.review > .help{grid-area:ref;margin:0;max-height:440px;overflow:auto}
+.review textarea{min-height:440px;max-height:440px}
+
+/* With the reference put away the editor takes the whole width — a half-empty row beside a
+   code box is worse than either. */
+.review.ref-off > .help{display:none}
+.review.ref-off{
+  grid-template-columns:minmax(0,1fr) auto;
+  grid-template-areas:
+    "head  link"
+    "wired wired"
+    "mode  mode"
+    "note  note"
+    "box   box";
+}
+@media(max-width:1200px){
+  .review{
+    grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:
+      "head  link"
+      "wired wired"
+      "mode  mode"
+      "note  note"
+      "box   box"
+      "ref   ref";
+  }
+}
+
+.comp-review{
+  margin:var(--space-2) 0 0;
+  font-size:var(--font-xs);
+  color:var(--ink-3);
+  line-height:1.45;
+}
+.comp-review .link{font-size:var(--font-xs)}
+.review-mode{margin:0 0 var(--space-2)}
+.review-mode .field{margin:0}
+.comp-review span{display:block}
+/* Code, not prose: a wrapped line of Python reads as a different line of Python. Both
+   panes scroll in their own right rather than reflowing. */
+.review textarea{white-space:pre;overflow:auto}
+.review > .help{white-space:pre;overflow:auto}

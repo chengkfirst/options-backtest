@@ -169,7 +169,11 @@ export const CONTRACT = {
           // cannot show the maximum of sixty tries without its discount — or without the
           // reason there is none.
           "best_run", "deflated"],
-  meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps",
+  meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help",
+         // The daily review's own reference. The review is the only configuration that is
+         // written rather than set, and the only path to reducing, adding or a stop that
+         // moves; an empty box with no signature was read as the feature not existing.
+         "review_help", "gaps",
          // Measured runtimes, so the composer's estimate is a measurement rather than a
          // number somebody typed. Absent where too few runs are on record, which the
          // interface says rather than papering over.
