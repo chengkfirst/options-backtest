@@ -118,6 +118,7 @@ def _file(opts, market, config):
         scale=opts.get("scale"),
         strict=bool(opts.get("strict", True)),
         cleaning=_cleaning_from(opts.get("clean")),
+        iv_model=str(opts.get("iv_model", "european")),
     )
 
 

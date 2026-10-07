@@ -254,6 +254,41 @@ def _scenario_limit_from(given):
                                          for pair in given["scenarios"]))
 
 
+def _premium_budget_from(given):
+    """The premium budget from a mapping, with the unknown key refused.
+
+    Same reason as the scenario limit beside it: a misspelled ``max_premium`` accepted
+    silently is a researcher who believes the book is budgeted and is reading the
+    unbudgeted result. **There is no default**, and that is deliberate -- how much of
+    equity a strategy may have at risk in premium is the single most consequential number
+    in a long-options book, and a platform that picks it has made the strategy's main
+    decision on the researcher's behalf.
+    """
+    from backtest.portfolio.constraints import PremiumBudget
+
+    if given is None:
+        return None
+    if isinstance(given, PremiumBudget):
+        return given
+    known = {"max_premium_pct", "max_premium_per_expiry_pct", "min_cash_pct"}
+    unknown = sorted(set(given) - known)
+    if unknown:
+        raise StartupError(
+            f"these are not premium-budget settings: {unknown}. It takes "
+            f"{', '.join(sorted(known))}, each a share of equity"
+        )
+    if not given:
+        raise StartupError(
+            "a premium budget with no limits in it would be no budget. Set at least one "
+            "of max_premium_pct, max_premium_per_expiry_pct, min_cash_pct -- for "
+            "example premium_budget={'max_premium_pct': 0.10}"
+        )
+    try:
+        return PremiumBudget(**{k: float(v) for k, v in given.items()})
+    except ValueError as exc:
+        raise StartupError(str(exc)) from exc
+
+
 def _lifecycle_from(given) -> "Lifecycle":
     """The lifecycle settings from a mapping, with the unknown key refused.
 
@@ -275,6 +310,54 @@ def _lifecycle_from(given) -> "Lifecycle":
             f"{', '.join(sorted(known))}"
         )
     return Lifecycle(**dict(given))
+
+
+def check_data(
+    *,
+    symbol: str = "QQQ",
+    start: str | date = "2015-01-01",
+    end: str | date = "2024-12-31",
+    chain: "str | object | None" = None,
+    costs: CostConfig | None = None,
+    synthetic: SyntheticChainConfig | None = None,
+    refresh: bool = False,
+):
+    """Load the data a run would load, check it, and report -- **without running
+    anything**.
+
+    The entry point for the question "is my data usable here", which until now had no
+    answer short of starting a backtest and reading its failure. The checks are the data
+    layer's own (``backtest.data.pipeline``), so this reports exactly what a run would
+    hit: the source and whether it is synthetic, the dual-price split, the calendar, the
+    quality flags, rates, dividends, the volatility proxy, the expiries, and the chain's
+    columns and availability dates.
+
+    Takes the same ``symbol``, ``start``, ``end`` and ``chain`` as :func:`run`, so a
+    configuration that checks out here is the one that will run.
+
+    Returns a ``PipelineReport``: ``.text()`` for a person, ``.as_dict()`` for a
+    program, ``.failed`` and ``.warned`` for a script that has to decide. **It raises
+    nothing for bad data** -- that is the point of a report -- but it does raise if the
+    data cannot be loaded at all, because then there is nothing to report on.
+
+    >>> report = check_data(symbol="QQQ", start="2023-01-01", end="2023-12-31",
+    ...                     chain={"kind": "file", "path": "your/data.parquet"})
+    >>> print(report.text())                       # doctest: +SKIP
+    """
+    from backtest.data.pipeline import inspect_pipeline
+
+    proxy = VOL_PROXY_BY_SYMBOL.get(symbol)
+    config = BacktestConfig(
+        symbol=symbol,
+        start=_as_date(start),
+        end=_as_date(end),
+        notional_capital=100_000.0,
+        contract=ContractSpec(symbol=symbol, vol_proxy=proxy),
+        costs=costs or CostConfig(),
+        synthetic=synthetic or SyntheticChainConfig(),
+    )
+    market = MarketData(config, refresh=refresh)
+    return inspect_pipeline(market, build_chain_source(chain, market, config))
 
 
 def run(
@@ -331,6 +414,7 @@ def run(
     #: ``{"max_loss": 5000, "scenarios": [[-0.05, 0.5], [-0.10, 1.0]]}``. Both keys are
     #: required -- which shocks a strategy should survive is a research choice.
     scenario_limit: "Mapping[str, Any] | None" = None,
+    premium_budget: "Mapping[str, Any] | None" = None,
 ) -> "Result":
     """Run one backtest.
 
@@ -448,9 +532,17 @@ def run(
             market, chain_source, signal_set, config, max_concurrent=max_concurrent,
             shadow_days=shadow_days, brake=_brake_from(risk),
             scenario_limit=_scenario_limit_from(scenario_limit),
+            budget=_premium_budget_from(premium_budget),
         ).run(strategy, until=_as_date(until) if until else None,
               resume_from=resume_from)
     else:
+        if premium_budget is not None:
+            raise StartupError(
+                "the trade-table engine cannot enforce a premium budget. The budget is "
+                "a limit on what the **book** has at risk at once, and the trade table "
+                "evaluates each trade independently with no book -- there is nothing for "
+                "a total to be a total of. Use engine='event_driven'"
+            )
         if scenario_limit is not None:
             raise StartupError(
                 "the trade-table engine cannot enforce a scenario limit. The limit is "
@@ -533,6 +625,23 @@ class Result:
 
     def costs(self) -> dict[str, Any]:
         return R.cost_breakdown(self.trades)
+
+    def spread(self) -> dict[str, Any]:
+        """The spread paid, as a share of the premium. See
+        :func:`backtest.research.metrics.spread_paid`."""
+        return R.spread_paid(self.trades)
+
+    def vol_premium(self) -> dict[str, Any]:
+        """IV at entry against the volatility realised while held. See
+        :func:`backtest.research.metrics.iv_versus_realized`.
+
+        Needs the daily path, so the trade-table engine returns the reason rather than a
+        figure -- it evaluates each trade over the whole range without stepping through
+        it, and there is no path to take a volatility of.
+        """
+        paths = getattr(self.raw, "paths_frame", None)
+        return R.iv_versus_realized(self.trades,
+                                    paths() if callable(paths) else paths)
 
     def provenance(self) -> dict[str, Any]:
         out = R.data_provenance(self.trades)

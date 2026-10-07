@@ -418,3 +418,254 @@ class TestTheFileSourceIsUsableOnRealVolumes:
         # The others were absent, so they are derived and the row says so.
         assert source._frame["gamma"].notna().any()
         assert source._frame["greeks_model_derived"].any()
+
+
+@kind("guard")
+class TestWhichIVModelSolvedIt:
+    """The register's own group-1 trade-off: "American vs European IV model — European
+    is faster; American is accurate for equity and ETF options. **Compare IV and Greeks
+    on a sample.**"
+
+    So both exist, European is the default, and every row says which solved it.
+
+    ## Why European is the default and not American
+
+    Measured, not argued. One American solve is a bisection over a 200-step tree —
+    **13 milliseconds**. On 200,000 rows that is 43 minutes, and screening does not help:
+    the put case applies whenever rates are positive, which is every put.
+
+    The bias is one-sided and is stated rather than hidden. An American option is worth
+    at least its European counterpart, so a European solve returns an IV that is too
+    **low** wherever the early-exercise premium is real.
+    """
+
+    @staticmethod
+    def _file(market, chain, config, tmp_path, *, sessions=3):
+        """Rows with **no** iv column, so the solve has to run."""
+        rows = []
+        for day in [d for d in market.calendar.sessions
+                    if config.start <= d <= config.end][:sessions]:
+            snap = chain.snapshot(day)
+            if not len(snap):
+                continue
+            # **Across the strikes, not the first thirty.** `snapshot` comes back
+            # ordered, so `head(30)` is thirty deep in-the-money calls -- every one of
+            # them almost all intrinsic, and every one excluded below as numerically
+            # hopeless. The test then had nothing left to compare and said so, which is
+            # the right failure and was still my sampling rather than the code.
+            for _, r in snap.iloc[::max(len(snap) // 40, 1)].iterrows():
+                rows.append({
+                    "asof": r["asof"], "symbol": r["symbol"], "expiry": r["expiry"],
+                    "strike": r["strike"], "right": r["right"], "bid": r["bid"],
+                    "ask": r["ask"], "underlying_price": r["underlying_price"],
+                })
+        path = tmp_path / "noiv.parquet"
+        pd.DataFrame(rows).to_parquet(path)
+        return path
+
+    def test_the_solved_iv_reprices_the_mid_at_the_dividend_yield_it_was_given(
+            self, config, tmp_path):
+        """**The round trip, and the only test that can catch a zeroed dividend.**
+
+        Price the row back with the IV that was solved for it, at the dividend yield the
+        market reported. If the solve used a different yield -- 0.0, as it did for a long
+        time -- the re-priced value misses the mid, and it misses by more the deeper the
+        strike and the longer the tenor.
+
+        A test that only checks the IV is *plausible* cannot see this: a zero-dividend
+        solve returns a perfectly reasonable-looking number that is simply the wrong one.
+
+        The yield comes from a **stub market with a deliberately large one** rather than
+        from the fixture, which pays nothing inside any expiry a near-dated contract
+        reaches -- so the fixture cannot tell the two solves apart, and a test built on
+        it would pass either way. 4% separates them by far more than the solve's own
+        tolerance.
+        """
+        from backtest.core.config import CALENDAR_DAYS_PER_YEAR
+        from backtest.core.types import Right
+        from backtest.data.options.adapters import FileChainSource
+        from backtest.data.options.pricing import bs_price
+
+        YIELD = 0.04
+
+        class _Market:
+            """Only one method of the market is used by the solve."""
+
+            def dividend_yield(self, day, expiry, spot):
+                return YIELD
+
+        asof = date(2023, 1, 3)
+        expiry = date(2023, 12, 15)          # long enough for the dividend to matter
+        spot = 300.0
+        rows = []
+        for strike in (240.0, 270.0, 300.0, 330.0, 360.0):
+            for right in ("C", "P"):
+                # A mid priced **at** a known vol with the same yield, so the solve has a
+                # well-posed problem and the round trip has a target.
+                tau = (expiry - asof).days / CALENDAR_DAYS_PER_YEAR
+                fair = bs_price(spot, strike, tau,
+                                config.fallback_risk_free_rate, 0.25, q=YIELD,
+                                right=Right(right))
+                rows.append({"asof": asof, "symbol": config.symbol, "expiry": expiry,
+                             "strike": strike, "right": right,
+                             "bid": round(fair - 0.05, 4), "ask": round(fair + 0.05, 4),
+                             "underlying_price": spot})
+        path = tmp_path / "dividend.parquet"
+        pd.DataFrame(rows).to_parquet(path)
+
+        source = FileChainSource(path, market=_Market(), config=config)
+        snap = source.snapshot(asof)
+        solved = snap[snap["iv"].notna()]
+        assert len(solved) >= 8, f"only {len(solved)} of {len(rows)} rows solved"
+
+        tau = (expiry - asof).days / CALENDAR_DAYS_PER_YEAR
+        for _, row in solved.iterrows():
+            mid = (float(row["bid"]) + float(row["ask"])) / 2.0
+            back = bs_price(spot, float(row["strike"]), tau,
+                            config.fallback_risk_free_rate, float(row["iv"]), q=YIELD,
+                            right=Right(row["right"]))
+            assert abs(back - mid) < max(0.01, mid * 0.002), (
+                f"the IV {row['iv']:.4f} solved for {row['right']} {row['strike']} "
+                f"reprices to {back:.4f} against a mid of {mid:.4f} at the {YIELD:.1%} "
+                f"yield the market reported. The solve and this check disagree about an "
+                f"input, and the dividend is the one that was hardcoded to zero"
+            )
+
+        # And the IV recovered is the one the mid was built at, which is the stronger
+        # statement: a solve at the wrong yield would be self-consistent with itself and
+        # still return the wrong number.
+        assert abs(float(solved["iv"].median()) - 0.25) < 0.01, (
+            f"the mids were priced at a vol of 0.25 and the median solve came back "
+            f"{float(solved['iv'].median()):.4f}"
+        )
+
+    def test_the_default_is_european(self):
+        """Read from the signature, which is where a default lives."""
+        import inspect
+
+        from backtest.data.options.adapters import FileChainSource
+
+        parameter = inspect.signature(FileChainSource.__init__).parameters["iv_model"]
+        assert parameter.default == "european"
+
+    def test_every_solved_row_is_flagged_with_its_model(self, market, chain, config,
+                                                        tmp_path):
+        from backtest.data.options.adapters import FileChainSource
+
+        path = self._file(market, chain, config, tmp_path)
+        european = FileChainSource(path, market, config)
+        flags = european._frame["quality_flags"].astype(str)
+        assert flags.str.contains("iv_european").all(), (
+            "rows were solved and nothing says which model did it"
+        )
+        assert not flags.str.contains("iv_american").any()
+
+    def test_the_american_solve_can_be_asked_for_and_is_flagged(self, market, chain,
+                                                                config, tmp_path):
+        from backtest.data.options.adapters import FileChainSource
+
+        path = self._file(market, chain, config, tmp_path, sessions=1)
+        american = FileChainSource(path, market, config, iv_model="american")
+        flags = american._frame["quality_flags"].astype(str)
+        assert flags.str.contains("iv_american").all()
+
+    def test_the_two_models_disagree_in_the_direction_theory_requires(
+            self, market, chain, config, tmp_path):
+        """**The sample comparison the register asks for**, as a test.
+
+        An American option is worth at least its European counterpart, so solving one
+        price with a European model needs *more* volatility. Asserted as a direction
+        rather than a size: how much more depends on the strike, the tenor and the rate.
+        """
+        from backtest.data.options.adapters import FileChainSource
+
+        path = self._file(market, chain, config, tmp_path, sessions=1)
+        european = FileChainSource(path, market, config)._frame
+        american = FileChainSource(path, market, config,
+                                    iv_model="american")._frame
+
+        # **Only where both solves are meaningful.**
+        #
+        # A deep in-the-money option's mid is almost all intrinsic, so the little that is
+        # left carries the whole of σ and the solve becomes numerically hopeless in both
+        # models: one row here returns 116% from the European solve and 116% from the
+        # American, differing in the fourth decimal and in the wrong direction. That is
+        # not a theory violation, it is two solvers failing at the same place -- and
+        # asserting the direction there would be asserting the shape of a rounding error.
+        #
+        # Rows above 150% volatility are excluded on exactly that ground, and the test
+        # says so rather than widening a tolerance until it passes.
+        pairs, hopeless = 0, 0
+        for (_, eu), (_, am) in zip(european.iterrows(), american.iterrows()):
+            if not (np.isfinite(eu["iv"]) and np.isfinite(am["iv"])):
+                continue
+            # The real criterion is **how much of the mid is time value**, not how
+            # high the IV came out. A high IV is a symptom; a mid that is 99% intrinsic
+            # is the cause, and my first attempt excluded on the symptom and let the
+            # same row back in at 1.157 against a threshold of 1.5.
+            #
+            # Below 2% time value the solve is reading σ out of rounding: the two models
+            # agreed to four decimals there and differed in the fifth, in the wrong
+            # direction, which is two solvers failing at the same place rather than a
+            # theory violation.
+            mid = (float(eu["bid"]) + float(eu["ask"])) / 2.0
+            spot, strike = float(eu["underlying_price"]), float(eu["strike"])
+            intrinsic = (max(spot - strike, 0.0) if eu["right"] == "C"
+                         else max(strike - spot, 0.0))
+            if mid <= 0 or (mid - intrinsic) / mid < 0.02:
+                hopeless += 1
+                continue
+            # **The tolerance is the tree's, and it is why one is needed at all.**
+            #
+            # The American solve bisects a 200-step tree to a price tolerance of 1e-4,
+            # so its IV carries the tree's own discretisation error -- measured at about
+            # 0.0006 on a no-dividend call, where the two models price **identically**
+            # and the only difference possible is numerical. Asserting the direction to
+            # 1e-6 was asserting that a discrete tree equals a closed form.
+            #
+            # 0.005 is an order of magnitude above that error and well below any real
+            # early-exercise premium, so a genuine violation still fails.
+            assert eu["iv"] >= am["iv"] - 0.005, (
+                f"the European IV {eu['iv']:.4f} is below the American {am['iv']:.4f} "
+                f"on {eu['right']} {eu['strike']} by more than the tree's own "
+                f"discretisation error. An American option is worth at least a European "
+                f"one, so the European solve must reach for more volatility, never less"
+            )
+            pairs += 1
+        assert pairs >= 20, (
+            f"only {pairs} comparable rows ({hopeless} excluded as numerically "
+            f"hopeless), which is too few to mean anything"
+        )
+
+    def test_an_unknown_model_is_refused_with_the_cost(self, market, chain, config,
+                                                       tmp_path):
+        from backtest.core.errors import StartupError
+
+        from backtest.data.options.adapters import FileChainSource
+
+        path = self._file(market, chain, config, tmp_path, sessions=1)
+        with pytest.raises(StartupError) as caught:
+            FileChainSource(path, market, config, iv_model="binomial")
+        text = str(caught.value)
+        assert "european" in text and "american" in text
+        assert "43 minutes" in text, (
+            "the refusal does not say what the American model costs, which is the one "
+            "thing someone choosing between them needs"
+        )
+
+    def test_a_supplied_iv_is_not_solved_at_all(self, market, chain, config, tmp_path):
+        """Neither model runs when the vendor supplied the column, which is the reason
+        to supply it: faster, and the vendor's solve is also where a bad quote became an
+        absent IV rather than a wrong one."""
+        from backtest.data.options.adapters import FileChainSource
+
+        path = self._file(market, chain, config, tmp_path, sessions=1)
+        frame = pd.read_parquet(path)
+        frame["iv"] = 0.2222
+        frame.to_parquet(path)
+
+        source = FileChainSource(path, market, config, iv_model="american")
+        assert (source._frame["iv"] == 0.2222).all()
+        flags = source._frame["quality_flags"].astype(str)
+        assert not flags.str.contains("iv_american").any()
+        assert not flags.str.contains("iv_european").any()

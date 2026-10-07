@@ -135,14 +135,33 @@ def _check_source(market) -> CheckResult:
     n = len(bars)
     first, last = bars.dates[0], bars.dates[-1]
     cfg = market.config
+    #: **Both ends, and the overlap.** This checked only the start, so a range the data
+    #: does not reach at all -- a 2030 request against a file ending in 2023 -- reported
+    #: "the requested range is covered". Every later step then measured the wrong range
+    #: and two of them passed on it, which is the exact shape of a silent error: a report
+    #: that is confident about data it does not have.
     late = first > cfg.start
+    short = last < cfg.end
+    disjoint = last < cfg.start or first > cfg.end
+    notes = []
+    if disjoint:
+        notes.append(
+            f"**the data and the requested range do not overlap at all**: the data runs "
+            f"{first} to {last} and the range asked for is {cfg.start} to {cfg.end}. "
+            f"Nothing can run on this")
+    else:
+        if late:
+            notes.append(f"the start requested was {cfg.start}; data begins "
+                         f"{(first - cfg.start).days} days later")
+        if short:
+            notes.append(f"the end requested was {cfg.end}; data stops "
+                         f"{(cfg.end - last).days} days earlier")
     return CheckResult(
-        WARN if late else PASS,
+        FAIL if disjoint else (WARN if notes else PASS),
         f"read {n} trading days, {first} to {last}. "
-        + (f"The start requested was {cfg.start}; data begins "
-           f"{(first - cfg.start).days} days later." if late
-           else "The requested range is covered."),
-        {"sessions": n, "first": str(first), "last": str(last)},
+        + ("; ".join(notes) + "." if notes else "The requested range is covered."),
+        {"sessions": n, "first": str(first), "last": str(last),
+         "covers_start": not late, "covers_end": not short, "overlaps": not disjoint},
     )
 
 
@@ -183,6 +202,17 @@ def _check_calendar(market) -> CheckResult:
                                  f"calendar, the first being {off[0]}",
                            {"off_calendar": len(off)})
     sessions = market.sessions()
+    # A range with no sessions in it cannot run, and this reported PASS on it -- "0
+    # sessions in the backtest range" with a pass beside it. The count was already in
+    # the message; nothing read it.
+    if not sessions:
+        return CheckResult(
+            FAIL,
+            f"there are no trading sessions in the requested range "
+            f"{market.config.start} to {market.config.end}. Either the range is "
+            f"entirely holidays and weekends, or it does not overlap the data",
+            {"sessions_in_range": 0},
+        )
     return CheckResult(
         PASS,
         f"every bar date is on the trading calendar; {len(sessions)} sessions in "
@@ -205,8 +235,59 @@ def _check_quality(market) -> CheckResult:
     if bad:
         return CheckResult(FAIL, "bad bars: " + ", ".join(f"{k} x{v}" for k, v in bad.items()),
                            issues)
+
+    #: **Price jumps, reported rather than judged.**
+    #:
+    #: The document lists them beside the OHLC contradictions, and they were the one
+    #: quality check missing: an unadjusted split arrives as a one-session move of tens of
+    #: percent and passes every test above it.
+    #:
+    #: Reported with no threshold that drops anything, because the threshold is the whole
+    #: difficulty: a real 20% session on an ETF exists -- March 2020 has several -- and a
+    #: rule that dropped them would delete the most informative days in the sample. So
+    #: this names the largest move and its date and leaves the judgement with a person,
+    #: which is the same choice the cleaning rules make by being off by default.
+    #:
+    #: The one number stated as a fact rather than a threshold: a **ratio near a round
+    #: fraction** (1/2, 1/3, 2/3, 1/4) is what an unapplied split looks like, and that is
+    #: a different claim from "this move is large".
+    close = f["close"].astype(float)
+    ratio = (close / close.shift(1)).dropna()
+    if ratio.empty:
+        issues["largest_move_pct"] = 0.0
+        return CheckResult(PASS, f"all {len(f)} rows pass: prices positive, high above "
+                                 f"low, no duplicate dates, nothing missing. Too few "
+                                 f"rows to measure a session-to-session move.", issues)
+
+    moves = (ratio - 1.0).abs()
+    worst_at = moves.idxmax()
+    worst = float(moves.loc[worst_at])
+    # A split ratio the vendor did not apply. Checked against the common ones rather than
+    # against "large", and with a tolerance tight enough that an ordinary move cannot
+    # land on one by accident.
+    split_like = [(name, value) for name, value in
+                  (("2:1", 0.5), ("3:1", 1 / 3), ("3:2", 2 / 3), ("4:1", 0.25),
+                   ("1:2", 2.0), ("1:3", 3.0))
+                  if abs(float(ratio.loc[worst_at]) - value) < 0.01]
+    issues["largest_move_pct"] = round(worst * 100, 2)
+    issues["largest_move_date"] = str(worst_at.date() if hasattr(worst_at, "date")
+                                      else worst_at)
+    if split_like:
+        return CheckResult(
+            FAIL,
+            f"the move on {issues['largest_move_date']} is a ratio of "
+            f"{float(ratio.loc[worst_at]):.4f}, which is a {split_like[0][0]} split the "
+            f"vendor appears not to have applied. Every strike selected after it would "
+            f"be measured against the wrong price",
+            issues,
+        )
     return CheckResult(PASS, f"all {len(f)} rows pass: prices positive, high above "
-                             f"low, no duplicate dates, nothing missing.", issues)
+                             f"low, no duplicate dates, nothing missing. Largest "
+                             f"session move {worst * 100:.1f}% on "
+                             f"{issues['largest_move_date']}, which is reported rather "
+                             f"than judged: a real 20% session exists and a rule that "
+                             f"dropped it would delete the most informative days.",
+                       issues)
 
 
 def _check_rates(market) -> CheckResult:
@@ -291,6 +372,12 @@ def _check_chain(market, chain=None) -> CheckResult:
     if chain is None:
         return CheckResult(WARN, "no chain source was given; the chain check is skipped")
     sessions = market.sessions()
+    # Guarded like the expiry check beside it. Without this the probe indexes an empty
+    # tuple and the step reports "the check itself failed: IndexError", which names the
+    # symptom and hides the cause -- the range, which the calendar check above now says.
+    if not sessions:
+        return CheckResult(FAIL, "there are no trading days in the requested range, so "
+                                 "there is no session to take a chain snapshot on")
     probe = sessions[len(sessions) // 2]
     snap = chain.snapshot(probe)
     if snap.empty:

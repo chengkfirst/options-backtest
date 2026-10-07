@@ -77,8 +77,9 @@ COMPONENTS: tuple[Component, ...] = (
               needle="class SignalSet"),
     Component("RegimeClassifier", "data", "regime features, fitted only on data before t",
               needle="class RegimeSet"),
-    Component("IVCalculator", "data", "solve IV from the mid with a matching model",
-              needle="def implied_vol"),
+    Component("IVCalculator", "data",
+              "solve IV from the mid with a model matching the contract style",
+              needle="def implied_vol_american"),
     Component("GreeksCalculator", "data", "delta, gamma, vega, theta from one model",
               needle="def greeks("),
     Component("SurfaceBuilder", "data",
@@ -172,7 +173,11 @@ COMPONENTS: tuple[Component, ...] = (
                      "it is that SPY, QQQ and IWM behave largely as one position, which "
                      "is a statement about holding more than one"),
     Component("Constraint", "portfolio", "hard limits on premium, greeks, cash",
-              needle="class ExposureLimits"),
+              # **The needle moved to the half that was missing.** `ExposureLimits`
+              # limited delta, vega and the position count; the row says premium and
+              # cash, and nothing budgeted either -- so the component read built on the
+              # strength of the limits it did have. `PremiumBudget` is the other half.
+              needle="class PremiumBudget"),
     Component("RiskRule", "portfolio", "slot 5 book-wide: monitor and intervene",
               needle="class RiskDecision"),
     Component("ScenarioRule", "portfolio", "stress the book; block trades over a limit",

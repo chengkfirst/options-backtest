@@ -317,6 +317,75 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
     ),
     Mutation(
+        # Delta and vega were limited and premium at risk was not, which is the one
+        # whose breach is a certainty rather than a scenario.
+        "the premium budget blocks an entry that would cross it",
+        "backtest/engine/loop.py",
+        "        if self.budget is not None and self.budget.active:",
+        "        if False:",
+        ("tests/test_premium_budget.py::TestTheEngineReadsIt",),
+    ),
+    Mutation(
+        # 10% of equity on one expiry and 10% spread over six are the same total and
+        # different books. Only the per-expiry limit can tell them apart.
+        "a concentration on one expiry is refused even inside the total budget",
+        "backtest/portfolio/constraints.py",
+        "            if after > self.max_premium_per_expiry_pct:",
+        "            if False:",
+        ("tests/test_premium_budget.py::TestThePerExpiryBudget",),
+    ),
+    Mutation(
+        # The fill was recorded and the quote it came from was discarded, which made the
+        # spread paid uncomputable and lambda unauditable per trade.
+        "the quote is recorded beside the fill",
+        "backtest/accounting/tradebook.py",
+        '        "mid": mid,',
+        "",
+        ("tests/test_options_metrics.py::TestOnARealRun",),
+    ),
+    Mutation(
+        # A realised vol of 0 reads as the most profitable possible trade for a buyer.
+        "a holding window too short to measure is excluded, not zeroed",
+        "backtest/research/metrics.py",
+        "        if len(returns) < min_returns:",
+        "        if False:",
+        ("tests/test_options_metrics.py::TestImpliedAgainstRealized",),
+    ),
+    Mutation(
+        # It reported "the requested range is covered" for a 2030 request against data
+        # ending in 2023, and seven of nine steps then passed on it.
+        "a range the data does not reach fails the source check",
+        "backtest/data/pipeline.py",
+        "        FAIL if disjoint else (WARN if notes else PASS),",
+        "        PASS,",
+        ("tests/test_check_data.py::TestWhatItSaysAboutDataItDoesNotHave",),
+    ),
+    Mutation(
+        # A zero dividend biases every in-the-money call's IV, and the rows it is worst
+        # on are the ones early exercise turns on.
+        "IV is solved at the market's own dividend yield",
+        "backtest/data/options/adapters.py",
+        "                self.market.dividend_yield(a, e, float(sp))",
+        "                0.0",
+        ("tests/test_adapters.py::TestWhichIVModelSolvedIt",),
+    ),
+    Mutation(
+        # Bisection on a flat function returns wherever it stopped: 0.1631 for a
+        # contract priced at a true 0.25.
+        "a price at the intrinsic has no implied volatility",
+        "backtest/data/options/american.py",
+        "    if abs(price - intrinsic) < max(tolerance, intrinsic * 1e-6):",
+        "    if False:",
+        ("tests/test_american.py::TestTheAmericanIVSolve",),
+    ),
+    Mutation(
+        "which IV model solved a row is on the row",
+        "backtest/data/options/adapters.py",
+        '                "|iv_american" if use_american else "|iv_european")',
+        '                "")',
+        ("tests/test_adapters.py::TestWhichIVModelSolvedIt",),
+    ),
+    Mutation(
         # One constant λ prices the easiest fill in the book the same as the hardest.
         "λ widens near expiry",
         "backtest/execution/costs.py",
@@ -352,8 +421,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "interest is a term of the accounting identity",
         "backtest/accounting/ledger.py",
-        "            + unreal_stock + self.total_interest + self.external_flows",
-        "            + unreal_stock + self.external_flows",
+        "            + unreal_stock + self.total_interest + self.total_dividends",
+        "            + unreal_stock + self.total_dividends",
         ("tests/test_cash_and_interest.py::TestInterestIsNotTheStrategysPnL",),
     ),
     Mutation(

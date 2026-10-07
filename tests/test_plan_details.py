@@ -97,9 +97,24 @@ class TestEveryClauseIsCheckedAgainstItsOwnFiles:
                     f"exists in name only"
                 )
             else:
-                assert not any(c.built for c in clauses), (
-                    f"{component.name} is marked absent and some of its details are "
-                    f"built, so one of the two inventories is wrong"
+                # **Absent at the name level means "not finished", not "not started".**
+                #
+                # The first form of this rule was `not any(c.built)`, and the data layer
+                # broke it immediately: `Adjuster` is marked absent and its dual-price
+                # split is built -- the half that matters for an underlying with no
+                # corporate actions in range. The same is true of `Universe`, where the
+                # option filter exists and the underlying selection has nothing to
+                # select among.
+                #
+                # So the rule the two inventories actually owe each other is the weaker
+                # one in each direction: a built component has at least one detail, an
+                # absent component is missing at least one. A component marked absent
+                # whose every detail is present is the contradiction worth catching,
+                # because then the absence is the thing that is wrong.
+                assert not all(c.built for c in clauses), (
+                    f"{component.name} is marked absent at the name level and **every** "
+                    f"one of its detail clauses is built, so the name-level inventory "
+                    f"is understating what exists"
                 )
 
 
@@ -112,7 +127,7 @@ class TestWhatTheDetailsSay:
 
         built = sum(1 for c in CLAUSES if c.built)
         with capsys.disabled():
-            print(f"\n  accounting · {len(CLAUSES)} detail clauses, {built} built, "
+            print(f"\n  {len(CLAUSES)} detail clauses transcribed, {built} built, "
                   f"{len(CLAUSES) - built} absent")
             for name, (yes, no) in by_component.items():
                 mark = "" if no == 0 else f"   <- {no} absent"

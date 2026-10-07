@@ -251,6 +251,7 @@ class EventDrivenEngine:
         max_concurrent: int | None = None,
         enforce_capital: bool = True,
         limits=None,
+        budget=None,
         brake=None,
         shadow_days: int | None = None,
         scenario_limit=None,
@@ -281,6 +282,10 @@ class EventDrivenEngine:
         #: (DrawdownBrake). Both only block new entries; neither reduces an existing
         #: position — reducing is headwind's job, which is not built.
         self.limits = limits
+        #: The premium budget (``PremiumBudget``), or None. Blocks new entries only, like
+        #: the exposure limits beside it: cutting an existing position back to fit a
+        #: budget is headwind's job and is not built.
+        self.budget = budget
         self.brake = brake
         #: How many trading days to keep quoting a contract **after** its trade closed.
         #:
@@ -958,6 +963,13 @@ class EventDrivenEngine:
                 "shadow_days": self.shadow_days,
                 # It blocks entries, so it changes which trades happen. Fifth time
                 # something that moves the result has had to be added here explicitly.
+                # Sixth. It blocks entries, so two runs that differ only in their
+                # premium budget are different runs and the fingerprint has to say so.
+                "premium_budget": (
+                    {"max_premium_pct": self.budget.max_premium_pct,
+                     "max_premium_per_expiry_pct": self.budget.max_premium_per_expiry_pct,
+                     "min_cash_pct": self.budget.min_cash_pct}
+                    if self.budget is not None and self.budget.active else None),
                 "scenario_limit": (
                     {"max_loss": self.scenario_limit.max_loss,
                      "scenarios": list(self.scenario_limit.scenarios)}
@@ -1391,9 +1403,54 @@ class EventDrivenEngine:
                            f"{blocked[0].describe()}",
                     data={"breaches": len(blocked)})
                 return None
+        # **The premium budget, read at the same moment and for the same reason.**
+        #
+        # The document calls premium at risk a core budget measure for a long-options
+        # book, and until now nothing budgeted it: delta and vega were limited, and those
+        # answer how the book moves rather than what it can lose. This is the limit whose
+        # breach is a certainty -- an option held to expiry out of the money loses all of
+        # its premium -- so it is checked against the book **as it would be** with this
+        # trade in it, like the scenario limit above.
+        if self.budget is not None and self.budget.active:
+            allowed, why = self.budget.check(
+                ledger.positions, ledger.cash, self._last_equity,
+                adding=self._entry_premium(contract, quantity, day),
+                expiry=contract.expiry)
+            if not allowed:
+                self.events.record(EventKind.CANDIDATE_DROPPED, day,
+                                   f"premium budget: {why}", str(contract))
+                self.bus.emit(
+                    EventType.RISK, day, "portfolio", component_id="headwind",
+                    reason=f"the premium budget blocked an entry: {why}",
+                    data={"expiry": contract.expiry})
+                return None
         return Intent(contract=contract, side=Side.BUY, quantity=quantity,
                       created=day, execute_on=target, trade_id=trade_id,
                       kind=Action.OPEN, reason="entry", component_id="entry")
+
+    def _entry_premium(self, contract, quantity: int, day: date) -> float:
+        """What this entry would pay, **at the ask**.
+
+        At the ask rather than the mid, and that is the whole of the judgement: a budget
+        exists to be sure the book cannot lose more than the limit, and a mid-priced
+        estimate understates every buy by the half-spread. On a wide option market that
+        is not a rounding difference -- it is the λ assumption's worth of the position's
+        own cost, and it would let a book sit just inside its limit while actually over it.
+
+        A row with no usable ask falls back to the mid and then to the last trade; a
+        candidate with no price at all returns 0.0 rather than refusing, because the fill
+        is about to fail for that same reason and attributing it to the budget would name
+        the wrong cause.
+        """
+        frame = self.chain.series(contract, [day])
+        if frame.empty:
+            return 0.0
+        row = frame.iloc[0]
+        for field in ("ask", "mid", "last"):
+            value = row.get(field)
+            if value is not None and not pd.isna(value) and float(value) > 0:
+                return float(value) * quantity * self.config.contract.multiplier
+        return 0.0
 
     def _scenario_breaches(self, ledger, contract, quantity: int, day: date):
         """The scenarios this trade would push past the limit.

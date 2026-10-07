@@ -289,8 +289,28 @@ def trade_context(
         return Maybe.some(float(value))
 
     spot = numeric("underlying_price")
+    bid, ask = numeric("bid"), numeric("ask")
+    #: **The quote, so the spread paid is recoverable afterwards.**
+    #:
+    #: It was not. The fill price was recorded and the quote it came from was discarded,
+    #: which makes the document's "average spread paid as % of premium" uncomputable from
+    #: a finished run -- and that is the metric that decides whether a long-options edge
+    #: survives its own costs. It also makes λ, the register's most impactful realism
+    #: assumption, unauditable per trade: nothing in the result says how far from the mid
+    #: the fill actually was.
+    #:
+    #: Recorded as the mid and the spread rather than as the bid and the ask, because
+    #: those are the two numbers every reader of this wants: the price that would have
+    #: been paid at no cost, and the width that cost is a fraction of.
+    mid = (Maybe.some((bid.unwrap() + ask.unwrap()) / 2.0)
+           if bid.is_present and ask.is_present
+           else Maybe.missing("the quote's two sides are not both available"))
     context: dict[str, Maybe[float]] = {
         "underlying_price": spot,
+        "mid": mid,
+        "spread": (Maybe.some(ask.unwrap() - bid.unwrap())
+                   if bid.is_present and ask.is_present
+                   else Maybe.missing("the quote's two sides are not both available")),
         "iv": numeric("iv"),
         "delta": numeric("delta"),
         "gamma": numeric("gamma"),

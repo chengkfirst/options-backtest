@@ -57,7 +57,28 @@ r = run(symbol="QQQ", start="2020-01-01", end="2024-12-31",
 r.summary()          # a one-page conclusion
 r.trades             # the trade log (each trade's greeks, IV, and every signal at entry and exit)
 r.equity_metrics()   # return, drawdown, Sharpe, capital used
+r.spread()           # what the fills cost, as a share of the premium they were paid on
+r.vol_premium()      # IV at entry against the volatility the underlying actually realised
 ```
+
+## Before the first run: check the data
+
+```python
+# skip (loads data)
+from backtest import check_data
+
+print(check_data(symbol="QQQ", start="2020-01-01", end="2024-12-31").text())
+```
+
+Nine checks, run against the data a backtest would load and **without running one**: the
+source and whether it is synthetic, the raw/adjusted price split, the trading calendar,
+the quality flags, rates, dividends, the volatility proxy, the expiry calendar, and the
+chain's columns. Each step prints what it measured, why it is checked, and the file to
+change it in.
+
+It reports rather than refuses — `report.failed` and `report.warned` are there for a
+script that has to decide. Point it at your own file with the same `chain=` argument
+`run()` takes, and a configuration that checks out here is the one that will run.
 
 ---
 
@@ -188,7 +209,29 @@ r = run(**config, chain={
 print(r.raw.chain.cleaning_report.text())
 ```
 
-**No rule is on by default**, and that is deliberate. A platform-chosen cleaning rule is
+```python
+# skip (needs your own data file)
+r = run(**config, chain={"kind": "file", "path": "your/data.parquet",
+                          "iv_model": "american"})   # default: "european"
+```
+
+**Which model solves the IV is your choice**, and the default is European because of a
+measurement rather than an argument: one American solve is a bisection over a 200-step
+binomial tree, about **13 ms**, so 200,000 rows is 43 minutes. Screening does not help —
+the put case applies whenever rates are positive, which is every put.
+
+The bias is one-sided and stated rather than hidden: an American option is worth at least
+its European counterpart, so a European solve returns an IV that is too **low** wherever
+early exercise has value — and that is largest on exactly the contracts you look at
+hardest, a deep in-the-money put or a call before a dividend. Every solved row carries
+`iv_european` or `iv_american` in `quality_flags`, so a result never has to be asked
+which produced it.
+
+**Supply an `iv` column if your vendor has one.** Neither model then runs: it is faster,
+and the vendor's own solve is also where a bad quote became an absent IV rather than a
+wrong one.
+
+**No cleaning rule is on by default**, and that is deliberate. A platform-chosen cleaning rule is
 the platform deciding which market conditions your strategy is tested through — and the
 register lists cleaning as a group-1 choice: **test its sensitivity, never optimise it.**
 Cleaner data can remove stressed periods and bias the result toward calm markets, so the
@@ -350,6 +393,29 @@ at 0.5 is a **sensitivity**, not a result.
 The tool refuses a sweep that leaves 1.0 out, and names no best fraction. A sweep of 0.3,
 0.5 and 0.7 is a search for a figure that makes the strategy work, and it is what somebody
 rescuing a result would write.
+
+## What the book may have at risk at once
+
+```python
+# skip (a full backtest)
+r = run(**config, premium_budget={"max_premium_pct": 0.10,          # of equity, total
+                                   "max_premium_per_expiry_pct": 0.04,
+                                   "min_cash_pct": 0.20})
+```
+
+For a long-options book the maximum loss on a position is the premium paid, so premium at
+risk is the budget with a floor under it — and the only limit here whose breach is a
+**certainty** rather than a scenario: an option held to expiry out of the money loses all
+of its premium with probability one. Delta and vega limits answer a different question,
+which is how the book moves on the next dollar.
+
+**The per-expiry limit is not implied by the total.** Ten percent of equity over six
+expiries loses at most a sixth of it on any one Friday; the same ten percent on one expiry
+is all of it at once, and a total limit passes both identically.
+
+There is no default. How much of equity a strategy may have at risk is the single most
+consequential number in a long-options book, and a platform that picks it has made the
+strategy's main decision for you.
 
 ## Before refining anything, run the baselines
 

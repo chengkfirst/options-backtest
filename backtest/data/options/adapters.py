@@ -41,7 +41,7 @@ from typing import Iterable, Mapping
 import numpy as np
 import pandas as pd
 
-from backtest.core.config import BacktestConfig
+from backtest.core.config import CALENDAR_DAYS_PER_YEAR, BacktestConfig
 from backtest.data.options.chain import empty_chain, validate_chain
 from backtest.core.dataview import LookAheadError
 from backtest.core.errors import DataQualityError, StartupError
@@ -353,7 +353,8 @@ class FileChainSource:
 
     Absent optional columns are **filled in and flagged**:
 
-    - no ``iv``: solved from the mid; rows that fail are marked absent, not 0
+    - no ``iv``: solved from the mid **at the market's own dividend yield**, with a
+      European model; rows that fail are marked absent, not 0
     - no greeks: derived from IV with Black-Scholes, and
       ``greeks_model_derived`` is set
 
@@ -373,7 +374,16 @@ class FileChainSource:
         scale: Mapping[str, float] | None = None,
         strict: bool = True,
         cleaning=None,
+        iv_model: str = "european",
     ) -> None:
+        if iv_model not in ("european", "american"):
+            raise StartupError(
+                f"iv_model={iv_model!r}; one of 'european' or 'american'. European is "
+                f"the default and is biased **low** where early exercise has value; "
+                f"American is accurate and costs about 13 ms a contract, which is 43 "
+                f"minutes on 200,000 rows"
+            )
+        self.iv_model = iv_model
         self.path = Path(path)
         self.market = market
         self.config = config if config is not None else market.config
@@ -513,7 +523,12 @@ class FileChainSource:
         out["greeks_model_derived"] = out["greeks_model_derived"].astype("object")
 
         mid = (out["bid"].astype(float) + out["ask"].astype(float)) / 2.0
-        tau = np.array([max((e - a).days, 0) / 365.0 for a, e in zip(out["asof"], out["expiry"])])
+        # **The document asks for one time convention everywhere**, so the year's length
+        # is imported rather than written here: a 365.0 spelled out in one module and a
+        # 252 in another is the inconsistency the rule is about, and it would show up as
+        # an IV that disagrees with itself depending on which module solved it.
+        tau = np.array([max((e - a).days, 0) / CALENDAR_DAYS_PER_YEAR
+                        for a, e in zip(out["asof"], out["expiry"])])
         spot = out["underlying_price"].astype(float).to_numpy()
         strike = out["strike"].astype(float).to_numpy()
         is_call = (out["right"] == Right.CALL.value).to_numpy()
@@ -521,6 +536,26 @@ class FileChainSource:
         # wired in this should read per day — as a constant it barely matters for
         # short-dated options, but it biases theta at long tenors.
         rate = self.config.fallback_risk_free_rate
+
+        # The dividend yield each row's IV is solved against, from the market's own
+        # ex-dates rather than assumed zero.
+        #
+        # **It was hardcoded to 0.0**, which biases every in-the-money call: a forward
+        # below spot by the dividend makes the true IV higher than a zero-dividend solve
+        # returns, and the error grows with the tenor and with how deep the strike is.
+        # On an index ETF paying ~0.6% a quarter it is small; on a single name with a 4%
+        # yield it is not, and the rows it is worst on are exactly the ones early
+        # exercise turns on.
+        #
+        # Per row rather than one number: the yield depends on how many ex-dates fall
+        # before each expiry.
+        if hasattr(self.market, "dividend_yield"):
+            yields = np.array([
+                self.market.dividend_yield(a, e, float(sp))
+                for a, e, sp in zip(out["asof"], out["expiry"], spot)
+            ])
+        else:
+            yields = np.zeros(len(out))
 
         need_iv = out["iv"].isna()
         if need_iv.any():
@@ -530,13 +565,48 @@ class FileChainSource:
             # solve is also where a bad quote turns into an absent IV rather than a wrong
             # one, so a supplied column is both faster and better.
             mid_values = mid.to_numpy(dtype=float)
+            # **Which model solves the IV is a choice, and it is the caller's.**
+            #
+            # The document asks for "a European or American model matching the contract
+            # style (US equity and ETF options are American)", and a European solve
+            # returns an IV that is too **low** wherever the early-exercise premium is
+            # real -- one-sided, and largest on exactly the contracts a researcher looks
+            # at hardest.
+            #
+            # It is not the default, and the reason is measured rather than argued: one
+            # American solve is a bisection over a 200-step tree, **13 milliseconds**.
+            # On 200,000 rows that is 43 minutes, and screening does not help -- the put
+            # case applies whenever rates are positive, which is every put. So the honest
+            # arrangement is a European default with the bias stated, and
+            # ``iv_model="american"`` for someone who wants the accuracy and will pay for
+            # it. The register lists exactly this as a group-1 trade-off: "American vs
+            # European IV model -- European is faster; American is accurate for equity
+            # and ETF options. Compare IV and Greeks on a sample."
+            #
+            # The flag goes on every row it applies to, so a result never has to be
+            # asked which model produced it.
+            use_american = (self.iv_model == "american"
+                            and self.config.contract.exercise.value == "american")
             solved = []
             for i in np.flatnonzero(need_iv.to_numpy()):
-                got = implied_vol(mid_values[i], spot[i], strike[i], tau[i], rate,
-                                  0.0, Right.CALL if is_call[i] else Right.PUT)
+                right = Right.CALL if is_call[i] else Right.PUT
+                if use_american:
+                    from backtest.data.options.american import implied_vol_american
+
+                    got = implied_vol_american(
+                        price=mid_values[i], spot=spot[i], strike=strike[i],
+                        years=tau[i], rate=rate, dividend_yield=yields[i], right=right)
+                else:
+                    got = implied_vol(mid_values[i], spot[i], strike[i], tau[i], rate,
+                                      yields[i], right)
                 solved.append(got.unwrap() if got.is_present else np.nan)
             out.loc[need_iv, "iv"] = solved
             out.loc[need_iv & out["iv"].isna(), "quality_flags"] += "|iv_unsolved"
+            # Which model produced it, on the row. A European IV on an American contract
+            # is biased low where early exercise has value, and a reader comparing two
+            # runs has to be able to see which they are looking at.
+            out.loc[need_iv, "quality_flags"] += (
+                "|iv_american" if use_american else "|iv_european")
 
         greek_cols = ["delta", "gamma", "vega", "theta"]
         need_greeks = out[greek_cols].isna().any(axis=1)
@@ -556,8 +626,12 @@ class FileChainSource:
                 rows = np.flatnonzero(usable & side)
                 if not len(rows):
                     continue
+                # The same yield the IV was solved against. Deriving greeks at a
+                # different dividend from the one in the IV would make the two describe
+                # different options -- and the PDE identity in
+                # `tests/test_hand_calculation.py` is what would catch it.
                 g = bs_greeks(spot[rows], strike[rows], tau[rows], rate, iv[rows],
-                              0.0, right)
+                              yields[rows], right)
                 for n, col in enumerate(greek_cols):
                     column = np.asarray(g[col], dtype=float)
                     # Only where the vendor did not supply it: a derived greek must never

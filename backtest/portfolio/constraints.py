@@ -5,8 +5,11 @@ another's risk presupposes that both exist at once. So this layer depends on the
 event-driven engine; the trade-table engine treats each trade independently and
 cannot express it.
 
-Three things:
+Four things:
 
+0. **A premium budget**: the document's "core budget measure" for a long-options book,
+   and the only limit here whose breach is a certainty rather than a scenario -- an
+   option held to expiry out of the money loses all of its premium.
 1. **Exposure limits**: block new entries, or require a reduction, when
    portfolio delta or vega is over the limit.
 2. **A drawdown brake**: cut size at one drawdown level, stop opening at the next.
@@ -61,6 +64,102 @@ class ExposureLimits:
         if self.max_positions is not None and greeks.n_positions >= self.max_positions:
             return False, (f"{greeks.n_positions} positions is at the "
                            f"{self.max_positions} limit")
+        return True, ""
+
+
+@dataclass(frozen=True, slots=True)
+class PremiumBudget:
+    """How much premium the book may have outstanding at once.
+
+    **The document calls premium at risk "a core budget measure" and nothing was
+    budgeting it.** Greeks limits were -- delta and vega -- and those answer a different
+    question. Delta says how the book moves on the next dollar of underlying; premium at
+    risk says what it loses if every option it holds expires worthless. For a long-only
+    options book the second is the one with a floor under it, and it is the only limit
+    here whose breach is a *certainty* rather than a scenario: a position held to expiry
+    out of the money loses its whole premium with probability one.
+
+    Three limits, each a fraction of equity rather than an amount, for the same reason
+    ``ExposureLimits`` gives: equity moves, and a dollar cap set at the start becomes a
+    different constraint by the end.
+
+    **Per expiry is the one that is not implied by the total.** Ten percent of equity
+    spread over six expiries loses at most a sixth of it on any one Friday; the same ten
+    percent on one expiry is all of it at once, and the total limit cannot tell the two
+    apart. This is the long-options version of a concentration limit.
+
+    ``min_cash_pct`` is the other side of the same budget: a book may be inside its
+    premium limit and still have nothing left to pay a fee or meet an assignment with.
+    """
+
+    #: Total premium at risk, as a share of equity.
+    max_premium_pct: float | None = None
+    #: Premium at risk on any one expiry, as a share of equity.
+    max_premium_per_expiry_pct: float | None = None
+    #: Cash that must remain after an entry, as a share of equity.
+    min_cash_pct: float | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("max_premium_pct", "max_premium_per_expiry_pct", "min_cash_pct"):
+            value = getattr(self, name)
+            if value is not None and not 0.0 < float(value) <= 1.0:
+                raise ValueError(
+                    f"{name} is a share of equity and must be in (0, 1]; got {value}. "
+                    f"A premium budget above equity is not a budget, and one at or "
+                    f"below zero forbids every trade"
+                )
+
+    @property
+    def active(self) -> bool:
+        return any(v is not None for v in
+                   (self.max_premium_pct, self.max_premium_per_expiry_pct,
+                    self.min_cash_pct))
+
+    def check(self, positions, cash: float, equity: float,
+              *, adding: float = 0.0, expiry=None) -> tuple[bool, str]:
+        """Returns (may this premium be added, why not).
+
+        ``adding`` is the premium the proposed entry would pay and ``expiry`` is its
+        expiry, so the check is made **before** the position exists rather than reported
+        after it. A limit tested only on what is already open is a limit the next trade
+        always passes.
+        """
+        if equity <= 0:
+            return False, "equity is not positive, so no budget can be computed from it"
+
+        # Long positions only, matching `Snapshot.premium_at_risk`: a short's collateral
+        # is capital tied up and comes back unless the option is exercised, so counting
+        # it as premium at risk would overstate what the book can lose.
+        held = [p for p in positions if p.quantity > 0]
+        outstanding = sum(p.cost_basis for p in held)
+
+        if self.max_premium_pct is not None:
+            after = (outstanding + adding) / equity
+            if after > self.max_premium_pct:
+                return False, (
+                    f"premium at risk would be {after:.1%} of equity, over the "
+                    f"{self.max_premium_pct:.1%} budget "
+                    f"(${outstanding:,.0f} open plus ${adding:,.0f})"
+                )
+
+        if self.max_premium_per_expiry_pct is not None and expiry is not None:
+            on_expiry = sum(p.cost_basis for p in held if p.contract.expiry == expiry)
+            after = (on_expiry + adding) / equity
+            if after > self.max_premium_per_expiry_pct:
+                return False, (
+                    f"premium at risk on {expiry} would be {after:.1%} of equity, over "
+                    f"the {self.max_premium_per_expiry_pct:.1%} per-expiry budget. "
+                    f"**That whole amount resolves on one day**"
+                )
+
+        if self.min_cash_pct is not None:
+            after = (cash - adding) / equity
+            if after < self.min_cash_pct:
+                return False, (
+                    f"cash after the entry would be {after:.1%} of equity, under the "
+                    f"{self.min_cash_pct:.1%} floor"
+                )
+
         return True, ""
 
 

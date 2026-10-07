@@ -131,6 +131,165 @@ def cost_breakdown(trades: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def spread_paid(trades: pd.DataFrame) -> dict[str, Any]:
+    """The spread paid, as a share of the premium it was paid on.
+
+    **The document's most load-bearing cost metric for a long-options book**, and the one
+    the trade table could not answer until the quote was recorded beside the fill: a
+    contract bought 0.05 above a 4.90 mid and sold 0.18 below a 17.82 one paid 1.0% and
+    1.0% of those premiums, round trip, and nothing in a finished run said so.
+
+    Measured as the distance from the **mid**, which is the counterfactual that matters:
+    the mid is the price a frictionless fill would have had, so ``fill - mid`` on a buy
+    and ``mid - fill`` on a sell is exactly what the spread assumption cost. That makes
+    this a measurement of λ's effect per trade rather than a restatement of λ.
+
+    Expressed as a share rather than in dollars because that is the form that compares:
+    $4 of spread is trivial on a $200 premium and ruinous on a $20 one, and a book of
+    cheap options is where a long-options strategy is most tempted to go.
+
+    ``fee_slippage`` is **not** part of this. That column is the explicit per-contract
+    slippage fee, a separate assumption; adding the two would count the spread twice for
+    anyone who set both.
+    """
+    if trades.empty:
+        return {"count": 0, "note": "the run produced no trades"}
+    for column in ("entry_mid", "exit_mid"):
+        if column not in trades.columns:
+            return {"count": 0,
+                    "note": f"this trade table has no {column}, so the fill cannot be "
+                            f"compared with the quote it came from. Runs recorded before "
+                            f"the quote was kept beside the fill cannot answer this"}
+
+    quantity = trades["quantity"].abs().astype(float)
+    multiplier = trades["multiplier"].astype(float)
+    premium = trades["entry_price"].astype(float) * quantity * multiplier
+
+    # Signed so that **adverse is positive** on both legs: a buy fills above the mid, a
+    # sell below it. Long trades only -- `quantity` is positive for a long, and a short
+    # entry would reverse both signs. Stated rather than handled, because no short option
+    # position can be opened here.
+    entry_cost = (trades["entry_price"].astype(float)
+                  - trades["entry_mid"].astype(float)) * quantity * multiplier
+    exit_cost = (trades["exit_mid"].astype(float)
+                 - trades["exit_price"].astype(float)) * quantity * multiplier
+
+    usable = (premium > 0) & entry_cost.notna() & exit_cost.notna()
+    if not usable.any():
+        return {"count": 0,
+                "excluded": int(len(trades)),
+                "note": "no trade has both a positive entry premium and a quote on both "
+                        "legs, so there is nothing to express a spread as a share of"}
+
+    round_trip = (entry_cost + exit_cost)[usable]
+    share = round_trip / premium[usable]
+    return {
+        "count": int(usable.sum()),
+        "excluded": int((~usable).sum()),
+        # The plain mean answers "what did a typical trade pay"; the premium-weighted
+        # ratio answers "what did the book pay". They differ whenever size varies, and
+        # both are wanted, so neither stands in for the other.
+        "spread_pct_of_premium_mean": float(share.mean()),
+        "spread_pct_of_premium_weighted": float(round_trip.sum() / premium[usable].sum()),
+        "spread_pct_of_premium_max": float(share.max()),
+        "spread_dollars": float(round_trip.sum()),
+        "entry_pct_of_premium": float(
+            (entry_cost[usable] / premium[usable]).mean()),
+        "exit_pct_of_premium": float((exit_cost[usable] / premium[usable]).mean()),
+        # Gross P&L before the spread was paid. The comparison the metric exists for:
+        # a strategy whose edge is smaller than this is losing to its own fills.
+        "spread_pct_of_gross_pnl": (
+            float(round_trip.sum() / abs(trades["gross_pnl"].astype(float).sum()))
+            if trades["gross_pnl"].astype(float).sum() else float("inf")),
+    }
+
+
+def iv_versus_realized(trades: pd.DataFrame, paths: pd.DataFrame) -> dict[str, Any]:
+    """IV at entry against the volatility the underlying actually realised while held.
+
+    **The volatility risk premium, measured per trade.** A buyer pays the implied and
+    receives the realised, and the long-options literature's central finding is that the
+    first exceeds the second on average -- so a strategy that buys options has to beat
+    that gap, not merely be right about direction. The document lists it as an Options
+    metric and the pre-launch checklist asks for it by name.
+
+    ``paths`` is the daily per-trade frame (``result.raw.paths_frame``), which carries the
+    underlying's price on every session each trade was held. The trade table holds only
+    the endpoints, and two prices are a return rather than a volatility.
+
+    Two honest limits, both reported rather than smoothed over:
+
+    - **A short holding period makes a noisy estimate.** The standard error of a realised
+      vol from *n* returns is about 1/sqrt(2n) of itself -- roughly 22% of the figure over
+      ten sessions -- so one trade's gap says very little and the distribution across
+      trades is the thing to read. ``median_sessions`` is reported for exactly this.
+    - A trade with fewer than three returns in its window is **excluded and counted**,
+      never filled in. A realised vol of 0 would read as the most profitable possible
+      trade for a buyer, which is the opposite of what an unmeasurable window means.
+
+    **Which IV this is.** On a synthetic chain the entry IV comes from the volatility
+    proxy index (VIX for SPY, VXN for QQQ) rather than from a traded option quote, so the
+    implied side is a real market series but not this contract's own market. Read
+    ``data_provenance`` beside this before taking the gap as a statement about the option
+    that was traded.
+    """
+    min_returns = 3
+    if trades.empty:
+        return {"count": 0, "note": "the run produced no trades"}
+    if paths is None or len(paths) == 0:
+        return {"count": 0,
+                "note": "no daily path was given, so there is no realised volatility to "
+                        "compare the implied against. The trade-table engine does not "
+                        "produce one -- use engine='event_driven'"}
+    if "entry_iv" not in trades.columns:
+        return {"count": 0,
+                "note": "this trade table has no entry_iv, so there is no implied "
+                        "volatility to compare"}
+
+    by_trade = {int(tid): part for tid, part in paths.groupby("trade_id")}
+    rows = []
+    excluded = 0
+    for _, trade in trades.iterrows():
+        iv = float(trade.get("entry_iv", np.nan))
+        path = by_trade.get(int(trade["trade_id"]))
+        if not np.isfinite(iv) or iv <= 0 or path is None:
+            excluded += 1
+            continue
+        prices = pd.Series(path.sort_values("date")["underlying"].astype(float).to_numpy())
+        returns = np.log(prices).diff().dropna()
+        returns = returns[np.isfinite(returns)]
+        if len(returns) < min_returns:
+            excluded += 1
+            continue
+        realised = float(returns.std(ddof=1) * np.sqrt(TRADING_DAYS_PER_YEAR))
+        rows.append({"trade_id": int(trade["trade_id"]), "entry_iv": iv,
+                     "realized_vol": realised, "gap": iv - realised,
+                     "n_returns": int(len(returns))})
+
+    if not rows:
+        return {"count": 0, "excluded": excluded,
+                "note": f"no trade had {min_returns} or more usable returns in its "
+                        f"holding window with a solved entry IV, so the comparison "
+                        f"cannot be made"}
+
+    frame = pd.DataFrame(rows)
+    gap = frame["gap"]
+    return {
+        "count": int(len(frame)),
+        "excluded": excluded,
+        "mean_entry_iv": float(frame["entry_iv"].mean()),
+        "mean_realized_vol": float(frame["realized_vol"].mean()),
+        "mean_gap": float(gap.mean()),
+        "median_gap": float(gap.median()),
+        # The share of trades where the buyer received more volatility than was paid for.
+        # A rate rather than a total, because it is the one figure here that a handful of
+        # large trades cannot move.
+        "share_realized_above_implied": float((gap < 0).mean()),
+        "median_sessions": float(frame["n_returns"].median()),
+        "per_trade": frame,
+    }
+
+
 def data_provenance(trades: pd.DataFrame) -> dict[str, Any]:
     """Provenance disclosure. Conclusions from synthetic data do not generalise
     and must be flagged prominently."""
