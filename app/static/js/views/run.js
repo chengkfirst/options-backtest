@@ -515,69 +515,99 @@ const SHEET = [
  * assumption and its consequence are the same fact and reading them apart was the problem
  * with the two separate blocks this replaces. A row in a good state says so rather than
  * going blank: a blank cannot be told from an axis nobody looked at. */
-/* Which rows are showing. The sheet's shape is fixed, but twenty-two rows between the
-   answer and the charts is a wall, and most visits want the fourteen that carry something.
-   Held here rather than in the DOM so it survives the repaint a tab change causes. */
-let SHOW_ALL = false;
+/* ── the sheet, read the way it is used ──────────────────────────────────────────
+ *
+ * Twenty-two rows laid out flat answered the question nobody asks first. A reader arriving
+ * at a result wants, in this order: can I trust this at all, what is the worst thing wrong,
+ * what specifically about the data — and only rarely, what was checked. A fourteen-row
+ * table answers the last one by default and makes the first two something you work out by
+ * reading, which is why it was 737px of wall between the answer and the charts.
+ *
+ * So: one line per subject. Its state, and **the worst thing in it, named** — because a
+ * count tells you there is a problem and a sentence tells you which. Opening a subject
+ * shows its rows. Six lines closed, and the thing you came for is in them.
+ */
+const OPEN_SUBJECTS = new Set();
+
+const SEVERITY = {bad: 0, warn: 1, ok: 2};
 
 function evidence(){
   const leads = standsOutItems();
-  const every = SHEET.flatMap(sec => sec.rows.map(row => ({sec, row, lim: row.limits(RUN)})));
-  const limiting = every.filter(e => e.lim.level !== "ok");
-  const shown = SHOW_ALL ? every : limiting;
+  const subjects = SHEET.map(sec => {
+    const rows = sec.rows.map(row => ({row, lim: row.limits(RUN)}))
+      .sort((a, b) => SEVERITY[a.lim.level] - SEVERITY[b.lim.level]);
+    const counts = {bad: 0, warn: 0, ok: 0};
+    for(const r of rows) counts[r.lim.level]++;
+    return {sec, rows, counts, worst: rows[0]};
+  });
+  const all = subjects.flatMap(s => s.rows);
+  const tally = {bad: 0, warn: 0, ok: 0};
+  for(const r of all) tally[r.lim.level]++;
 
-  // One table, full width, the subject as a row group. Six boxes in two columns gave each
-  // sentence 635px and no column width, so the consequence ran out of its box and over the
-  // text of the section beside it — the page was unreadable where it mattered most. A
-  // sentence needs the width of the page, and a subject needs a heading, not a border.
-  let current = null;
-  const body = shown.map(({sec, row, lim}) => {
-    const head = sec !== current
-      ? `<tr class="sheet-group"><th colspan="3">${esc(sec.title)}</th></tr>`
-      : "";
-    current = sec;
-    return head + `<tr class="${lim.level}">
-      <th>${esc(row.what)}${row.always
-        ? `<span class="always" title="">always</span>` : ""}</th>
-      <td class="sheet-is">${esc(String(row.value(RUN)))}</td>
-      <td class="sheet-so">${mark(lim.says)}</td></tr>`;
-  }).join("");
+  const line = ({sec, rows, counts, worst}) => {
+    const open = OPEN_SUBJECTS.has(sec.area);
+    const state = counts.bad ? "bad" : counts.warn ? "warn" : "ok";
+    // The dots are the subject's rows, worst first — a shape the eye reads before any
+    // word, and it says how many as well as how bad.
+    const dots = rows.map(r =>
+      `<i class="dot ${r.lim.level}"></i>`).join("");
+    return `<div class="subj ${state}${open ? " open" : ""}">
+      <button type="button" class="subj-head" data-subject="${esc(sec.area)}"
+              aria-expanded="${open}">
+        <span class="subj-caret" aria-hidden="true"></span>
+        <span class="subj-name">${esc(sec.title)}</span>
+        <span class="dots" aria-label="${counts.bad} serious, ${counts.warn} noted">${dots}</span>
+        <span class="subj-worst">${
+          worst.lim.level === "ok" ? "nothing to note" : mark(worst.lim.says)}</span>
+      </button>
+      ${open ? `<table class="sheet">
+        <colgroup><col class="col-what"><col class="col-is"><col class="col-so"></colgroup>
+        <tbody>${rows.map(({row, lim}) => `<tr class="${lim.level}">
+          <th>${esc(row.what)}${row.always ? `<span class="always">always</span>` : ""}</th>
+          <td class="sheet-is">${esc(String(row.value(RUN)))}</td>
+          <td class="sheet-so">${mark(lim.says)}</td></tr>`).join("")}</tbody>
+      </table>` : ""}
+    </div>`;
+  };
 
   // Leads are not faults and are not part of the fixed sheet: they are what this
   // particular run did that is worth a second look, so an empty list shows nothing at all.
   const stands = !leads.length ? "" : `
-    <tr class="sheet-group leads"><th colspan="3">what stands out</th></tr>`
-    + leads.map(f => `<tr class="${f.level}">
-        <th colspan="2">${esc(f.short)}</th>
-        <td class="sheet-so">${mark(f.detail || "")}</td></tr>`).join("");
+    <div class="subj leads open">
+      <div class="subj-head static">
+        <span class="subj-name">what stands out</span>
+        <span class="subj-worst">found by rule — leads, not faults</span>
+      </div>
+      <table class="sheet">
+        <colgroup><col class="col-what"><col class="col-is"><col class="col-so"></colgroup>
+        <tbody>${leads.map(f => `<tr class="${f.level}">
+          <th colspan="2">${esc(f.short)}</th>
+          <td class="sheet-so">${mark(f.detail || "")}</td></tr>`).join("")}</tbody>
+      </table>
+    </div>`;
 
-  const counts = `${limiting.length} of ${every.length} carry a limitation`;
   return `<section class="evidence">
     <header class="ev-head">
       <h3>What this run stands on</h3>
-      <span class="ev-why">${counts}</span>
-      <div class="ev-switch" role="group">
-        <button type="button" class="${SHOW_ALL ? "" : "on"}" data-show="limits"
-          >${limiting.length} limiting</button>
-        <button type="button" class="${SHOW_ALL ? "on" : ""}" data-show="all"
-          >all ${every.length}</button>
-      </div>
+      <span class="ev-why">${tally.bad} serious · ${tally.warn} noted · ${tally.ok} clear</span>
+      <button type="button" class="ev-all" data-subject="*">${
+        OPEN_SUBJECTS.size >= SHEET.length ? "close all" : "open all"}</button>
     </header>
-    <table class="sheet">
-      <colgroup><col class="col-what"><col class="col-is"><col class="col-so"></colgroup>
-      <tbody>${body}${stands}</tbody>
-    </table>
+    <div class="subjects">${subjects.map(line).join("")}${stands}</div>
   </section>`;
 }
 
-/** The two-state switch over the sheet. Bound after each paint, because the tier is
- *  rewritten whole and a listener on a replaced node goes with it. */
+/** Opening and closing subjects. Bound after each paint, because the tier is rewritten
+ *  whole and a listener on a replaced node goes with it. */
 function bindEvidence(){
-  for(const b of document.querySelectorAll("[data-show]"))
+  for(const b of document.querySelectorAll("[data-subject]"))
     b.addEventListener("click", () => {
-      const want = b.dataset.show === "all";
-      if(want === SHOW_ALL) return;
-      SHOW_ALL = want;
+      const key = b.dataset.subject;
+      if(key === "*"){
+        if(OPEN_SUBJECTS.size >= SHEET.length) OPEN_SUBJECTS.clear();
+        else for(const sec of SHEET) OPEN_SUBJECTS.add(sec.area);
+      }else if(OPEN_SUBJECTS.has(key)) OPEN_SUBJECTS.delete(key);
+      else OPEN_SUBJECTS.add(key);
       // Only this tier is redrawn; the charts below keep their brush and their scroll.
       const host = document.querySelector(".evidence");
       host.outerHTML = evidence();
