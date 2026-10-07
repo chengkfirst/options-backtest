@@ -14,7 +14,13 @@
      hidden: a chart measured inside `display: none` has no width and would draw nothing,
      which would make every size assertion pass for the wrong reason. */
   #sandbox { position: absolute; left: -10000px; top: 0; width: 600px; }
+  /* A page with no way out of it is a trap, and this one is reached by typing a URL —
+     so the way back is the first thing on it, not the last. */
+  .back { margin: 0 0 12px; font-size: 12px; }
+  .back a { color: var(--accent); text-decoration: none; }
+  .back a:hover { text-decoration: underline; }
 </style>
+<p class="back"><a href="/">&larr; back to the bench</a></p>
 <h1>self test</h1>
 <p id="tally">running…</p>
 <div id="out"></div>

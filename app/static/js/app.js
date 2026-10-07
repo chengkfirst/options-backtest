@@ -32,6 +32,8 @@ const SURFACES = [
   {path: "/registry", icon: "◈", name: "variants", view: "view-pending",
    what: "every registered variant by slot, with its parameter schema",
    pending: "the registry exists; no endpoint serves it yet"},
+  {path: "/selftest", icon: "✓", name: "self test", external: "/selftest.html",
+   what: "every module run against the cases that have broken them"},
   {path: "/data", icon: "◴", name: "data", view: "view-pending",
    what: "the data snapshot's coverage and quality",
    pending: "the quality checks exist; there is no snapshot id to hang a page on"},
@@ -40,7 +42,7 @@ const SURFACES = [
 function renderRail(){
   const {path} = location_();
   $("rail").innerHTML = SURFACES.map(s => `
-    <a class="rail-item${path === s.path ? " on" : ""}" href="#${s.path}"
+    <a class="rail-item${path === s.path ? " on" : ""}" href="${s.external || "#" + s.path}"
        data-tip="${esc(s.name)}${s.pending ? " — not built yet" : ""}">
       <span class="rail-icon" aria-hidden="true">${s.icon}</span>
       <span class="rail-name">${s.name}</span>
