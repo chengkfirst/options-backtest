@@ -142,13 +142,13 @@ const COLUMNS = [
    }},
   {key: "annualised", name: "annual", num: true, sign: true,
    text: r => r.analysis?.equity_metrics?.annualised ?? null,
-   html: r => pct(r.analysis?.equity_metrics?.annualised)},
+   html: r => rate(r, pct(r.analysis?.equity_metrics?.annualised))},
   {key: "max_drawdown", name: "worst fall", num: true,
    text: r => r.analysis?.equity_metrics?.max_drawdown ?? null,
    html: r => pct(r.analysis?.equity_metrics?.max_drawdown)},
   {key: "sortino", name: "Sortino", num: true,
    text: r => r.analysis?.investor?.Sortino ?? null,
-   html: r => num(r.analysis?.investor?.Sortino)},
+   html: r => rate(r, num(r.analysis?.investor?.Sortino))},
   {key: "realism", name: "fills assume", left: true,
    text: r => realism(r).map(c => c.text).join(" "),
    html: r => realism(r).map(c =>
@@ -213,6 +213,38 @@ function readNorms(){
 const floor = () => META?.thresholds?.bootstrap_min_observations?.value ?? 0;
 const thinEvidence = r => r.n_trades < floor();
 const interval = r => r.analysis?.intervals?.net_pnl || null;
+
+/** How long a run covers, in years. */
+function years(r){
+  const a = Date.parse(String(r.start_date)), b = Date.parse(String(r.end_date));
+  return Number.isFinite(a) && Number.isFinite(b) ? (b - a) / 31557600000 : null;
+}
+
+/** Whether an annualised figure from this run is an extrapolation rather than a measurement.
+ *
+ * The log sorts `annual` down a column that mixes a five-year run with a six-month one, and
+ * `+200.4%` from eighty-three trades over four months sits above `−29.7%` from four hundred
+ * and twenty-one over five years with the same weight. Annualising a short window multiplies
+ * whatever that window happened to do; it does not measure a rate. So the rate, and the two
+ * ratios built on it, are drawn muted on a run that covers less than a year and say why. */
+function extrapolated(r){
+  const y = years(r);
+  return y != null && y < 1;
+}
+
+/** An annualised figure, marked where the run is too short for annualising to mean anything.
+ *
+ * Not hidden: the number is what the engine computed and a reader comparing two short runs
+ * against each other still wants it. Marked, so it cannot be read down a column against a
+ * five-year run as though they were the same kind of quantity. */
+function rate(r, text){
+  if(!extrapolated(r) || text === "—") return text;
+  const y = years(r);
+  return `<span class="log-extrapolated" data-tip="Annualised from ${y.toFixed(1)} years.
+    Over a window this short, annualising multiplies what the window happened to do; it does
+    not measure a rate. Read it against other runs of about this length, not against the
+    long ones.">${text}<i class="log-mark">y</i></span>`;
+}
 
 /** The two assumptions a reader challenges first, as chips. The mark method is the third and
  *  is not here: both marks are stored for every run and neither is "the" assumption, so the
@@ -349,6 +381,33 @@ function filterBar(){
   </div>`;
 }
 
+/** The best Sharpe under an idea **and what the search does to it**, in the same breath.
+ *
+ * These were two facts side by side — `60 tried` and `best Sharpe 2.35` — with the correction
+ * that joins them behind a button on another page. The maximum of sixty tries is not a
+ * result, and the one place the maximum appeared was the one place it was not discounted.
+ *
+ * Where the deflation cannot run, its refusal is shown instead of the raw figure standing
+ * alone: on this project's own record the best Sharpe under the largest idea comes from a run
+ * covering four months, which is both why it is the best and why it cannot be deflated. */
+function bestSharpe(idea){
+  if(idea.best_sharpe == null)
+    return `<span class="idea-best log-none" data-tip="Only the event-driven engine builds an
+      equity curve, and a Sharpe needs one.">no Sharpe</span>`;
+  const d = idea.deflated;
+  if(d && d.probability != null){
+    const weak = d.probability < 0.5;
+    return `<span class="idea-best${weak ? " bad" : ""}" data-tip="${esc(d.says)}">best Sharpe
+      ${num(idea.best_sharpe)} → <b>${Math.round(d.probability * 100)}%</b> after ${d.trials}
+      ${d.trials === 1 ? "trial" : "trials"}</span>`;
+  }
+  return `<span class="idea-best warn" data-tip="${esc(d?.refused
+    || "the deflation did not run")} Until it can, this figure is the maximum of a search and
+    not a result.">best Sharpe ${num(idea.best_sharpe)}${idea.best_run
+      ? ` · run ${idea.best_run.id} over ${idea.best_run.years.toFixed(1)}y`
+      : ""} · <b>not deflated</b></span>`;
+}
+
 /** The idea's header: the size of the search, before its best result. */
 function ideaHead(idea, shownRuns){
   const lower = idea.unplaced > 0;
@@ -372,10 +431,7 @@ function ideaHead(idea, shownRuns){
         : `${idea.distinct} tried · ${idea.reruns} rerun${idea.reruns === 1 ? "" : "s"}${
             lower ? ` · ${idea.unplaced} unplaced` : ""}`
       }</span>
-    <span class="idea-best" data-tip="The best annualised Sharpe among this idea's runs. It
-      is **not** deflated for the size of the search — the deflation needs the period count
-      in years, which the robustness tab asks for rather than assumes.">${
-      idea.best_sharpe == null ? "no Sharpe" : `best Sharpe ${num(idea.best_sharpe)}`}</span>
+    ${bestSharpe(idea)}
     <span class="idea-common">${[
       (NORM.get(idea.idea) || {}).engine,
       (NORM.get(idea.idea) || {}).data === "synthetic" ? "synthetic chain"
@@ -430,6 +486,7 @@ function render(){
   $("view-log").innerHTML = `<div class="log-wrap">
     <header class="log-head">
       <h2>experiment log</h2>
+      ${splitSearch()}
       <p class="hint">Every run, under the idea that owns it. The count in each header is the
         size of the search, archived runs included.${RUNS.length
           ? ` ${esc(String(RUNS.length))} runs are loaded${FILTERS.archived
@@ -451,6 +508,38 @@ function render(){
   </div>`;
   wire();
   paintCompareBar();
+}
+
+/** Whether one search has been split across two names, found from the configurations.
+ *
+ * A trial count is grouped by the idea's name, and the name is free text. Two groups that are
+ * really one search are one search counted as two — and the error goes in the direction the
+ * deflated Sharpe cannot afford: it discounts each half by its own smaller trial count, so
+ * the best result under either looks more significant than the work supports.
+ *
+ * **Found by what the runs are, not by what they are called.** A list of placeholder words
+ * would have to guess at every language a name might be typed in and would still miss
+ * "scratch2". A configuration that appears under two different names is the same search in
+ * two buckets whatever either is called. */
+function splitSearch(){
+  const nameOf = new Map();             // configuration -> the first idea name seen with it
+  const shared = new Map();             // a pair of names -> how many configurations they share
+  for(const r of RUNS){
+    const key = JSON.stringify(flatten(r.config || {}));
+    const seen = nameOf.get(key);
+    if(seen === undefined){ nameOf.set(key, r.strategy_name); continue; }
+    if(seen === r.strategy_name) continue;
+    const pair = [seen, r.strategy_name].sort().join(" ↔ ");
+    shared.set(pair, (shared.get(pair) || 0) + 1);
+  }
+  if(!shared.size) return "";
+  const worst = [...shared.entries()].sort((a, b) => b[1] - a[1])[0];
+  return `<p class="log-split"><b>Two ideas are running the same configurations.</b>
+    ${esc(worst[0])} share ${worst[1]} configuration${worst[1] === 1 ? "" : "s"}${
+      shared.size > 1 ? `, and ${shared.size - 1} other pair${
+        shared.size === 2 ? " does" : "s do"} too` : ""}. The trial count is grouped by the
+    idea's name, so a search split across two names is discounted as two smaller searches —
+    and every deflated figure under them is discounted by too little.</p>`;
 }
 
 /** Nothing to show, and which kind of nothing it is.

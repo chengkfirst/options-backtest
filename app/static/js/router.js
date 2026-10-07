@@ -125,6 +125,13 @@ export function start(fallback = "/"){
     const changed = !current || current.route !== hit.route;
     if(changed && current?.route.leave) current.route.leave();
     current = {route: hit.route, params: hit.params, query: q};
+    // **A new surface opens at its top.** The browser keeps the scroll position across a
+    // hash change, so ticking two runs at the bottom of a hundred-row log and pressing
+    // compare landed the reader in the middle of the comparison's trade table — below the
+    // columns, below the differences, below the result, with nothing on screen saying what
+    // page they were on. Only on a change of surface: a tab switch inside a run is a step
+    // within one page and must keep its place.
+    if(changed) window.scrollTo({top: 0});
     hit.route.enter({params: hit.params, query: q, changed});
   };
   window.addEventListener("hashchange", render);

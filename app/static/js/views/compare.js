@@ -70,8 +70,14 @@ const METRICS = [
    better: "lower"},
   {name: "profit factor", read: r => r.analysis?.trade_stats?.profit_factor, format: num,
    better: "higher"},
-  {name: "cost share of gross", read: r => r.analysis?.costs?.fees_pct_of_gross, format: pct,
-   better: "lower"},
+  // Against the **premium traded**, not against gross. A ratio to a gross that is negative is
+  // "costs as a share of the size of the loss", which is not a cost ratio and gets worse the
+  // better the run does. The backend reports both and this is the one that is defined
+  // whatever the result's sign. Older runs carry the previous key and still render.
+  {name: "costs vs premium paid", format: pct, better: "lower",
+   read: r => r.analysis?.costs?.cost_pct_of_premium
+     ?? r.analysis?.costs?.fees_pct_of_gross},
+  {name: "spread paid", read: r => r.analysis?.costs?.spread, format: money, better: "lower"},
 ];
 
 const metrics = r => r.analysis?.equity_metrics || r.equity_metrics || null;
@@ -153,12 +159,29 @@ function differences(){
   const codes = [...new Set(RUNS.map(r => String(r.manifest?.code || "")))];
   const datas = [...new Set(RUNS.map(r => String(r.manifest?.data_version || "")))];
   const sameConfig = items.length === 0;
-  const flag = sameConfig && (codes.length > 1 || datas.length > 1)
-    ? `<p class="cmp-flag"><b>Same configuration, different ${
-        codes.length > 1 ? "code" : "data"}.</b> Whatever differs below is a
-       reproducibility event, not a research finding: nothing about the strategy was
-       changed.</p>`
-    : "";
+  const dirty = RUNS.filter(r => String(r.manifest?.code || "").includes("+dirty"));
+  // **A difference in the code outranks a difference in the strategy, always.** It was listed
+  // at the bottom of the leaf table with the same weight as an entry expression — and two runs
+  // on different commits are not two configurations being compared, they are two engines. A
+  // `+dirty` tree is worse again: the commit does not contain what ran, so there is no way to
+  // say what the difference was.
+  const flag = codes.length > 1 || datas.length > 1
+    ? `<p class="cmp-flag"><b>These runs were produced by different ${
+        [codes.length > 1 ? "code" : "", datas.length > 1 ? "data" : ""]
+          .filter(Boolean).join(" and ")}.</b> ${sameConfig
+        ? `The configurations are identical, so everything below is a reproducibility event
+           rather than a research finding.`
+        : `Whatever differs below is the strategy change **and** the engine change together,
+           and nothing here can separate them.`}${dirty.length
+        ? ` ${dirty.length === RUNS.length ? "Every" : `${dirty.length} of these`} run${
+            dirty.length === 1 ? " was" : "s were"} produced by a working tree with
+           uncommitted changes (<code>+dirty</code>), so the named commit does not contain
+           the code that ran and the difference cannot be recovered at all.` : ""}</p>`
+    : dirty.length
+      ? `<p class="cmp-flag"><b>${dirty.length === RUNS.length ? "Every" : `${dirty.length} of
+         these`} run${dirty.length === 1 ? " was" : "s were"} produced by a working tree with
+         uncommitted changes.</b> The commit named below does not contain the code that ran.</p>`
+      : "";
   const rows = items.length
     ? items.map(({path, values}) => `<tr>
         <th class="left mono">${esc(path)}</th>
@@ -186,7 +209,7 @@ function differences(){
     ${flag}
     <table class="plain cmp-table"><thead><tr><th class="left">leaf</th>
       ${RUNS.map((r, i) => `<th class="series-${i + 1}">run ${r.id}</th>`).join("")}
-      </tr></thead><tbody>${rows}${provenance}</tbody></table>
+      </tr></thead><tbody>${provenance}${rows}</tbody></table>
   </section>`;
 }
 
@@ -356,13 +379,24 @@ function trades(){
       other ? esc(money(other.net_pnl - t.net_pnl)) : "—"}</td>
   </tr>`;
 
+  // **A list is a list, not the page.** The first of these ran to three hundred and
+  // forty-four rows, which pushed the section that answers "what changed" off the bottom of
+  // a page whose whole promise is differences first. The list opens showing enough to see
+  // the shape of it and says how many more there are.
+  const FIRST = 12;
   const section = (title, why, rows) => !rows.length ? "" : `
     <h4>${esc(title)} <span class="cmp-n">${rows.length}</span></h4>
     <p class="hint">${esc(why)}</p>
     <div class="scroll"><table class="plain cmp-trades"><thead><tr>
       <th class="left">opened</th><th class="left">contract</th><th class="left">closed by</th>
       <th>run ${a.id}</th><th>run ${b.id}</th><th>difference</th>
-    </tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+    </tr></thead><tbody>${rows.slice(0, FIRST).join("")}</tbody></table></div>
+    ${rows.length > FIRST ? `<p class="hint">The first ${FIRST} of ${rows.length}, oldest
+      first. <button type="button" class="chip" data-more="${esc(title)}">show all
+      ${rows.length}</button></p>
+      <div class="scroll" id="more_${esc(title).replace(/\W+/g, "_")}" hidden>
+        <table class="plain cmp-trades"><tbody>${rows.slice(FIRST).join("")}</tbody></table>
+      </div>` : ""}`;
 
   return `<section class="cmp-section">
     <h3>the trades</h3>
@@ -414,6 +448,14 @@ function render(){
       BASE = button.dataset.base;
       replace({base: BASE});
       render();
+    });
+  for(const button of document.querySelectorAll("[data-more]"))
+    button.addEventListener("click", () => {
+      const rest = document.getElementById(
+        `more_${button.dataset.more.replace(/\W+/g, "_")}`);
+      if(!rest) return;
+      rest.hidden = false;
+      button.hidden = true;
     });
   for(const button of document.querySelectorAll("[data-drop]"))
     button.addEventListener("click", () => {

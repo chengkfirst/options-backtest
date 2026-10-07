@@ -70,6 +70,51 @@ def _tradeoff(q: dict[str, str]) -> dict[str, Any]:
 
 
 
+def _pace() -> dict[str, float]:
+    """Seconds of wall clock per year of backtest, by engine, from the runs on record.
+
+    **A spread, not a number.** The runtime is driven by how many positions the engine ends
+    up valuing, not by the span: on this record, five-year runs have taken anywhere from 1.6
+    to 416 seconds. A point estimate would simply be wrong in a different way from the
+    hardcoded one it replaces, so the median and the ninth decile both travel, and the
+    interface says both.
+
+    An engine with fewer than three runs on record gets no entry, and the interface says it
+    does not know rather than quoting a number nobody measured.
+    """
+    from datetime import date
+    from statistics import median
+
+    from store import Store
+
+    by_engine: dict[str, list[float]] = {}
+    try:
+        rows = Store().runs(limit=400, include_archived=True)
+    except Exception:  # noqa: BLE001
+        return {}
+    for row in rows:
+        seconds = row.get("seconds")
+        config = row.get("config") or {}
+        if not seconds or seconds <= 0:
+            continue
+        try:
+            span = (date.fromisoformat(str(row["end_date"])[:10])
+                    - date.fromisoformat(str(row["start_date"])[:10])).days / 365.25
+        except (ValueError, KeyError, TypeError):
+            continue
+        if span <= 0:
+            continue
+        by_engine.setdefault(config.get("engine") or "trade_table", []).append(seconds / span)
+    def spread(rates: list[float]) -> dict[str, float]:
+        rates = sorted(rates)
+        at = lambda q: rates[min(len(rates) - 1, int(q * len(rates)))]  # noqa: E731
+        return {"median": round(median(rates), 2), "high": round(at(0.9), 2),
+                "runs": len(rates)}
+
+    return {engine: spread(rates)
+            for engine, rates in by_engine.items() if len(rates) >= 3}
+
+
 def _meta_payload() -> dict[str, Any]:
     """Everything static the interface needs.
 
@@ -95,6 +140,12 @@ def _meta_payload() -> dict[str, Any]:
             {"a": a, "b": b, "why": why} for a, b, why in COUPLINGS
         ],
         "gaps": _describe_gaps(),
+        # How long a backtest actually takes, per engine, measured from the record rather
+        # than guessed. The form used to say "roughly four seconds a year", which on this
+        # machine's own history is half of what it takes — an estimate that is wrong by
+        # a factor of two is worse than none, because the reader stops believing the
+        # progress line and starts wondering whether the page has hung.
+        "pace": _pace(),
         # The registered forms of each slot. The composer builds its variant pickers and
         # their parameter forms from this, so a form added in the backend is offered in
         # the interface with no edit on this side.

@@ -257,7 +257,7 @@ function compBlock(c, planMode){
   const body = taken
     ? `<p class="comp-note">→ <code>${c.in_plan}</code></p>`
     : !c.inputs.length && !byForm
-      ? `<p class="comp-note">${esc(shortGap(c))}</p>`
+      ? `<p class="comp-note">${gapHtml(c)}</p>`
       : `${byForm ? `<p class="comp-note">the <b>${esc(PICKED[c.key])}</b> rule decides this${
             replaced.length ? `, in place of ${replaced.map(i => esc(i.label)).join(" and ")}`
                             : ""}</p>` : ""}
@@ -343,12 +343,22 @@ function variantParams(slot, form){
     }).join("")}</div>`;
 }
 
-/* A component with no controls says one line about why — one line, not a paragraph.
-   What is missing and how to find it lives in requirements.md and components.py. */
-function shortGap(c){
-  const g = (c.gap || "").replace(/\*\*/g, "");
-  const first = g.split(/[;.]/)[0] || "nothing configurable yet";
-  return first.length > 52 ? first.slice(0, 52) + "…" : first;
+/* A component with no controls says why it has none.
+ *
+ * It was cut at fifty-two characters with an ellipsis and no way to reach the rest, so slot 1
+ * read `rule-based classification (VIX / term structure / tr…` — a sentence that stops
+ * exactly where it was about to say what is missing. The first clause still leads, because a
+ * paragraph in a slot card is not read either; the rest is one click away on the card itself.
+ */
+function gapHtml(c){
+  const whole = (c.gap || "").replace(/\*\*/g, "").trim() || "nothing configurable yet";
+  const first = whole.split(/[;.]/)[0];
+  if(first.length >= whole.length - 1) return `<span>${esc(whole)}</span>`;
+  // The whole sentence **replaces** the opening clause rather than following it; appending
+  // printed the first clause twice, once on its own and once inside the rest.
+  return `<span class="gap-first" id="gapfirst_${esc(c.key)}">${esc(first)}.</span>
+    <button type="button" class="gap-more" data-gap="${esc(c.key)}">the rest</button>
+    <span class="gap-rest" id="gap_${esc(c.key)}" hidden>${esc(whole)}</span>`;
 }
 
 function fieldHtml(f){
@@ -405,6 +415,17 @@ function bindFields(){
       renderComponents();
     }));
   // `change` as well as `input`, because a select fires only the former.
+  // The rest of a slot's gap, in place. A sentence cut mid-word with no way to finish it is
+  // worse than no sentence: the reader knows something was said and cannot read it.
+  $("comps").querySelectorAll("[data-gap]").forEach(button =>
+    button.addEventListener("click", () => {
+      const rest = $(`gap_${button.dataset.gap}`);
+      const first = $(`gapfirst_${button.dataset.gap}`);
+      if(!rest) return;
+      rest.hidden = false;
+      if(first) first.hidden = true;
+      button.hidden = true;
+    }));
   $("comps").querySelectorAll("[data-param]").forEach(el => {
     const keep = () => { PARAMS[el.dataset.param] = el.value; };
     el.addEventListener("input", keep);
@@ -436,19 +457,46 @@ document.querySelectorAll("[data-strat]").forEach(tab =>
 
 
 /* ── the form ── */
-function updateSpanHint(){
+/* How long this will take, from **what runs on this machine have actually taken**.
+ *
+ * It used to say four seconds a year, which is a number somebody once typed: against this
+ * record a five-year event-driven run takes thirteen seconds in the middle and the slowest
+ * tenth take twenty-eight, and individual runs have taken four hundred. An estimate wrong by
+ * a factor of two is worse than none — the reader stops believing the counter and starts
+ * wondering whether the page has hung — so the measured spread is quoted rather than a point,
+ * and where there is no measurement the hint says so.
+ */
+function expected(){
   const f = $("form");
   const a = new Date(f.start.value), b = new Date(f.end.value);
-  if(isNaN(a) || isNaN(b)) { $("spanHint").textContent = ""; return; }
+  if(isNaN(a) || isNaN(b)) return null;
   const years = (b - a) / 31557600000;
-  if(years <= 0){ $("spanHint").textContent = "the start is after the end, so this cannot run."; return; }
-  $("spanHint").textContent =
-    `about ${years.toFixed(1)} years, roughly ${Math.max(3, Math.round(years * 4))} seconds.`
-    + (years > 6 ? " While tuning, use a shorter range first and run the whole period once it is settled." : "");
+  if(years <= 0) return {years};
+  const pace = (META?.pace || {})[f.engine.value];
+  return pace
+    ? {years, middle: Math.max(2, Math.round(years * pace.median)),
+       high: Math.max(3, Math.round(years * pace.high)), runs: pace.runs}
+    : {years};
+}
+
+function updateSpanHint(){
+  const e = expected();
+  if(!e){ $("spanHint").textContent = ""; return; }
+  if(e.years <= 0){
+    $("spanHint").textContent = "the start is after the end, so this cannot run.";
+    return;
+  }
+  const span = `about ${e.years.toFixed(1)} years`;
+  $("spanHint").textContent = e.middle
+    ? `${span} — around ${e.middle}s, and the slowest tenth of runs this long have taken `
+      + `over ${e.high}s. A configuration that opens many positions takes much longer; the `
+      + `cost is in valuing them, not in the span.`
+    : `${span}. How long it takes has not been measured on this machine yet.`;
 }
 ["start","end"].forEach(n => $("form")[n].addEventListener("change", updateSpanHint));
 
 $("engine").addEventListener("change", updateEngineHint);
+$("engine").addEventListener("change", updateSpanHint);
 function updateEngineHint(){
   const driven = $("engine").value === "event_driven";
   $("concurrentWrap").hidden = !driven;
@@ -569,12 +617,19 @@ async function runBacktest(){
   // engine values American early exercise on a tree, day by day, for every open position
   // — and a spinner that only spins cannot be told apart from a page that has hung. The
   // elapsed time rising is the difference between waiting and worrying.
+  // The counter carries what it is counting towards, and says when it has passed it. A bare
+  // "26s so far" cannot be told from a request that will never return.
+  const e = expected();
   const tick = () => {
     const secs = (performance.now() - t0) / 1000;
-    note.innerHTML = `<span class="spin"></span><span>Running — <b>${secs.toFixed(0)}s
-      </b> so far.${secs > 20 ? " A long range, or an American contract whose early "
-      + "exercise is valued on a tree each day, takes minutes rather than seconds." : ""}
-      </span>`;
+    const past = e && e.high && secs > e.high;
+    note.innerHTML = `<span class="spin"></span><span>Running — <b>${secs.toFixed(0)}s</b>${
+      e && e.middle ? ` of about ${e.middle}s` : ""}.${past
+        ? ` Longer than nine in ten runs of this length. The cost is in valuing open `
+          + `positions — an American contract is priced on a tree each day it is held — so a `
+          + `configuration that holds many at once takes far longer than its span suggests. `
+          + `It has not hung.`
+        : ""}</span>`;
   };
   tick();
   const ticking = setInterval(tick, 1000);
@@ -605,7 +660,10 @@ async function runBacktest(){
     clearInterval(ticking);
     note.remove();
     btn.disabled = false; btn.classList.remove("busy"); btn.textContent = "run";
-    $("runHint").textContent = `last run took ${((performance.now()-t0)/1000).toFixed(1)} seconds.`;
+    const took = (performance.now() - t0) / 1000;
+    const e2 = expected();
+    $("runHint").textContent = `that run took ${took.toFixed(1)}s`
+      + (e2 && e2.middle ? ` against about ${e2.middle}s expected.` : ".");
   }
 }
 

@@ -1170,7 +1170,11 @@ const COLUMNS = [
   {key: "entry_price", name: "in", fmt: v => num(v)},
   {key: "exit_price", name: "out", fmt: v => num(v)},
   {key: "net_pnl", name: "net P&L ($)", fmt: bare, sign: true},
-  {key: "exit_reason", name: "closed by", left: true, fmt: v => REASON[v] || v || "—"},
+  // The readable name on screen and **the stored one on hover**. They are not the same word —
+  // the column says "holding cap" and the trade log says `time_exit` — so a reader moving
+  // between this table and an exported file has to be able to see both without leaving.
+  {key: "exit_reason", name: "closed by", left: true, fmt: v => REASON[v] || v || "—",
+   title: v => v ? `stored as ${v}` : ""},
   {key: "holding_days", name: "held (trading days)", fmt: v => num(v, 0)},
   {key: "entry_iv", name: "IV in", fmt: pct},
   {key: "entry_delta", name: "Δ in", fmt: v => num(v, 3)},
@@ -1787,11 +1791,13 @@ function settingsTab(){
   </div>`;
 }
 
-/** Why a component shows nothing: its own words, trimmed to a line. */
+/** Why a component shows nothing: its own words, whole.
+ *
+ * It was cut at ninety characters with an ellipsis, which on the settings tab — where there
+ * is a column's width to spare and nothing competing for it — removed the end of a sentence
+ * for no gain. */
 function shortGap(g){
-  const text = (g.gap || "").replace(/\*\*/g, "");
-  const first = text.split(/[;.]/)[0] || "nothing to configure yet";
-  return first.length > 90 ? first.slice(0, 90) + "…" : first;
+  return (g.gap || "").replace(/\*\*/g, "").trim() || "nothing to configure yet";
 }
 
 /* The attribution tab.
@@ -1841,7 +1847,8 @@ function exitReasonTab(){
     <tbody>${rows.map(r => `<tr data-closed="${esc(String(r[key]))}"${
       String(r[key]) === CLOSED_BY ? ' class="picked"' : ""}>${cols.map((c, i) => {
       const v = r[c];
-      return `<td class="${i ? "n" : "left"}">${
+      return `<td class="${i ? "n" : "left"}"${i === 0 && typeof v !== "number"
+        ? ` title="stored as ${esc(String(v))}"` : ""}>${
         typeof v === "number" ? esc(fmtVal(c, v)) : esc(REASON[v] || v)}</td>`;
     }).join("")}</tr>`).join("")}</tbody></table>
     <p class="hint">Click a row to filter the trade table to the trades it closed.</p></div>`;
@@ -1855,9 +1862,19 @@ function exitReasonTab(){
  * read their own costs, and a boolean is a sentence, not a value. */
 const COST_LABEL = {
   commission: "commission", regulatory: "regulatory fees", slippage: "slippage",
-  total: "total cost", gross_pnl: "before costs", net_pnl: "after costs",
-  fees_pct_of_gross: "share of gross",
+  fees: "fees in total", spread: "spread paid", total: "total cost",
+  premium_traded: "premium paid", gross_pnl: "before costs", net_pnl: "after costs",
+  gross_pnl_at_mid: "before costs, at the mid",
+  cost_pct_of_premium: "cost of the premium paid",
+  fees_pct_of_premium: "fees of the premium paid",
+  cost_pct_of_gross_at_mid: "cost of the edge",
+  // What the record carried before the spread moved into this block. Kept so an older run
+  // still reads as something rather than as its own field name.
+  fees_pct_of_gross: "fees as a share of gross",
 };
+
+/** The two sentences the cost block writes for itself, which are not cards. */
+const COST_NOTES = new Set(["spread_note", "gross_note", "eaten_by_costs"]);
 /** Costs are money spent. A signed formatter prints 346 spent as "+346", which reads as a
  *  gain; the sign belongs to the P&L rows, not to the cost rows. */
 const COST_SIGNED = new Set(["gross_pnl", "net_pnl"]);
@@ -1869,22 +1886,36 @@ function costsTab(){
   const eaten = costs.eaten_by_costs;
 
   const cards = Object.entries(costs)
-    .filter(([k]) => k !== "eaten_by_costs")       // a verdict, shown as one below
+    .filter(([k]) => !COST_NOTES.has(k))           // sentences, shown as sentences below
     .map(([k, v]) => {
-      const show = typeof v !== "number" ? String(v)
+      // A null here is a measurement the run cannot make, not a zero — the spread without a
+      // quote beside the fill is the case, and it is the largest cost an option buyer pays.
+      const show = v == null ? "not measured"
+        : typeof v !== "number" ? String(v)
         : Math.abs(v) < 1 ? pct(v)
         : COST_SIGNED.has(k) ? money(v) : size(v);
-      return `<div class="card"><dt>${esc(COST_LABEL[k] || label(k))}</dt>
+      return `<div class="card${v == null ? " empty" : ""}">
+        <dt>${esc(COST_LABEL[k] || label(k))}</dt>
         <dd>${esc(show)}</dd></div>`;
     }).join("");
 
+  // The notes the backend writes about what it could and could not measure. They are
+  // sentences and belong as sentences — the spread one in particular, which says the largest
+  // cost an option buyer pays is unmeasurable on this run rather than zero.
+  const notes = ["spread_note", "gross_note"]
+    .map(k => costs[k]).filter(Boolean)
+    .map(text => `<p class="hint">${mark(String(text))}.</p>`).join("");
+
   return `<div class="pad">
     <dl class="cards">${cards}</dl>
+    ${notes}
     ${eaten != null ? `<p class="hint${eaten ? " warn-text" : ""}">${eaten
-      ? `Costs took more than ${pct(t?.value)} of gross: this result is a statement about
-         the cost model as much as about the strategy.`
-      : `Costs stayed under the ${pct(t?.value)} of gross at which this project stops
-         trusting a result.`}</p>` : ""}</div>`;
+      ? `<b>Gross was positive and net was not.</b> The edge did not cover the cost of
+         trading it, so this result is a statement about the cost model as much as about the
+         strategy.`
+      : `Gross and net have the same sign, so the costs did not turn the result over. The
+         share they took is above; this project stops trusting a result past
+         ${pct(t?.value)}.`}</p>` : ""}</div>`;
 }
 
 /* The research tools, run on demand.

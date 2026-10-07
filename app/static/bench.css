@@ -241,3 +241,16 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:v
 }
 .baseline-dot:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
 .field.changed > label { color: var(--accent); }
+
+/* The rest of a slot's gap sentence, which used to be cut mid-word with no way to finish it. */
+.gap-more {
+  background: none;
+  border: 0;
+  border-bottom: 1px dotted var(--border-strong);
+  color: var(--ink-3);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+.gap-more:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.gap-rest { display: block; margin-top: 3px; }

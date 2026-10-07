@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from collections import OrderedDict
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from compilers import compile_entry, compile_plan, compile_review, compile_signals
@@ -732,8 +732,8 @@ def ideas() -> list[dict[str, Any]]:
         idea = row["strategy_name"]
         group = out.setdefault(idea, {
             "idea": idea, "runs": 0, "archived": 0, "symbols": set(),
-            "last": "", "best_sharpe": None, "hold_out": None, "hold_out_touched": False,
-            "verdicts": {},
+            "last": "", "best_sharpe": None, "best_run": None,
+            "hold_out": None, "hold_out_touched": False, "verdicts": {},
         })
         group["runs"] += 1
         group["archived"] += 1 if row.get("archived") else 0
@@ -743,6 +743,12 @@ def ideas() -> list[dict[str, Any]]:
         if sharpe is not None and (group["best_sharpe"] is None
                                   or sharpe > group["best_sharpe"]):
             group["best_sharpe"] = float(sharpe)
+            # Which run set the record, and over how long — the deflation needs the span in
+            # years because the stored Sharpe is annualised, and mixing the two is the
+            # mistake that inflates the answer.
+            span = (date.fromisoformat(str(row["end_date"])[:10])
+                    - date.fromisoformat(str(row["start_date"])[:10])).days / 365.25
+            group["best_run"] = {"id": row["id"], "years": span}
         verdict = row.get("last_verdict") or "open"
         group["verdicts"][verdict] = group["verdicts"].get(verdict, 0) + 1
         # The hold-out is declared per run in the manifest. An idea's hold-out is the one its
@@ -766,9 +772,45 @@ def ideas() -> list[dict[str, Any]]:
             trials = tracker.count_trials(placed, idea=idea)
             group["distinct"] = trials.distinct
             group["reruns"] = trials.runs - trials.distinct
+            group["deflated"] = _deflate_best(trials, group)
         else:
             group["distinct"] = 0
             group["reruns"] = 0
+            group["deflated"] = None
         group["symbols"] = sorted(group["symbols"])
 
     return sorted(out.values(), key=lambda g: g["last"], reverse=True)
+
+
+def _deflate_best(trials, group) -> dict[str, Any] | None:
+    """The best Sharpe under an idea, discounted by how much searching produced it.
+
+    **The headline and its discount belong together.** The best of sixty tries is not a
+    result, and a group header that shows the maximum beside the trial count and leaves the
+    deflation to a button somebody has to remember to press is showing the one number that
+    needs the correction in the one place it does not have it.
+
+    ``periods`` has to be on the Sharpe's own frequency, and the stored Sharpe is annualised,
+    so the period count is the best run's span **in years**. That is the error the deflation
+    refuses rather than guesses at, so the span is read from the run that set the record, not
+    assumed. Under two years it declines, and the refusal travels instead of a number.
+    """
+    from backtest.research import tracker
+
+    best = group.get("best_run")
+    if trials.best_sharpe is None or not best:
+        return None
+    years = best.get("years")
+    if not years or years < 2:
+        return {"refused": f"the best run covers {years:.1f} years and the deflation needs "
+                           f"at least two: a Sharpe over one short window carries too little "
+                           f"information to discount" if years else
+                           "the best run's period could not be read"}
+    try:
+        d = tracker.deflate(trials, periods=int(years))
+    except Exception as exc:  # noqa: BLE001
+        # The deflation refuses inputs it cannot support, and the refusal **is** the answer.
+        return {"refused": str(exc)}
+    return {"sharpe": d.sharpe, "trials": d.trials, "periods": d.periods,
+            "benchmark": d.benchmark, "probability": d.probability, "says": d.verdict(),
+            "run": best.get("id")}

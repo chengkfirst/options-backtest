@@ -172,8 +172,9 @@ export function card(row, {config, position, total} = {}){
       <p class="tc-split">${esc(money(row.gross_pnl))} before costs, less
         ${esc(size(row.fees))} in fees${position && total
           ? ` · ${position} of ${total} in the table's current order` : ""}</p>
-      <p class="tc-closed">closed by <b>${esc(REASON[row.exit_reason] || row.exit_reason
-        || "—")}</b>${closing != null ? ` — the ${esc(SLOT[closing])} slot` : ""}</p>
+      <p class="tc-closed" title="stored as ${esc(String(row.exit_reason ?? ""))}">closed by
+        <b>${esc(REASON[row.exit_reason] || row.exit_reason || "—")}</b>${
+        closing != null ? ` — the ${esc(SLOT[closing])} slot` : ""}</p>
     </section>
 
     <section class="tc-block">

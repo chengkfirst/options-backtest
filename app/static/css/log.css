@@ -424,3 +424,32 @@
   font-size: var(--font-base);
   line-height: 1.6;
 }
+
+/* A figure annualised from a window too short to annualise. Marked, not hidden: the number
+   is what the engine computed, and it must simply not be readable down a column against a
+   five-year run as if the two were the same kind of quantity. */
+.log-extrapolated { color: var(--text-muted); }
+.log-mark {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  font-style: normal;
+  color: var(--warning);
+  margin-left: 2px;
+  vertical-align: super;
+}
+
+.idea-best.warn { color: var(--warning); }
+.idea-best.bad b { color: var(--danger); }
+.idea-best b { color: var(--text-primary); }
+
+/* One search split across two names, which is the one error the trial count cannot survive. */
+.log-split {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--warning-soft);
+  border-left: 3px solid var(--warning);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: var(--font-sm);
+  line-height: 1.5;
+  max-width: 100ch;
+}

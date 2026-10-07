@@ -77,8 +77,7 @@ export const CONTRACT = {
         "analysis.investor.annualised_alpha", "analysis.investor.beta_vs_underlying",
         "analysis.investor.buy_and_hold", "analysis.investor.strategy_total",
         "analysis.excursion.censoring",
-        // The comparison's metric rows, each named here at the depth it is read.
-        "analysis.costs.fees_pct_of_gross",
+
         // The trade card. Every block of it is a stored column of the trade log; a renamed
         // column has to fail here rather than leaving a card with blanks in it.
         "rows.*.trade_id", "rows.*.quantity", "rows.*.mfe", "rows.*.mae",
@@ -106,7 +105,18 @@ export const CONTRACT = {
    * and demanding these there reported a missing field on every ordinary run, which is
    * how a notice strip gets ignored.
    */
-  run_when_set: ["config.select.dte_lo", "config.select.dte_hi",
+  /* The cost breakdown, which changed shape when the spread moved into it.
+   *
+   * Declared read-when-present rather than required: a run stored before the change carries
+   * `fees_pct_of_gross` and none of these, and demanding them would put a red strip above
+   * every older run in the store. `check_wiring` still holds them, because its sample is a
+   * fresh run and fills every one in — which is where a rename has to fail.
+   */
+  run_when_set: ["analysis.costs.total", "analysis.costs.fees",
+                 "analysis.costs.premium_traded", "analysis.costs.cost_pct_of_premium",
+                 "analysis.costs.fees_pct_of_premium", "analysis.costs.gross_pnl",
+                 "analysis.costs.net_pnl", "analysis.costs.eaten_by_costs",
+                 "config.select.dte_lo", "config.select.dte_hi",
                  "config.select.delta_lo", "config.select.delta_hi",
                  "config.select.delta", "config.select.max_spread",
                  "config.select.min_open_interest"],
@@ -154,8 +164,16 @@ export const CONTRACT = {
    * "undefined tried", which is the one number on that page a reader must be able to trust.
    */
   ideas: ["idea", "runs", "archived", "distinct", "reruns", "unplaced", "symbols",
-          "last", "best_sharpe", "hold_out", "hold_out_touched", "verdicts"],
+          "last", "best_sharpe", "hold_out", "hold_out_touched", "verdicts",
+          // The best Sharpe and what the search does to it travel together, so a header
+          // cannot show the maximum of sixty tries without its discount — or without the
+          // reason there is none.
+          "best_run", "deflated"],
   meta: ["symbols", "defaults", "form", "signal_docs", "plan_help", "code_help", "gaps",
+         // Measured runtimes, so the composer's estimate is a measurement rather than a
+         // number somebody typed. Absent where too few runs are on record, which the
+         // interface says rather than papering over.
+         "pace",
          "validations",
          // Every registered form of every slot. The composer's variant pickers and their
          // parameter forms are generated from it, so a slot losing its forms here would
