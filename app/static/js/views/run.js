@@ -133,8 +133,38 @@ function verdict(){
 
   return `<div class="verdict ${tone}">
     <p class="verdict-line">${line}</p>
+    ${spread()}
     ${caveat ? `<p class="verdict-caveat">${esc(caveat)}</p>` : ""}
   </div>`;
+}
+
+/** How much of the headline figure is the draw rather than the strategy.
+ *
+ * This lived under two of the eight metric cards as "95% −54.3k to −8.0k", which asks the
+ * reader to already know it is a bootstrap confidence interval, what the 95% is a
+ * percentage of, and that the thing to look for is whether it contains zero. Four tokens
+ * carrying that much assumed context are not short, they are unreadable.
+ *
+ * Saying it properly needs a sentence, and a 165px card cannot hold one — spelling it out
+ * there took three wrapped lines of 11px monospace and grew the whole band by 40%. But it
+ * was never a property of a card: it qualifies **the headline number**, so it belongs
+ * beside it, where the full width makes it one plain line.
+ *
+ * What it means: these trades are one draw. The engine resamples them many times over and
+ * recomputes the total each time, and this is where 95% of those totals fell. A reader who
+ * has never heard of a bootstrap can still read the sentence and know what they are being
+ * told — and an interval spanning zero says the sign of the headline is not established,
+ * which is the whole reason to show it. */
+function spread(){
+  const iv = RUN.analysis?.intervals?.net_pnl;
+  if(!iv || absent(iv.low) || absent(iv.high)) return "";
+  const crosses = iv.low <= 0 && 0 <= iv.high;
+  const level = Math.round(iv.level * 100);
+  return `<p class="verdict-spread${crosses ? " crosses" : ""}">These ${RUN.n_trades}
+    trades are one draw: redrawing them lands between <b>${moneyShort(iv.low)}</b> and
+    <b>${moneyShort(iv.high)}</b> ${level} times in 100${crosses
+      ? ", <b>which spans zero</b> — this run has not established even the sign of its"
+        + " result" : ""}.</p>`;
 }
 
 /* ── three blocks, three jobs ────────────────────────────────────────────────────
@@ -376,10 +406,9 @@ function metricCards(){
      means: "total return less what holding the underlying returned over the same "
           + "period; beta is how much of the return was the underlying moving",
      missing: "needs an equity curve and a benchmark series"},
-    {name: "net P&L", value: money(RUN.net_pnl), interval: a.intervals?.net_pnl,
+    {name: "net P&L", value: money(RUN.net_pnl),
      means: "what the whole run made or lost after costs"},
     {name: "mean per trade", value: RUN.n_trades ? money(RUN.net_pnl / RUN.n_trades) : "—",
-     interval: a.intervals?.mean_pnl,
      means: "net P&L over the trade count; the interval beneath is a bootstrap",
      // The division is the one arithmetic left in this file, and it is the presentation of
      // two stored numbers rather than a statistic of its own.
@@ -406,7 +435,6 @@ function metricCards(){
       <dd>${absentCard ? "—" : esc(c.value)}</dd>
       ${absentCard && c.missing ? `<p class="card-why">${esc(c.missing)}</p>` : ""}
       ${!absentCard && c.note ? `<p class="card-note">${esc(c.note)}</p>` : ""}
-      ${c.interval ? intervalBar(c.interval) : ""}
     </div>`;
   }).join("")}</dl>`;
 }
@@ -414,29 +442,6 @@ function metricCards(){
 /** A thin bar beneath the value: the range a different sample would plausibly have given.
  *  Marked when it contains zero, because then the sign is not established and the point
  *  estimate alone would read as a result. */
-/** The range a different sample of the same trades would plausibly have given.
- *
- * **Text, and no bar.** There were two attempts at a bar here and both were decoration.
- * The first was a fixed-width 3px rule, the same length whatever the interval was. The
- * second placed the interval as a segment on a scale containing zero, which at least
- * encoded something — but what it encoded was whether the interval crosses zero, and the
- * line of text directly beneath it already carries both endpoints with their signs and
- * appends "spans 0" when they straddle it. A graphic whose entire content is restated by
- * its own caption, eleven pixels below, in the densest band on the page, is costing
- * vertical space and a decoding step to say nothing.
- *
- * The one thing a reader needs to catch without reading is an interval that contains zero,
- * because then the figure above it has no established sign. That is a property of the
- * whole card, so it is carried by colouring this line rather than by an element of its
- * own. */
-function intervalBar(interval){
-  const {low, high} = interval;
-  const crosses = low <= 0 && 0 <= high;
-  const level = `${Math.round(interval.level * 100)}%`;
-  return `<p class="interval${crosses ? " crosses" : ""}">${level} ${
-    moneyShort(low)} to ${moneyShort(high)}${crosses ? " · spans 0" : ""}</p>`;
-}
-
 /* ── the process tier ───────────────────────────────────────────────────────── */
 
 /** The reserved period, as the chart stack wants it, or null when none was declared.
