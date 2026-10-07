@@ -321,8 +321,22 @@ function trades(){
         there is no single pair to difference — remove one to see it.</p></section>`;
 
   const [a, b] = RUNS;
-  const left = new Map((a.rows || []).map(t => [keyOf(t), t]));
-  const right = new Map((b.rows || []).map(t => [keyOf(t), t]));
+  // **Duplicates are reported, not dropped.** A `Map` keyed on (day, contract) keeps the last
+  // of any pair, and a strategy that may stack — two trades opened on the same contract the
+  // same day — would have had one of them vanish out of the diff with nothing saying so.
+  // Nothing in the engine forbids it, so the count is checked and named.
+  const index = rows => {
+    const byKey = new Map();
+    let repeated = 0;
+    for(const t of rows || []){
+      const key = keyOf(t);
+      if(byKey.has(key)) repeated++;
+      else byKey.set(key, t);
+    }
+    return {byKey, repeated};
+  };
+  const {byKey: left, repeated: leftRepeat} = index(a.rows);
+  const {byKey: right, repeated: rightRepeat} = index(b.rows);
   const onlyLeft = [...left.keys()].filter(k => !right.has(k));
   const onlyRight = [...right.keys()].filter(k => !left.has(k));
   const changed = [...left.keys()].filter(k => right.has(k)
@@ -353,6 +367,10 @@ function trades(){
     <p class="hint">Matched on the day a trade opened and the contract it opened, not on the
       trade number — the fourth trade of one run is not the fourth trade of another. Every
       figure here is a stored per-trade P&amp;L, or the difference of two of them.</p>
+    ${leftRepeat || rightRepeat ? `<p class="cmp-flag"><b>${leftRepeat + rightRepeat} trades
+      share a day and a contract with another.</b> They cannot be told apart by what this diff
+      matches on, so only the first of each pair is compared below and the rest are left
+      out — the lists under this are a lower bound on what changed.</p>` : ""}
     ${section(`only run ${a.id} took these`,
       "These trades have no counterpart in the other run: the change stopped them opening.",
       onlyLeft.map(k => row(k, left.get(k), null)))}
