@@ -156,6 +156,16 @@ PHASE: Mapping[EventType, int] = {
     EventType.STATE: 90,               # the end-of-day snapshot, last
 }
 
+def sort_key(event: "Event") -> tuple:
+    """The document's three sort keys: timestamp, processing phase, sequence.
+
+    Exposed as a function because the ordering is a property of the **stream**, not of
+    this object: a stream written to disk and read back has to be re-sorted, and sorting
+    it by anything else is a different run. The figure on page 2 names all three.
+    """
+    return (event.when, event.phase, event.id)
+
+
 #: The document's order, in its own words (page 11).
 #:
 #: **Nine stages, not eight.** The transcription dropped two: "contract adjustments" from
@@ -374,7 +384,15 @@ class EventBus:
                 if not ready:
                     break
                 phase = min(e.phase for e in ready)
-                batch = [e for e in ready if e.phase == phase]
+                # **(timestamp, phase, sequence)** -- the figure's three sort keys.
+                #
+                # Within a phase this used to be publication order, held by the list
+                # rather than written on the event. That is the same order while the
+                # stream lives in this list and stops being the same order the moment
+                # one is persisted and read back, when it would depend on the storage.
+                # `id` is the sequence: assigned once, at publish, and monotonic.
+                batch = sorted((e for e in ready if e.phase == phase),
+                               key=lambda e: e.id)
                 for event in batch:
                     self._pending.remove(event)
                     self._history.append(event)

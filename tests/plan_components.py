@@ -263,6 +263,10 @@ COMPONENTS: tuple[Component, ...] = (
               needle="def walk_forward"),
     Component("Baselines", "research", "separate skill from structure",
               needle="def random_entry"),
+    Component("PreLaunch", "research",
+              "the document's 6.2 checklist: eight criteria as one gate, each pass, "
+              "fail or unknown, where unknown is not a pass",
+              needle="class Checklist"),
     Component("Metrics", "research", "return, risk, trade and option metrics",
               needle="def trade_stats"),
     Component("Attribution", "research", "where returns come from",

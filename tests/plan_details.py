@@ -633,13 +633,13 @@ PORTFOLIO: tuple[Clause, ...] = (
            ("backtest/portfolio/scenario_rule.py",), needle="class ScenarioLimit"),
     Clause("RiskModel", "greeks aggregation",
            ("backtest/portfolio/scenarios.py",), needle="def aggregate_greeks"),
-    Clause("RiskModel", "greeks by underlying and expiry bucket",
+    Clause("RiskModel", "greeks by expiry bucket",
+           ("backtest/portfolio/scenarios.py",), needle="def greeks_by_expiry"),
+    Clause("RiskModel", "greeks by underlying",
            ("backtest/portfolio/scenarios.py",),
-           absent="the aggregate is one book-wide total. Bucketing by expiry is the one "
-                  "that would say something here -- a book whose vega sits entirely on "
-                  "one expiry is a different book from one spreading it, and the total "
-                  "cannot tell them apart. The premium budget now groups by expiry; the "
-                  "greeks do not"),
+           absent="a run holds one underlying, so grouping by it returns the total with "
+                  "a different label. Expiry is the axis that has more than one value "
+                  "here, and that half is built"),
     Clause("RiskModel", "beta-weighted delta and vega to a common index",
            ("backtest/portfolio/scenarios.py",),
            absent="needs several underlyings and their betas. The document's reason for "
@@ -695,13 +695,8 @@ ENGINE: tuple[Clause, ...] = (
     Clause("VectorizedEngine", "matrix operations with simplified fills, for "
                                "underlying-level screening",
            ("backtest/engine/vectorized.py",), needle="def run"),
-    Clause("EventLoop", "a sequence number as the third sort key",
-           ("backtest/core/events.py",),
-           absent="events are ordered by timestamp and phase, and within a phase by "
-                  "publication order -- which is a sequence number in effect, kept by "
-                  "the list rather than written on the event. It becomes a real gap "
-                  "when a persisted stream has to be re-sorted after loading, since the "
-                  "order would then depend on the storage"),
+    Clause("EventLoop", "ordered by timestamp, phase and sequence",
+           ("backtest/core/events.py",), needle="key=lambda e: e.id"),
     Clause("Scheduler", "start of day, snapshot time, rebalance days, end of day, "
                         "expiry days, from the calendars",
            ("backtest/core/clock.py",),
@@ -780,6 +775,16 @@ RESEARCH: tuple[Clause, ...] = (
            ("backtest/research/ablation.py",), needle="def "),
     Clause("Counterfactual", "replay each closed trade under an alternative exit",
            ("backtest/research/counterfactual.py",), needle="def "),
+    # **Section 6.2, which no inventory had.** Its eight criteria each had a tool and
+    # nothing put them together, so "is this ready" was answered by remembering to run
+    # eight things -- the form in which a check gets skipped on the run that needed it.
+    Clause("PreLaunch", "the eight pre-launch criteria, as one gate",
+           ("backtest/research/prelaunch.py",), needle="def checklist"),
+    Clause("PreLaunch", "an unmeasured criterion is not a pass",
+           ("backtest/research/prelaunch.py",), needle="UNKNOWN"),
+    Clause("Sizer", "the sizing methods are registered slot forms",
+           ("backtest/portfolio/positioning.py",),
+           needle="def _register_sizing_variants"),
     Clause("Metrics", "rejected and partial fills",
            ("backtest/research/metrics.py",),
            absent="a rejected fill is recorded as a dropped candidate in the event log "

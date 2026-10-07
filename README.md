@@ -478,6 +478,23 @@ There is no default. How much of equity a strategy may have at risk is the singl
 consequential number in a long-options book, and a platform that picks it has made the
 strategy's main decision for you.
 
+## Is it ready: the pre-launch checklist
+
+```python
+# skip (needs a finished run)
+print(r.prelaunch(thesis="delta", trials=n).text())
+```
+
+The document's eight criteria as one gate. Each is `pass`, `fail` or **`unknown`** — and
+unknown is not a soft pass: `ready` is false while any criterion is unmeasured, because a
+tick beside work nobody did is worse than no checklist at all. Five of the eight need a
+second run (`sweep`, `delay_test`, `realism_test`, `baselines`), and each unknown says
+which one.
+
+`thesis` has no default. "Greeks attribution matches the thesis" cannot be answered
+without knowing what the strategy is supposed to earn from, and a tool that guessed would
+be marking its own homework.
+
 ## Before refining anything, run the baselines
 
 ```python

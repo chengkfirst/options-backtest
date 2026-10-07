@@ -1868,6 +1868,28 @@ class EventDrivenEngine:
         only through a full backtest.
         """
         sizing = strategy.sizing
+        # **A registered position variant decides instead of the sizing spec**, the same
+        # way a swapped-in exit component decides instead of the matching rule field.
+        # Slot 6 had four selectable methods and no registered forms, so none of the
+        # slot tools -- variant swap, slot sweep, ablation -- reached sizing at all.
+        sizer = strategy.components.get("position")
+        if sizer is not None:
+            vol = self.market.volatility(day)
+            count = int(sizer({
+                "equity": self._last_equity,
+                "premium": self._premium(contract, execute_on),
+                "stop_loss": strategy.exit.stop_loss,
+                "volatility": vol.unwrap() if vol.is_present else None,
+                "view": DataView.at(day, market=self.market, signals=self.signals,
+                                    chain=self.chain),
+            }))
+            if count <= 0:
+                self.events.record(
+                    EventKind.CANDIDATE_DROPPED, day,
+                    f"the position component sized this at {count} contracts",
+                    str(contract))
+            return max(count, 0)
+
         if sizing.method == "fixed":
             return contracts_for(sizing, equity=0.0, premium=1.0, stop_loss=None)
 

@@ -1059,6 +1059,50 @@ class Result:
 
         return attribute(self.trades)
 
+    def greeks_by_expiry(self, day=None):
+        """The book's greeks grouped by expiry, on one session.
+
+        ``day`` defaults to the last session of the run. The book-wide total cannot tell
+        a book with all its vega on one Friday from one spreading it over six, and that
+        difference is the whole of the concentration question for an options book.
+        """
+        from backtest.portfolio.scenarios import greeks_by_expiry
+
+        snapshots = getattr(self.raw, "snapshots", None)
+        if not snapshots:
+            raise AttributeError(
+                "the trade-table engine keeps no book, so there is nothing to group by "
+                "expiry. Rerun with engine=\"event_driven\"."
+            )
+        when = day or snapshots[-1].day
+        ledger = self.raw.ledger
+        return greeks_by_expiry(
+            ledger.positions, self._chain, when,
+            self._market.spot(when).or_else(float("nan")),
+            snapshots[-1].equity_mid)
+
+    def prelaunch(self, *, thesis: str | None = None, sweep=None, delay=None,
+                  realism=None, baselines=None, trials=None):
+        """The document's pre-launch checklist (6.2), run against this result.
+
+        Eight criteria, each `pass`, `fail` or **`unknown`** -- and unknown is not a soft
+        pass: `ready` is false while any criterion is unmeasured, because a tick beside
+        work nobody did is worse than no checklist.
+
+        The cheap criteria are computed here. The five that need a second run are passed
+        in (`result.sweep(...)`, `delay_test()`, `realism_test()`, `baselines()`), because
+        running five backtests inside a reporting call would be a surprise measured in
+        minutes -- and the document's protocol has them run deliberately.
+
+        `thesis` is what the strategy is **supposed** to earn from, and there is no
+        default: "greeks attribution matches the thesis" cannot be answered without it,
+        and a tool that guessed would be marking its own homework.
+        """
+        from backtest.research.prelaunch import checklist
+
+        return checklist(self, thesis=thesis, sweep=sweep, delay=delay,
+                         realism=realism, baselines=baselines, trials=trials)
+
     def attribution_daily(self):
         """P&L attribution stepped **day by day**, with the spread as its own term.
 

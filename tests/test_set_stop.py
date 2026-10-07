@@ -206,3 +206,61 @@ class TestTheContextOffersIt:
         assert seen and all(level == 0.4 for level in seen), (
             f"the rule's own stop is 0.4 and the slot was shown {set(seen)}"
         )
+
+
+class TestOneSlotMovesAnotherSlotsStop:
+    """The influence channel in miniature, and the only way the built-in stop rule ever
+    sees a moved level.
+
+    A component in the stop slot decides its own exit, so when the *ratchet* moves the
+    stop the engine's own rule never runs — the mutation check found this by breaking the
+    rule's branch and watching the ratchet's tests pass anyway.
+
+    The branch is reachable the other way round: a **take-profit** variant calls
+    `set_stop`, and the stop stays the rule's constant. That is the document's
+    pass-through channel doing real work, and it is the case worth testing.
+    """
+
+    @kind("limit")
+    def test_a_take_profit_variant_can_move_the_rules_stop(self):
+        from backtest.api.sdk import run
+        from backtest.core.component import Param, Variant, register, variants
+
+        if "tightens" not in {v.name for v in variants("take_profit")}:
+            def _tightens(ctx, *, at: float) -> bool:
+                """Never takes profit; tightens the stop once the trade is ahead."""
+                ratio = ctx.get("premium_ratio")
+                setter = ctx.get("set_stop")
+                if (ratio is not None and ratio >= at and setter is not None
+                        and ctx.get("stop_level") != 0.01):
+                    setter(0.01, f"up {ratio:.0%}: tighten the stop to 1%")
+                return False
+
+            register(Variant(
+                slot="take_profit", name="tightens", version=1,
+                describes="never takes profit; moves the stop-loss slot's level once "
+                          "the trade is ahead, which is the pass-through channel",
+                params=(Param("at", "float", "how far ahead before tightening",
+                              lo=0.0, hi=5.0),),
+                decide=_tightens,
+            ))
+
+        loose = run(**(RUN | {"exit": {"hold_days": 20, "dte_floor": 7,
+                                        "stop_loss": 0.9}}))
+        tightened = run(**(RUN | {
+            "exit": {"hold_days": 20, "dte_floor": 7, "stop_loss": 0.9},
+            "components": {"take_profit": {"slot": "take_profit",
+                                            "variant": "tightens",
+                                            "params": {"at": 0.2}}}}))
+
+        moves = tightened.raw.actions_frame
+        moves = moves[moves["action"] == "set_stop"]
+        assert len(moves) > 2, "the take-profit slot never moved the stop"
+
+        loose_stops = (loose.trades["exit_reason"] == "stop_loss").sum()
+        tight_stops = (tightened.trades["exit_reason"] == "stop_loss").sum()
+        assert tight_stops > loose_stops, (
+            f"the stop was tightened from 90% to 1% by another slot and the built-in "
+            f"rule stopped out {tight_stops} trades against {loose_stops}. The rule is "
+            f"not reading the moved level"
+        )

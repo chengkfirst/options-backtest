@@ -147,8 +147,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "the two records of a fill are held one to one",
         "backtest/engine/loop.py",
-        "        actions.append(TradeAction(",
-        "        [].append(TradeAction(",
+        "        actions.append(TradeAction(\n            action=intent.kind,",
+        "        [].append(TradeAction(\n            action=intent.kind,",
         ("tests/test_chain.py::TestTheTwoRecordsOfAFillAgree",),
     ),
     Mutation(
@@ -317,12 +317,53 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
     ),
     Mutation(
+        # A checklist that scores an unrun check as satisfied is worse than none.
+        "an unmeasured pre-launch criterion is not a pass",
+        "backtest/research/prelaunch.py",
+        "        return all(c.status == PASS for c in self.checks)",
+        "        return not self.failed",
+        ("tests/test_prelaunch.py::TestUnknownIsNotAPass",),
+    ),
+    Mutation(
+        # A one-year run reported 100% of its profit in one year, over the limit.
+        "a one-year run cannot fail the dates concentration",
+        "backtest/research/prelaunch.py",
+        "    if len(by_year) < 2:",
+        "    if False:",
+        ("tests/test_prelaunch.py::TestTheConcentrationCriterion",),
+    ),
+    Mutation(
+        # Two of the four sizing methods raised a TypeError the first time anyone
+        # picked them, because the risk budget was computed above the branch using it.
+        "every sizing method the interface offers actually runs",
+        "backtest/portfolio/positioning.py",
+        '    "scale_by_vol": ("target_vol", "risk_pct"),',
+        '    "scale_by_vol": ("target_vol",),',
+        ("tests/test_position_variants.py::TestTwoMethodsHadNeverRun",
+         "tests/test_position_variants.py::TestEverySelectableMethodHasAForm"),
+    ),
+    Mutation(
+        # The book-wide total cannot tell one expiry from six.
+        "greeks are grouped by expiry, not only totalled",
+        "backtest/portfolio/scenarios.py",
+        "    total_vega = float(out[\"vega\"].abs().sum())",
+        "    total_vega = 0.0",
+        ("tests/test_greeks_by_expiry.py::TestTheConcentrationItExistsToShow",),
+    ),
+    Mutation(
         # A logged stop move that does not move the stop is the worst of three states.
-        "a moved stop is the one the exit is tested against",
+        #
+        # **The test had to be written for this, not just pointed at.** The first attempt
+        # aimed at the ratchet's tests, and they passed with the branch broken: the
+        # ratchet is a component and decides its own exit, so the built-in rule never
+        # runs. The branch is reachable the other way round -- a take-profit variant
+        # moving the stop while the stop itself is the rule -- which is the influence
+        # channel in miniature and now has its own test.
+        "a moved stop is the one the built-in rule is tested against",
         "backtest/engine/loop.py",
         "                    level = (trade.stop_level if trade.stop_level is not None",
         "                    level = (None if trade.stop_level is not None",
-        ("tests/test_set_stop.py::TestTheRatchetMovesTheStop",),
+        ("tests/test_set_stop.py::TestOneSlotMovesAnotherSlotsStop",),
     ),
     Mutation(
         # Without the action the move is invisible: the stop changes and nothing says so.
@@ -354,6 +395,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         # "The outcome is written back to the trade context so slots can see it."
         "a constraint's veto reaches the slots",
         "backtest/engine/loop.py",
+        "                    # It is the **previous** session's refusal: see the clear below.\n"
         "                    vetoed=self._last_entry_veto,",
         '                    vetoed="",',
         ("tests/test_figures.py::TestThePortfolioVerdictReachesTheSlots",),
@@ -770,8 +812,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "a slot writes only into its own namespace",
         "backtest/core/trade_context.py",
-        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(slot, {}))",
-        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(\"shared\", {}))",
+        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(slot, {}),",
+        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(\"shared\", {}),",
         ("tests/test_trade_context.py::TestTwoSlotsCanHoldTheSameKey",),
     ),
     Mutation(

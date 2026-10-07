@@ -99,6 +99,61 @@ def aggregate_greeks(positions, chain, day: date, spot: float, equity: float) ->
     )
 
 
+def greeks_by_expiry(positions, chain, day: date, spot: float,
+                     equity: float) -> pd.DataFrame:
+    """The book's greeks **grouped by expiry**, one row per expiry plus a total.
+
+    The document's RiskModel row asks for "Greeks aggregation by underlying and expiry
+    bucket", and the aggregate was one book-wide total. The expiry axis is the one that
+    says something here: a book whose vega sits entirely on one expiry is a different
+    book from one spreading it over six, and a total cannot tell them apart. The premium
+    budget already groups by expiry; the greeks did not.
+
+    Why expiry and not underlying: a run holds one underlying, so grouping by it returns
+    the total with a different label. Expiry is the axis that has more than one value.
+
+    A position whose greeks cannot be read is **counted in ``missing``, not treated as
+    0** -- the same rule as :func:`aggregate_greeks`, and for the same reason: a vega
+    read as 0 makes a bucket look free of volatility exposure.
+    """
+    rows: dict[date, dict[str, float]] = {}
+    for pos in positions:
+        bucket = rows.setdefault(pos.contract.expiry, dict.fromkeys(
+            ("delta", "gamma", "vega", "theta", "premium_at_risk"), 0.0)
+            | {"positions": 0, "missing": 0})
+        bucket["positions"] += 1
+        if pos.quantity > 0:
+            bucket["premium_at_risk"] += pos.cost_basis
+
+        frame = chain.series(pos.contract, [day])
+        if frame.empty:
+            bucket["missing"] += 1
+            continue
+        row = frame.iloc[0]
+        if any(pd.isna(row.get(g)) for g in ("delta", "gamma", "vega", "theta")):
+            bucket["missing"] += 1
+            continue
+        weight = pos.quantity * pos.multiplier
+        for greek in ("delta", "gamma", "vega", "theta"):
+            bucket[greek] += float(row[greek]) * weight
+
+    if not rows:
+        return pd.DataFrame(columns=["expiry", "days_to_expiry", "delta", "gamma",
+                                     "vega", "theta", "premium_at_risk", "positions",
+                                     "missing", "vega_share"])
+
+    out = pd.DataFrame([
+        {"expiry": expiry, "days_to_expiry": (expiry - day).days, **values}
+        for expiry, values in sorted(rows.items())
+    ])
+    # The share of the book's **absolute** vega on each expiry. Absolute because two
+    # expiries with opposite vega net to nothing and are not a book without vega risk --
+    # they are a calendar spread, which has its own.
+    total_vega = float(out["vega"].abs().sum())
+    out["vega_share"] = (out["vega"].abs() / total_vega) if total_vega else float("nan")
+    return out
+
+
 def stress_grid(
     greeks: PortfolioGreeks,
     *,

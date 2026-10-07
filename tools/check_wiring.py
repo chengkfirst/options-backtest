@@ -218,8 +218,18 @@ def main() -> int:
             problems.append(f"the interface offers the sizing method {method!r} and the "
                             f"backend has no such method")
             continue
+        # **A method may need more than one parameter.** It was read as a single name,
+        # and `scale_by_vol` needs two -- `target_vol` and the `risk_pct` its budget is
+        # computed from. Listed as one, the interface offered a form with one field and
+        # the backend raised on the second.
+        unknown = [name for name in needs if name not in sample]
+        if unknown:
+            problems.append(f"the sizing method {method!r} needs {unknown}, which this "
+                            f"check has no sample value for -- add one, or the method "
+                            f"is being checked less than it looks")
+            continue
         try:
-            Sizing(method=method, **{needs: sample[needs]})
+            Sizing(method=method, **{name: sample[name] for name in needs})
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the interface sends the sizing method {method!r} and the "
                             f"backend refuses it: {exc}")
