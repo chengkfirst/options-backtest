@@ -321,50 +321,17 @@
 .card.thin dd { color: var(--text-secondary); }
 .card.empty dd { color: var(--text-muted); }
 
-/* The interval, drawn as a bar beneath the point estimate. */
-.interval { margin-top: auto; padding-top: var(--space-2); }
-
-/* The scale the interval is placed on. It always contains zero, so the mark sits in a
-   different place on each card and means the same thing on all of them. */
-.interval-track {
-  display: block;
-  position: relative;
-  height: 9px;
-}
-/* The scale itself, faint: it is the ground, not the reading. */
-.interval-track::before {
-  content: "";
-  position: absolute;
-  left: 0; right: 0; top: 4px;
-  height: 1px;
-  background: var(--border);
-}
-/* The interval. Warning-coloured when it straddles zero, because then the sign of the
-   result above it is not established and that is the one thing this element is for. */
-.interval-span {
-  position: absolute;
-  top: 3px;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--accent);
-}
-.interval.crosses .interval-span { background: var(--warning); }
-
-.interval-zero {
-  position: absolute;
-  top: 0;
-  width: 1px;
-  height: 9px;
-  background: var(--text-secondary);
-}
-
-.interval-text {
-  display: block;
-  margin-top: 3px;
+/* The interval under a metric card's value: one line, the level and both ends.
+   Coloured when it contains zero, because then the figure above has no established sign,
+   and that is the only part of this a reader must catch without reading it. */
+.interval {
+  margin: auto 0 0;
+  padding-top: var(--space-2);
   font-family: var(--mono);
   font-size: var(--font-xs);
   color: var(--text-muted);
 }
+.interval.crosses { color: var(--warning); }
 
 
 /* ── the tabs ──

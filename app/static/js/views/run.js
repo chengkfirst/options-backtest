@@ -414,37 +414,27 @@ function metricCards(){
 /** A thin bar beneath the value: the range a different sample would plausibly have given.
  *  Marked when it contains zero, because then the sign is not established and the point
  *  estimate alone would read as a result. */
-/** The range a different sample of the same trades would plausibly have given, drawn
- *  against zero.
+/** The range a different sample of the same trades would plausibly have given.
  *
- * The earlier bar carried no information. It was a full-width 3px rule under every card,
- * the same length whatever the interval was, with a zero tick that appeared only when the
- * interval happened to cross — so on a card where the sign *was* established it was pure
- * decoration, and there was no way to tell the two states apart except by noticing an
- * absence. Its text was then clipped by `white-space: nowrap` in a card too narrow for it.
+ * **Text, and no bar.** There were two attempts at a bar here and both were decoration.
+ * The first was a fixed-width 3px rule, the same length whatever the interval was. The
+ * second placed the interval as a segment on a scale containing zero, which at least
+ * encoded something — but what it encoded was whether the interval crosses zero, and the
+ * line of text directly beneath it already carries both endpoints with their signs and
+ * appends "spans 0" when they straddle it. A graphic whose entire content is restated by
+ * its own caption, eleven pixels below, in the densest band on the page, is costing
+ * vertical space and a decoding step to say nothing.
  *
- * The one question an interval answers is **is the sign of this result established**, so
- * zero is always on the scale and always marked, and the interval is a segment placed on
- * it. An interval sitting wholly to one side reads as established at a glance; one
- * straddling the mark reads as not. */
+ * The one thing a reader needs to catch without reading is an interval that contains zero,
+ * because then the figure above it has no established sign. That is a property of the
+ * whole card, so it is carried by colouring this line rather than by an element of its
+ * own. */
 function intervalBar(interval){
   const {low, high} = interval;
   const crosses = low <= 0 && 0 <= high;
-  // The scale always contains zero, so the mark has a fixed meaning across cards.
-  const from = Math.min(0, low), to = Math.max(0, high);
-  const span = (to - from) || 1;
-  const pos = v => ((v - from) / span) * 100;
-  const left = pos(low), width = Math.max(pos(high) - left, 1.5);
   const level = `${Math.round(interval.level * 100)}%`;
-
-  return `<div class="interval${crosses ? " crosses" : ""}">
-    <span class="interval-track">
-      <i class="interval-span" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"></i>
-      <i class="interval-zero" style="left:${pos(0).toFixed(1)}%"></i>
-    </span>
-    <span class="interval-text">${level} ${moneyShort(low)} to ${moneyShort(high)}${
-      crosses ? ", spans 0" : ""}</span>
-  </div>`;
+  return `<p class="interval${crosses ? " crosses" : ""}">${level} ${
+    moneyShort(low)} to ${moneyShort(high)}${crosses ? " · spans 0" : ""}</p>`;
 }
 
 /* ── the process tier ───────────────────────────────────────────────────────── */
