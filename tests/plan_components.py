@@ -231,17 +231,7 @@ COMPONENTS: tuple[Component, ...] = (
     Component("Valuation", "accounting", "end-of-day mark, at bid and at mid",
               needle="equity_liq"),
     Component("CorporateActions", "accounting", "dividends to cash, splits adjust",
-              absent="**I had this built and every one of its detail clauses is "
-                     "absent**, which the cross-check between the two inventories "
-                     "caught: a component that exists in name only. The needle was "
-                     "`def dividends_between`, which is `data/market.py` reading a "
-                     "dividend **for pricing** -- it goes into Black-Scholes, into the "
-                     "tree, into the early-exercise test, and never into cash.\n\n"
-                     "So the accounting module named here does not exist: no dividend "
-                     "is booked, no split adjusts a held position. For an option holder "
-                     "the first is correct; it stops being correct for the shares "
-                     "physical delivery now produces, and the split side needs the feed "
-                     "`1.corporate` waits on"),
+              needle="def credit_dividend"),
     Component("Expiry", "accounting", "settle expiring contracts",
               needle="def settle_expiry"),
     Component("PnL", "accounting", "realised, unrealised, fees, by leg and component",

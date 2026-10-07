@@ -600,6 +600,26 @@ class Result:
                          f"visible in the trade table **")
         return "\n".join(lines)
 
+    def turnover(self) -> dict:
+        """How much was traded relative to the capital employed.
+
+        Beside ``costs()`` rather than instead of it: the cost share says what was paid,
+        and turnover says how much activity produced it.
+        """
+        from backtest.research.metrics import turnover
+
+        # `self.raw.equity`, and absent on the trade-table engine -- which is a refusal
+        # with a reason rather than an AttributeError, as `equity_metrics` does it. The
+        # doc-example guard caught this: I wrote `self.equity`, which does not exist,
+        # and documented the call without running it.
+        equity = getattr(self.raw, "equity", None)
+        if equity is None:
+            raise AttributeError(
+                "the trade-table engine has no equity curve, so turnover has nothing to "
+                "divide by. Rerun with engine=\"event_driven\"."
+            )
+        return turnover(self.trades, equity)
+
     def manifest(self) -> dict[str, Any]:
         """Configuration, provenance and dependency versions — what makes the result
         re-executable — and the ``run_id`` that identifies this exact combination.

@@ -278,6 +278,7 @@ r.scenarios()        # historical scenario replay
 r.excursion()        # the MFE / MAE distribution, with **censoring detection**
 r.equity_metrics()   # return, drawdown, Sharpe, capital used
 r.events             # run events: selection failures, untradable, deferrals, dropped candidates
+r.turnover()         # premium traded over mean equity, and annualised
 r.why()              # why each fill happened: order -> target -> signal -> component
 r.manifest()         # the run_id, the commit, the data version, the config, provenance
 ```
@@ -316,6 +317,23 @@ print(batch.describe())
 `batch.trials` counts the configurations that **failed** as well as the ones that ran. A
 batch of forty is forty trials whether or not thirty-nine are mentioned again, and that
 is the number the deflated Sharpe needs.
+
+## The account, and the strategy
+
+The ledger separates four things that all move the equity, because folding any of them
+into the strategy's P&L would credit the strategy with something it did not earn:
+
+| | |
+|---|---|
+| realised and unrealised | the strategy's own P&L |
+| **interest** | earned on the cash balance at the risk-free rate |
+| **dividends** | received on shares, which only arrive from physical delivery |
+| external flows | deposits and withdrawals |
+
+The figure worth knowing: over three years on $100,000 at 4.5%, **interest is around
+9,300 and the fixture strategy's net P&L is −473**. Twenty times. Folded in, a losing
+strategy reads as a profitable one — which is why the accounting identity carries each
+as its own term, and why it refused the first session after interest was booked.
 
 ## How much of this is the cost assumption
 

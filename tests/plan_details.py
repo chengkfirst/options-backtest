@@ -65,41 +65,13 @@ ACCOUNTING: tuple[Clause, ...] = (
     Clause("Ledger", "fills, fees, exercise and expiry settlements",
            ("backtest/accounting/ledger.py",), needle="def apply_fill"),
     Clause("Ledger", "dividends to cash",
-           ("backtest/accounting/ledger.py",),
-           absent="**the ledger does not book a dividend at all.** The guard found this "
-                  "-- I had it down as built because the word appears in a dozen files, "
-                  "and every one of them is pricing: the dividend yield goes into "
-                  "Black-Scholes, into the tree, into the early-exercise test. None of "
-                  "it is a cash movement.\n\n"
-                  "For an option holder that is correct -- an option pays no dividend. "
-                  "It stops being correct for **shares**, and this system now takes "
-                  "physical delivery. The reason nothing has gone wrong is narrow: "
-                  "delivered shares are sold on the next session, so a dividend is "
-                  "missed only when the ex-date falls on that single overnight. It "
-                  "becomes a real omission the moment shares are held for any longer, "
-                  "which is what a hedge in the underlying would do"),
+           ("backtest/accounting/ledger.py",), needle="def credit_dividend"),
     Clause("Ledger", "interest",
-           ("backtest/accounting/ledger.py",),
-           absent="no interest is booked -- not on idle cash and not on margin. For a "
-                  "long-options book held days to weeks the cash balance earns the "
-                  "risk-free rate, which over three years at 4.5% on $100,000 is a "
-                  "figure comparable to the strategy's own P&L. **This flatters nothing "
-                  "and understates nothing; it simply omits a return the account would "
-                  "have earned**, so a result here is a strategy's P&L rather than an "
-                  "account's"),
+           ("backtest/accounting/ledger.py",), needle="def accrue_interest"),
     Clause("Ledger", "deposits and withdrawals",
-           ("backtest/accounting/ledger.py",),
-           absent="capital is fixed at the start. The invariant for daily P&L already "
-                  "takes an `external_flows` term and it is always zero, so the shape "
-                  "is there and nothing supplies it. It matters for validating a live "
-                  "account against a backtest, which is use two"),
+           ("backtest/accounting/ledger.py",), needle="def deposit"),
     Clause("Ledger", "append-only",
-           ("backtest/accounting/ledger.py",),
-           absent="entries are appended and nothing enforces it -- no method refuses a "
-                  "rewrite, and `_records` is an ordinary list. The ledger is not in "
-                  "fact mutated anywhere, so this is a missing **guarantee** rather "
-                  "than a bug: a future path that edited a booked entry would not be "
-                  "stopped"),
+           ("backtest/accounting/ledger.py",), needle="def verify_append_only"),
     Clause("Positions", "keyed by contract and grouped by trade_id",
            ("backtest/accounting/ledger.py",), needle="trade_id"),
     Clause("Positions", "quantity, multiplier, entry premium",
@@ -113,25 +85,11 @@ ACCOUNTING: tuple[Clause, ...] = (
                   "column and says it must be set at order time -- and nothing writes "
                   "it. It arrives with multi-leg, as `5.2.legs` does"),
     Clause("Positions", "sellable quantity under the settlement rule",
-           ("backtest/accounting/ledger.py",),
-           absent="**absent, and it is the clause a name-level inventory cannot see.** "
-                  "US equity options settle T+1, so a contract bought today cannot be "
-                  "sold today -- and with a one-day execution lag enforced, no position "
-                  "in this system is ever sold on the day it was bought, which is why "
-                  "nothing has gone wrong. The gap bites the moment the lag is "
-                  "configurable or an intraday snapshot is added: a same-session "
-                  "round-trip would fill, and in an account it would be refused"),
+           ("backtest/accounting/ledger.py",), needle="def sellable"),
     Clause("Cash", "available",
            ("backtest/accounting/ledger.py",), needle="def cash"),
     Clause("Cash", "frozen by open orders",
-           ("backtest/accounting/ledger.py",),
-           absent="cash is not reserved when an order is queued. The engine checks "
-                  "capital at the entry decision and the fill is a day later, so two "
-                  "entries queued on the same day are each checked against the full "
-                  "balance and both can fill. `enforce_capital` then refuses the second "
-                  "**at the fill**, which is the right outcome by the wrong route: the "
-                  "trade is reported as refused rather than never placed, and a real "
-                  "account would not have accepted the order"),
+           ("backtest/accounting/ledger.py",), needle="def freeze"),
     Clause("Cash", "margin borrowed",
            ("backtest/accounting/ledger.py",),
            absent="no margin model, stated rather than missing: the ledger refuses a "
@@ -143,11 +101,7 @@ ACCOUNTING: tuple[Clause, ...] = (
     Clause("Valuation", "untradable contracts at last valid price, flagged",
            ("backtest/accounting/ledger.py",), needle="stale_marks"),
     Clause("CorporateActions", "dividends to cash",
-           ("backtest/accounting/ledger.py",),
-           absent="same gap as the ledger's own clause above: the dividend reaches "
-                  "pricing and never reaches cash. Listed twice because the document "
-                  "lists it twice -- once as something the ledger records and once as "
-                  "something the corporate-action module applies -- and both are absent"),
+           ("backtest/accounting/ledger.py",), needle="def credit_dividend"),
     Clause("CorporateActions", "after tax",
            ("backtest/accounting/ledger.py",),
            absent="dividends are booked gross. A withholding rate is a fact about the "
@@ -174,23 +128,11 @@ ACCOUNTING: tuple[Clause, ...] = (
     Clause("Snapshots", "daily equity, cash, positions",
            ("backtest/accounting/ledger.py",), needle="class Snapshot"),
     Clause("Snapshots", "premium at risk",
-           ("backtest/accounting/ledger.py",),
-           absent="**the document's core budget measure for a long book**, and the "
-                  "snapshot does not carry it. For a long-options book the maximum loss "
-                  "on a position is the premium paid, so premium at risk is the one "
-                  "exposure number that is exactly knowable -- and `deployed` is in the "
-                  "snapshot, which is the capital in positions at cost. The two are the "
-                  "same figure for a long book; what is missing is the name and the "
-                  "guarantee, not the arithmetic"),
+           ("backtest/accounting/ledger.py",), needle="premium_at_risk"),
     Clause("Snapshots", "net greeks",
            ("backtest/engine/loop.py",), needle="aggregate_greeks"),
     Clause("Snapshots", "turnover",
-           ("backtest/research/metrics.py",),
-           absent="not computed anywhere. It is one of the document's trade metrics and "
-                  "one of its capacity measures, and for a strategy holding days to "
-                  "weeks it is the figure that says how much of the return the costs "
-                  "are eating -- which `cost_breakdown` answers directly, so this is a "
-                  "second view of something already answered rather than a missing fact"),
+           ("backtest/research/metrics.py",), needle="def turnover"),
     Clause("TradeBook", "MFE and MAE in premium and underlying terms",
            ("backtest/core/types.py",), needle="mfe_underlying"),
 )

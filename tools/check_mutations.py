@@ -317,6 +317,76 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
     ),
     Mutation(
+        # Folded into realised, a losing strategy reads as a profitable one: over three
+        # years the interest is twenty times the fixture strategy's net P&L.
+        "interest is not the strategy's P&L",
+        "backtest/accounting/ledger.py",
+        "        self.total_interest += earned",
+        "        self.realised += earned",
+        ("tests/test_cash_and_interest.py::TestInterestIsNotTheStrategysPnL",),
+    ),
+    Mutation(
+        "interest is a term of the accounting identity",
+        "backtest/accounting/ledger.py",
+        "            + unreal_stock + self.total_interest + self.external_flows",
+        "            + unreal_stock + self.external_flows",
+        ("tests/test_cash_and_interest.py::TestInterestIsNotTheStrategysPnL",),
+    ),
+    Mutation(
+        "a dividend reaches shares and not options",
+        "backtest/accounting/ledger.py",
+        "        position = self._stock.get(symbol)\n        if position is None or per_share <= 0:",
+        "        position = self._positions.get(symbol)\n        if position is None or per_share <= 0:",
+        ("tests/test_cash_and_interest.py::TestDividendsReachCashOnlyForShares",),
+    ),
+    Mutation(
+        # The refusal has to happen when the order is placed, which is where a real
+        # account refuses it.
+        "cash is refused at the order, not at the fill",
+        "backtest/accounting/ledger.py",
+        "        if amount > self.available + 1e-9:",
+        "        if False:",
+        ("tests/test_cash_and_interest.py::TestFrozenCashRefusesAtTheOrder",),
+    ),
+    Mutation(
+        "a position cannot be sold on the day it opened",
+        "backtest/accounting/ledger.py",
+        "        return 0 if position.opened >= when else position.abs_quantity",
+        "        return position.abs_quantity",
+        ("tests/test_cash_and_interest.py::TestTheSettlementRule",),
+    ),
+    Mutation(
+        "the ledger notices an entry going missing",
+        "backtest/accounting/ledger.py",
+        "        if len(self.events) != self._sealed:",
+        "        if False:",
+        ("tests/test_ledger.py",),
+    ),
+    Mutation(
+        # A flag nothing reads is a cleaning rule that reports and does not clean -- the
+        # exact state `check_frame` was in before this stage existed.
+        "a row a cleaning rule marked untradable is not filled",
+        "backtest/execution/costs.py",
+        "    if flags and UNTRADABLE_FLAG in str(flags):",
+        "    if False:",
+        ("tests/test_clean.py::TestTheMarkRefusesAFill",),
+    ),
+    Mutation(
+        "no cleaning rule is on by default",
+        "backtest/data/options/clean.py",
+        "        if not self.rules:",
+        "        if False:",
+        ("tests/test_clean.py::TestWhatTheStageRefusesToDo",),
+    ),
+    Mutation(
+        # Double-counting would make a rule set look like it removed more than it did.
+        "a row two rules match is attributed to the first",
+        "backtest/data/options/clean.py",
+        "            fresh = hit & ~handled",
+        "            fresh = hit",
+        ("tests/test_clean.py::TestTheReport",),
+    ),
+    Mutation(
         # A pause that lets the loop continue is a second name for no_new_positions.
         "pause stops the run",
         "backtest/engine/loop.py",

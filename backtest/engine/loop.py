@@ -529,6 +529,30 @@ class EventDrivenEngine:
                             deliveries[p.symbol] = day
                     self._start_shadow(rec, shadowing, expired=True)
 
+            # 3d  interest on cash, and a dividend on any shares held
+            #
+            # Neither is the strategy's P&L and both are the account's: a book that sat
+            # in cash all year earns the first, and shares held across an ex-date receive
+            # the second. The ledger keeps interest apart from `realised` for that
+            # reason.
+            #
+            # The dividend looks only at **stock** positions. An option pays none, and
+            # before physical delivery existed there was nothing for this to pay.
+            ledger.accrue_interest(day, self.market.risk_free_rate(day))
+            previous = cal.previous_session(day)
+            if previous is not None:
+                per_share = self.market.dividends_between(previous, day)
+                if per_share > 0:
+                    for held in list(ledger.stock_positions):
+                        paid = ledger.credit_dividend(held.symbol, per_share, day)
+                        if paid:
+                            self.bus.emit(
+                                EventType.CORPORATE_ACTION, day, "ledger",
+                                reason=f"dividend of {per_share:.4f} per share on "
+                                       f"{held.shares:+d} {held.symbol}: {paid:,.2f}",
+                                data={"symbol": held.symbol, "per_share": per_share,
+                                      "cash": paid})
+
             # 4  settle expiries
             for pos in list(ledger.positions):
                 if pos.contract.expiry <= day:

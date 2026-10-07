@@ -21,6 +21,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backtest.core.config import TRADING_DAYS_PER_YEAR
+
 from backtest.core.types import ExitReason, QuoteSource
 
 #: Quantiles of the distribution.
@@ -163,4 +165,53 @@ def environment() -> dict[str, str]:
         "numpy": numpy.__version__,
         "pandas": pandas.__version__,
         "scipy": scipy.__version__,
+    }
+
+
+def turnover(trades: pd.DataFrame, equity: pd.DataFrame) -> dict[str, Any]:
+    """Turnover: how much was traded relative to the capital employed.
+
+    One of the document's trade metrics and one of its capacity measures. For a strategy
+    holding days to weeks it is the figure that says how hard the costs are working
+    against the return -- and `cost_breakdown` answers that directly, so this is a second
+    view of something already answered rather than a missing fact. Both are reported
+    because they answer it differently: the cost share says what was paid, and turnover
+    says how much activity produced it.
+
+    **Notional, not premium.** A long option's premium is a fraction of the exposure it
+    carries, so turnover on premium would make a highly leveraged book look quiet. The
+    document's capacity question is about the size being pushed through the market, which
+    is the contracts times the multiplier times the underlying.
+
+    Annualised on the sessions actually run rather than on a calendar year: a six-month
+    backtest annualised as though it were a year would double the figure.
+    """
+    import numpy as np
+
+    if trades is None or trades.empty or equity is None or equity.empty:
+        return {"turnover": float("nan"),
+                "note": "no trades or no equity curve, so there is nothing to divide"}
+    needed = {"quantity", "entry_price", "multiplier"}
+    missing = sorted(needed - set(trades.columns))
+    if missing:
+        raise KeyError(f"turnover needs {', '.join(missing)}")
+
+    # Each trade is opened and closed, so the notional crosses the market twice.
+    notional = (trades["quantity"].abs().astype(float)
+                * trades["multiplier"].astype(float)
+                * trades["entry_price"].astype(float)).sum() * 2.0
+    mean_equity = float(equity["equity_mid"].astype(float).mean())
+    sessions = len(equity)
+    if mean_equity <= 0 or not sessions:
+        return {"turnover": float("nan"),
+                "note": "the mean equity is not positive, so a ratio to it is not one"}
+    gross = notional / mean_equity
+    return {
+        "turnover": gross,
+        "turnover_annualised": gross * (TRADING_DAYS_PER_YEAR / sessions),
+        "notional_traded": notional,
+        "mean_equity": mean_equity,
+        "sessions": sessions,
+        "note": "premium traded, counted on both sides, over the mean equity. "
+                "Annualised on the sessions run rather than on a calendar year",
     }
