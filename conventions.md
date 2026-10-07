@@ -45,6 +45,7 @@ python -m tools.check --fast    # for a small change, skipping the slow ones
 | **wiring** | the interface declares `CONTRACT` in `bench.js`, checked against a real response — **at the depth it is read**, so a renamed nested field fails too | fast |
 | **contrast** | a colour pair too close to read, in either theme. Verified in reverse by the palette it was written for: the design plan's proposed values failed its own 4.5:1 rule in **twenty text pairs** across the two themes, and one slot colour was invisible on the dark ground | fast |
 | **modules** | an interface module importing a name nothing exports, or using one it did not import. There is no bundler, so that raises only when the code path runs | fast |
+| **evidence** | a backend channel that can report a limitation and reaches no row of the analysis page's Limitations list. `diagnostics` went unread for months while the engine logged 409 early-exercise disagreements on a single run, and the page read as though nothing had been found | fast |
 | **baseline** | an unintended change in results | 8 s |
 | **test suite** | behavioural regression | 2 min |
 | **doc examples** | the snippets in the README not running | 1 min |

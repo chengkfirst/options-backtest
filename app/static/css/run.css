@@ -94,79 +94,96 @@
   color: var(--text-secondary);
 }
 
-/* ── the evidence, folded ──
-   Limitations, findings and assumptions do different jobs, so each carries a glyph and a
-   count and can be told apart closed. Open they are identical rows, so reading one teaches
-   how to read the others. */
-.evidence {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin: var(--space-3) 0 0;
-}
+/* ── the evidence tier ──────────────────────────────────────────────────────────
+ *
+ * One ranked list, not three folded blocks whose rows folded again. Severity lives in a
+ * gutter the eye runs straight down, and the consequence sits on the row rather than one
+ * click behind it: a title like "censored: a stop loss at -50% was in force" says nothing
+ * on its own about what it costs the reader, so a list of titles could not be scanned.
+ *
+ * The old layout put each block's items in a three-column grid, which left ragged vertical
+ * gaps wherever one item was a line and its neighbour a paragraph, and gave every item the
+ * same weight whatever its severity — so "this run cannot be reproduced" sat level with a
+ * note about bucket counts, two clicks from the eye. */
+.evidence { display: grid; gap: var(--space-3); margin-top: var(--space-4); }
 
-.ev {
-  flex: 1 1 260px;
+.ev-sec {
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface-1);
-  min-width: 0;
+  padding: var(--space-3) var(--space-4);
 }
+/* The block's left edge carries the worst severity inside it, so the tier can be read
+   before any single row is. */
+.ev-sec.bad { border-left-color: var(--danger); }
+.ev-sec.warn { border-left-color: var(--warning); }
+.ev-sec.leads { border-left-color: var(--accent); }
+.ev-sec.flat { border-left-color: var(--border); }
 
-.ev[open] { flex-basis: 100%; }
-
-.ev > summary {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  list-style: none;
-  font-size: var(--font-base);
-}
-
-.ev > summary::-webkit-details-marker { display: none; }
-
-.ev-glyph {
-  flex: 0 0 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  font-family: var(--mono);
-  font-size: var(--font-xs);
-  background: var(--surface-2);
-  color: var(--text-muted);
-}
-
-.ev.warn .ev-glyph { background: var(--warning-soft); color: var(--warning); }
-.ev.bad .ev-glyph { background: var(--danger-soft); color: var(--danger); }
-.ev.ok .ev-glyph { background: var(--success-soft); color: var(--success); }
-
-.ev-title { font-weight: var(--weight-medium); }
-
-.ev-count {
-  font-family: var(--mono);
-  font-size: var(--font-xs);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0 var(--space-2);
-}
-
-/* The reason the block exists, kept off the line when there is no room for it: a label
-   that wraps to two lines in a folded card is noise. */
-.ev-why {
-  color: var(--text-muted);
+.ev-sec h3 {
+  margin: 0 0 var(--space-2);
   font-size: var(--font-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.ev-n {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-radius: 9px;
+  padding: 1px 7px;
+}
+.ev-why { font-size: var(--font-xs); font-weight: 400; color: var(--text-muted); }
+
+.lims { margin: 0; padding: 0; list-style: none; }
+
+/* Claim and consequence in two columns: the claim column is wide enough to read as a
+   column, and the consequence takes the rest instead of wrapping under a bullet. */
+.lim {
+  display: grid;
+  grid-template-columns: 10px minmax(170px, 19rem) 1fr;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: var(--space-2) 0;
+}
+.lim + .lim { border-top: 1px solid var(--border); }
+
+.lim-mark {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-muted);
+  align-self: center;
+}
+.lim.bad .lim-mark { background: var(--danger); }
+.lim.warn .lim-mark { background: var(--warning); }
+.lim.note .lim-mark { background: var(--border-strong); }
+
+.lim-what { font-size: var(--font-sm); color: var(--text-primary); }
+.lim.bad .lim-what { font-weight: 600; }
+.lim-so { font-size: var(--font-xs); line-height: 1.5; color: var(--text-secondary); }
+.lim-so b { color: var(--text-primary); font-weight: 600; }
+
+.lim-more { margin-top: var(--space-2); }
+.lim-more > summary {
+  cursor: pointer;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  padding: var(--space-1) 0;
+}
+.lim-more > summary:hover { color: var(--text-primary); }
+
+@media (max-width: 900px) {
+  .lim { grid-template-columns: 10px 1fr; }
+  .lim-so { grid-column: 2; }
 }
 
-@media (max-width: 1100px) { .ev-why { display: none; } }
-
-.ev-body { padding: 0 var(--space-3) var(--space-2); }
-
+/* The assumptions: a spec sheet, not findings. Label above value, several to a row, and
+   the value says what it is rather than leaning on a tooltip — so a column has to be wide
+   enough for "the whole spread paid (λ 1.00)" without cutting it. */
 .assume {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -193,58 +210,8 @@
 
 .assume-note {
   margin: var(--space-3) 0 0;
-  font-size: var(--font-sm);
+  font-size: var(--font-xs);
   color: var(--text-muted);
-}
-
-.block-empty { margin: 0; font-size: var(--font-sm); color: var(--text-muted); }
-
-/* ── the rows inside an evidence block ── */
-.rows {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 0 var(--space-5);
-}
-
-.row-item { border-bottom: 1px solid var(--border); }
-.row-item:last-child { border-bottom: none; }
-
-.row-item > summary {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  cursor: pointer;
-  list-style: none;
-  padding: var(--space-2) 0;
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
-.row-item > summary::-webkit-details-marker { display: none; }
-.row-item > summary:hover,
-.row-item[open] > summary { color: var(--text-primary); }
-
-.row-dot {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  transform: translateY(-1px);
-}
-
-.row-item.ok .row-dot { background: var(--success); }
-.row-item.warn .row-dot { background: var(--warning); }
-.row-item.bad .row-dot { background: var(--danger); width: 8px; height: 8px; }
-
-.row-item p {
-  margin: 0;
-  padding: 0 0 var(--space-3) calc(var(--space-2) + 6px);
-  /* Prose at label size is prose nobody reads. 11 px is for labels; a sentence gets 13. */
-  font-size: var(--font-base);
-  line-height: 1.5;
-  color: var(--text-secondary);
-  max-width: 70ch;
 }
 
 /* ── the metric cards ──

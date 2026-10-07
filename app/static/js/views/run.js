@@ -233,76 +233,153 @@ const ABOUT_THE_EVIDENCE = new Set([
   "rule_failed",    // a rule the run could not hold
 ]);
 
+/* ── where a limitation may come from ──────────────────────────────────────────────
+ *
+ * The split between an assumption and a limitation is not a judgement made per item. It
+ * follows from **where the fact comes from**, and that rule decides every case:
+ *
+ *   assumption   a condition chosen before the run — capital, the fill model, the data
+ *                source, the engine. It lives in `manifest.config` / `execution` /
+ *                `provenance`, and the way to change it is to run again.
+ *   limitation   a property of the evidence that came out — too few trades, trades that
+ *                overlap, a censored distribution, a statistic that could not be computed,
+ *                code that cannot be reproduced. It lives in `anomalies`, `diagnostics`,
+ *                `problems`, the interval caveats and the manifest's provenance of the
+ *                run itself. No configuration choice makes it go away.
+ *
+ * Every limitation therefore names the channel it was read from. That is not decoration:
+ * it is what makes the list **auditable**, because the channels can be enumerated and a
+ * channel carrying content that reaches no item is a hole in this function rather than a
+ * quiet absence. `tools/check_evidence.py` holds that property.
+ *
+ * `diagnostics` is the one this list was missing entirely. The engine logged 409
+ * early-exercise disagreements on run 166 and the interface used them only to place
+ * markers on a chart — so the page drew a tick for each and never said that the option
+ * model was uncertain four hundred times over.
+ */
+const EVIDENCE_CHANNELS = [
+  "provenance.hold_out", "provenance.synthetic", "provenance.availability",
+  "n_trades", "intervals", "excursion.censoring", "anomalies", "diagnostics",
+  "problems", "analysis.unavailable", "manifest.code", "manifest.guards",
+];
+
+/** How many of a diagnostic kind are worth a line of their own. Below this the engine
+ *  noting something a handful of times is routine; above it, it is a statement about how
+ *  much of the run rested on a model the engine itself was unsure of. */
+const DIAGNOSTIC_FLOOR = 20;
+
+const DIAGNOSTIC_SAYS = {
+  early_exercise_risk: n => [`the early-exercise model was uncertain ${n} times`,
+    "on each of those days the binomial tree disagreed with the flag about whether "
+    + "holding beat exercising, so those positions were valued on the less certain side"],
+  candidate_dropped: n => [`${n} entries were dropped before they opened`,
+    "the signal fired and no position followed, so the trade count is below what the "
+    + "rule asked for"],
+};
+
 /** Where these numbers stop being reliable.
  *
- * Properties of the evidence, each naming the cut behind it, and every cut read from
- * `/api/meta` rather than written here. */
+ * Properties of the evidence, each naming the channel it came from and the cut behind it,
+ * and every cut read from `/api/meta` rather than written here. */
 function limitationItems(){
   const t = (META && META.thresholds) || {};
   const a = RUN.analysis || {};
   const prov = RUN.manifest?.provenance || {};
   const out = [];
+  const add = (from, level, short, detail) => out.push({from, level, short, detail});
 
   const holdOut = prov.hold_out || {};
   if(!holdOut.hold_out)
-    out.push({level: "warn", short: "nothing was held out",
-      detail: holdOut.note || "no period was reserved, so no number here is out of sample: "
-        + "every one of them was available while the strategy was being chosen."});
+    add("provenance.hold_out", "warn", "nothing was held out",
+      holdOut.note || "no period was reserved, so no number here is out of sample.");
   else if(holdOut.touched)
-    out.push({level: "warn", short: "the hold-out was revealed",
-              detail: holdOut.note || ""});
+    add("provenance.hold_out", "warn", "the hold-out was revealed", holdOut.note || "");
+
+  // The data boundary. It was shown only as the verdict's caveat, where it is one line
+  // competing with the others; it is also the single widest limitation on an option
+  // strategy's numbers and belongs on the list that gets read as a list.
+  if(prov.all_synthetic)
+    add("provenance.synthetic", "bad", "the option prices are not market prices",
+      "they come from Black-Scholes with no skew, so every option-side conclusion "
+      + "describes the formula rather than what could have been traded.");
+  else if(prov.mixed)
+    add("provenance.synthetic", "warn",
+      `${pct(prov.synthetic_share)} of the option prices are modelled`,
+      "that share of the result rests on Black-Scholes rather than on quotes.");
+
+  if(prov.availability_assumed)
+    add("provenance.availability", "warn", "availability dates were assumed",
+      prov.availability_note || "rows may have been used before they were knowable.");
 
   const floor = t.bootstrap_min_observations?.value;
   if(floor != null && RUN.n_trades < floor)
-    out.push({level: "warn", short: `only ${RUN.n_trades} trades`,
-      detail: `below the ${floor} this project requires before a statistic carries an `
-            + `interval. ${t.bootstrap_min_observations.because || ""}`});
+    add("n_trades", "warn", `only ${RUN.n_trades} trades`,
+      `below the ${floor} this project requires before a statistic carries an interval. `
+      + `${t.bootstrap_min_observations.because || ""}`);
 
   for(const interval of Object.values(a.intervals || {})){
     if(!interval) continue;
     if(interval.low <= 0 && 0 <= interval.high)
-      out.push({level: "warn", short: `${interval.name}: the sign is not established`,
-        detail: `a different sample of the same trades could plausibly have given anything `
-              + `from ${money(interval.low)} to ${money(interval.high)}, which includes `
-              + `zero. ${interval.caveat || ""}`});
+      add("intervals", "bad", `${interval.name}: the sign is not established`,
+        `redrawing these trades spans ${money(interval.low)} to ${money(interval.high)}, `
+        + `which includes zero. ${interval.caveat || ""}`);
+    else if(interval.caveat)
+      add("intervals", "note", `${interval.name}: the interval is understated`,
+          interval.caveat);
   }
 
   for(const line of a.excursion?.censoring || [])
-    out.push({level: "warn", short: `censored: ${String(line).split(":")[0]}`,
-              detail: line});
+    add("excursion.censoring", "warn", `censored: ${String(line).split(":")[0]}`, line);
 
   for(const found of RUN.anomalies || [])
     if(ABOUT_THE_EVIDENCE.has(found.kind))
-      out.push({level: found.severity === "high" ? "bad" : "warn",
-                short: found.headline, detail: found.detail});
+      add("anomalies", found.severity === "high" ? "bad" : "warn",
+          found.headline, found.detail);
+
+  // What the engine logged about its own work while running. Read for the first time
+  // here; it was going only to the chart's event markers.
+  for(const d of RUN.diagnostics || []){
+    if(!d || (d.count || 0) < DIAGNOSTIC_FLOOR) continue;
+    const says = DIAGNOSTIC_SAYS[d.kind];
+    const [short, detail] = says
+      ? says(d.count.toLocaleString())
+      : [`${d.kind.replace(/_/g, " ")} happened ${d.count.toLocaleString()} times`,
+         (d.reasons || []).map(r => r.why).slice(0, 1).join("") || ""];
+    add("diagnostics", d.count >= DIAGNOSTIC_FLOOR * 10 ? "warn" : "note", short, detail);
+  }
+
+  for(const problem of RUN.problems || [])
+    add("problems", "bad", typeof problem === "string" ? problem : (problem.headline || ""),
+        typeof problem === "string" ? "" : (problem.detail || ""));
+
+  // A part of the analysis that refused to compute says why. That reason is a limitation
+  // on what this page can show, and it was reaching no one.
+  for(const [part, why] of Object.entries(a.unavailable || {}))
+    add("analysis.unavailable", "note", `${part} could not be computed`, String(why));
 
   // **Uncommitted code.** The manifest names a commit, which reads as a promise that the
   // run can be had again; with a dirty tree that promise is false, because the commit it
-  // names does not contain the code that ran and nothing records the difference. It is
-  // the strongest limitation a run can carry — not "the numbers are shaky" but "these
-  // numbers cannot be obtained again" — and the page showed the marker without a word
-  // about what it meant, which is how a reader concludes the engine is random.
+  // names does not contain the code that ran and nothing records the difference.
   const code = String(RUN.manifest?.code || "");
   if(code.includes("+dirty"))
-    out.push({level: "bad", short: "this ran on uncommitted code",
-      detail: `The run records **${code}**: the commit named there does not contain the `
-            + `code that produced these numbers, and the difference is written down `
-            + `nowhere. **This run cannot be reproduced** — re-running the same `
-            + `configuration later will run different code and may give a different `
-            + `answer, with nothing to say why. Commit before a run whose result is `
-            + `meant to be kept.`});
+    add("manifest.code", "bad", "this run cannot be reproduced",
+      `it ran on **${code}** — the named commit does not contain the code that produced `
+      + `these numbers, and the difference is recorded nowhere.`);
 
   const guards = RUN.manifest?.guards || {};
   if(guards.state && guards.state !== "clean")
-    out.push({level: "warn", short: `the guards were ${guards.state} for this code`,
-              detail: guards.note || ""});
+    add("manifest.guards", "warn", `the guards were ${guards.state} for this code`,
+        guards.note || "");
 
   if(RUN.anomalies === null)
-    out.push({level: "warn", short: "no scan was recorded",
-      detail: "this run was stored before the interface kept one, which is not the same "
-            + "as a scan that found nothing."});
+    add("anomalies", "note", "no scan was recorded",
+      "this run was stored before the interface kept one, which is not the same as a "
+      + "scan that found nothing.");
 
-  return out;
+  // Worst first. A list whose order carries nothing makes the reader rank nine items
+  // themselves before they can act on one.
+  const RANK = {bad: 0, warn: 1, note: 2};
+  return out.sort((x, y) => RANK[x.level] - RANK[y.level]);
 }
 
 /** What this run actually did that is worth a second look.
@@ -317,51 +394,66 @@ function standsOutItems(){
                 short: f.headline, detail: f.detail}));
 }
 
-/** Openable rows, shared so every evidence block reads identically. */
-function rows(items){
-  return `<div class="rows">${items.map(f => `
-    <details class="row-item ${f.level}">
-      <summary><span class="row-dot" aria-hidden="true"></span>${esc(f.short)}</summary>
-      <p>${mark(f.detail)}</p>
-    </details>`).join("")}</div>`;
+/** One limitation: the claim, then what it costs you, on one row.
+ *
+ * Each used to be a `<details>` **inside** a folded block — a reader had to open the
+ * block, then open the row, to learn that a limitation they could already see the title of
+ * meant their result had no established sign. Two clicks to read one sentence, and the
+ * titles alone ("censored: a stop loss at -50% was in force") carry no consequence, so the
+ * list could not be scanned. The consequence is on the row now and nothing folds. */
+function limitationRow(f){
+  return `<li class="lim ${f.level}">
+    <span class="lim-mark" aria-hidden="true"></span>
+    <span class="lim-what">${esc(f.short)}</span>
+    ${f.detail ? `<span class="lim-so">${mark(f.detail)}</span>` : ""}
+  </li>`;
 }
 
-/** The three evidence blocks, folded away until wanted.
+/** The evidence tier: what the result rests on, and where it stops being reliable.
  *
- * They are not less important than the numbers — the limitations decide how to read every
- * figure above. But three open blocks of grey rows between the answer and the chart meant
- * a page with no shape, where nothing was emphasised because everything was. Folded, each
- * one states its count and its worst severity on the summary line, so what is inside is
- * visible without being in the way, and one click opens it.
- */
+ * It was three folded blocks side by side, each opening into a three-column grid of rows
+ * that themselves folded. Three problems, and the layout caused all of them: the columns
+ * left ragged vertical gaps, every item carried the same weight whatever its severity, and
+ * the two-level fold put the most serious thing a run can say — that it cannot be
+ * reproduced — two clicks from the eye.
+ *
+ * Now: one ranked list, full width, worst first, severity in a gutter the eye can run
+ * down. The three that matter most are open; the tail is behind one control, because
+ * **nine** open rows between the answer and the charts is the wall that caused the folding
+ * in the first place. Assumptions follow as what they are — a spec sheet, not findings. */
+const LIMITS_SHOWN = 3;
+
 function evidence(){
   const lim = limitationItems();
-  const out = standsOutItems();
-  const worst = items => items.some(i => i.level === "bad") ? "bad"
-    : items.some(i => i.level === "warn") ? "warn" : "ok";
-  const blocks = [
-    {key: "limits", glyph: "!", title: "Limitations", items: lim,
-     why: "where these numbers stop being reliable",
-     empty: "Nothing beyond what the sample size allows."},
-    {key: "stands", glyph: "◆", title: "What stands out", items: out,
-     why: "found by rule — leads, not faults", empty: ""},
-    {key: "assume", glyph: "=", title: "Assumptions", items: null,
-     why: "what the result rests on", empty: ""},
-  ].filter(b => b.items === null || b.items.length || b.empty);
+  const leads = standsOutItems();
+  const head = lim.slice(0, LIMITS_SHOWN), tail = lim.slice(LIMITS_SHOWN);
+  const worst = lim.length ? lim[0].level : "ok";
 
-  return `<div class="evidence">${blocks.map(b => `
-    <details class="ev ${b.items ? worst(b.items) : "flat"}" data-ev="${b.key}">
-      <summary>
-        <span class="ev-glyph" aria-hidden="true">${b.glyph}</span>
-        <span class="ev-title">${esc(b.title)}</span>
-        ${b.items ? `<span class="ev-count">${b.items.length}</span>` : ""}
-        <span class="ev-why">${esc(b.why)}</span>
-      </summary>
-      <div class="ev-body">${
-        b.key === "assume" ? assumptions()
-        : b.items.length ? rows(b.items)
-        : `<p class="block-empty">${esc(b.empty)}</p>`}</div>
-    </details>`).join("")}</div>`;
+  const limits = !lim.length ? "" : `
+    <section class="ev-sec ${worst}">
+      <h3>Limitations<span class="ev-n">${lim.length}</span>
+        <span class="ev-why">where these numbers stop being reliable</span></h3>
+      <ul class="lims">${head.map(limitationRow).join("")}</ul>
+      ${tail.length ? `<details class="lim-more">
+        <summary>${tail.length} more</summary>
+        <ul class="lims">${tail.map(limitationRow).join("")}</ul>
+      </details>` : ""}
+    </section>`;
+
+  // Leads are not faults, so they are not in the list above and not coloured like one.
+  const stands = !leads.length ? "" : `
+    <section class="ev-sec leads">
+      <h3>What stands out<span class="ev-n">${leads.length}</span>
+        <span class="ev-why">found by rule — leads, not faults</span></h3>
+      <ul class="lims">${leads.map(limitationRow).join("")}</ul>
+    </section>`;
+
+  return `<div class="evidence">${limits}${stands}
+    <section class="ev-sec flat">
+      <h3>Assumptions<span class="ev-why">what the result rests on</span></h3>
+      ${assumptions()}
+    </section>
+  </div>`;
 }
 
 /** The metric cards: value, interval, and what makes it untrustworthy.
