@@ -197,11 +197,28 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("1.rule1", "1",
                 "No data enters a backtest without an available_at",
                 "a row used on a day it had not been published"),
+    # **Two of the three are replayable and checkably so; adjustment is not.**
+    #
+    # The recorded reason here was stale -- it said there was no cleaning stage of our
+    # own, written before `data/options/clean.py` existed. Cleaning is now a set of named
+    # rules that are pure functions of the frame, the IV solve is deterministic in its
+    # inputs, and both the rule set and the IV model reach the run fingerprint, so "the
+    # same raw data and rule version give the same result" is a statement a reader can
+    # check rather than take on trust.
+    #
+    # Adjustment is the half that is still absent and the half the falsifier is about:
+    # the adjusted price comes from the vendor's column, which is rewritten by every
+    # later dividend, so the same raw file read today and in a year gives different
+    # adjusted prices and nothing here records which version was used. That needs the
+    # corporate-action feed `1.corporate` waits on.
     Requirement("1.rule2", "1",
                 "Cleaning, adjustment and IV calculation are replayable",
                 "the same raw data and rule version giving two different results",
-                not_built="no cleaning or adjustment stage of our own; the adjustment "
-                          "comes from the vendor's column and is not point-in-time"),
+                not_built="**cleaning and the IV solve are**: the rules are named, pure, "
+                          "ordered, and in the run id, and the IV model is too. "
+                          "Adjustment is not -- the adjusted price is the vendor's "
+                          "column, rewritten by every later dividend, with no version "
+                          "recorded. Needs the feed `1.corporate` waits on"),
     Requirement("1.rule3", "1",
                 "An option price and the underlying used with it come from the same "
                 "timestamp window",

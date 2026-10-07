@@ -97,8 +97,33 @@ def _dispatch(name: str, opts: dict, market, config):
 
 
 def _synthetic(opts, market, config):
+    """``chain="synthetic"``, or ``chain={"kind":"synthetic"}``.
+
+    **It takes no options, and says so rather than ignoring them.** It used to accept
+    whatever it was handed and use none of it, so ``chain={"kind":"synthetic",
+    "clean":["crossed_quote"]}`` ran with no cleaning at all and raised nothing -- the
+    exact failure this project refuses everywhere else: a researcher who believes a rule
+    is in force and is reading the result without it.
+
+    Cleaning in particular cannot mean anything here. The generator prices every row from
+    Black-Scholes on the underlying's close, so there are no crossed quotes, no quotes
+    below intrinsic and no missing quotes for a rule to find -- a rule set would report
+    zero rows touched and look as though the data were clean, when the truth is that it
+    was never dirty.
+    """
     from backtest.data.options.synthetic.generator import SyntheticChainSource
 
+    unknown = sorted(k for k in (opts or {}) if k != "kind")
+    if unknown:
+        raise StartupError(
+            f"the synthetic chain takes no options and was given {unknown}. Its prices "
+            f"come from Black-Scholes on the underlying's close, so there is nothing to "
+            f"clean, map or rescale. "
+            + ("Cleaning rules belong to a real data source: use "
+               'chain={"kind": "file", "path": ..., "clean": [...]}. '
+               if "clean" in unknown else "")
+            + "The generator's own parameters are set with synthetic=SyntheticChainConfig(...)"
+        )
     return SyntheticChainSource(market, config)
 
 

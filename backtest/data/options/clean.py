@@ -186,6 +186,24 @@ class Cleaning:
 
     rules: tuple[Rule, ...] = ()
 
+    def version(self) -> tuple[tuple[str, str, str], ...]:
+        """The rule set as values, for the run fingerprint.
+
+        **The document's second data rule is that cleaning is replayable: the same raw
+        data and the same rule version give the same result.** Replayable was already
+        true -- the rules are pure functions of the frame and nothing here writes a
+        price -- and *checkable* was not: the rule set never reached the run id, so a run
+        that dropped every crossed quote and a run that kept them had the same
+        fingerprint and a search over the two looked like one run repeated.
+
+        Name, action and reason rather than the matcher, because a function object has no
+        stable identity across processes. That makes this a version of the rule set's
+        **declaration**: editing a matcher's body without touching its name would not
+        move the id -- which is what the commit hash in the fingerprint is for, and the
+        two together cover it.
+        """
+        return tuple((r.name, r.action, r.reason) for r in self.rules)
+
     def apply(self, frame: pd.DataFrame) -> tuple[pd.DataFrame, CleaningReport]:
         """Clean a frame. Returns the frame and what was done to it.
 

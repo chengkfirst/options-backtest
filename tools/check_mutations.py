@@ -317,6 +317,24 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
     ),
     Mutation(
+        # Two runs that cleaned the data differently shared one id, so a sensitivity
+        # test over cleaning -- which the register asks for by name -- read as one run
+        # repeated.
+        "the cleaning rule set reaches the run fingerprint",
+        "backtest/api/sdk.py",
+        '            data_version += " clean:" + str(cleaning.version())',
+        "            pass",
+        ("tests/test_cleaning_fingerprint.py::TestTheRuleSetReachesTheRunId",),
+    ),
+    Mutation(
+        # It accepted cleaning rules and applied none of them, raising nothing.
+        "the synthetic chain refuses options it would ignore",
+        "backtest/data/options/chain_registry.py",
+        '    unknown = sorted(k for k in (opts or {}) if k != "kind")',
+        "    unknown = []",
+        ("tests/test_cleaning_fingerprint.py::TestTheSyntheticChainRefusesWhatItCannotDo",),
+    ),
+    Mutation(
         # Delta and vega were limited and premium at risk was not, which is the one
         # whose breach is a certainty rather than a scenario.
         "the premium budget blocks an entry that would cross it",

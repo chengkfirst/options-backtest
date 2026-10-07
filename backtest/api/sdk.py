@@ -795,6 +795,17 @@ class Result:
         # prices — calling it "synthetic" alone would hash two different chains alike.
         data_version = ("synthetic:" + str(sorted(settings.get("synthetic", {}).items()))
                         if provenance.get("all_synthetic") else "vendor")
+        # **The cleaning rules, which are part of what data the run saw.**
+        #
+        # The document's second data rule is that cleaning is replayable on the same raw
+        # data and the same rule version. The rules never reached the fingerprint, so a
+        # run that dropped every crossed quote and one that kept them shared an id --
+        # and a sensitivity test over cleaning, which the register asks for by name,
+        # would have reported one run repeated. Sixth time this class of gap has turned
+        # up: something that moves the result reaching the engine and not the id.
+        cleaning = getattr(getattr(self, "_chain", None), "cleaning", None)
+        if cleaning is not None and cleaning.version():
+            data_version += " clean:" + str(cleaning.version())
         commit = code_version()
         return {
             "run_id": run_id(strategy=strategy, settings=settings, execution=execution,
