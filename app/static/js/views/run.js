@@ -221,7 +221,7 @@ function bindKeys(){
 
 /** Walk to the next or previous trade, opening the card on it — the plan's J and K. */
 function walk(by){
-  const order = sorted(VIEW).slice(0, SHOWN_LIMIT);
+  const order = sorted(VIEW).slice(0, DRAWN);
   if(!order.length) return;
   const at = PICKED ? order.indexOf(PICKED) : -1;
   const next = order[Math.max(0, Math.min(order.length - 1, at + by))] || order[0];
@@ -1104,6 +1104,9 @@ function recompute(){
   VIEW = (RUN.rows || []).filter(r =>
     (!RANGE || (r.entry_date >= RANGE.from && r.entry_date <= RANGE.to))
     && (!CLOSED_BY || r.exit_reason === CLOSED_BY));
+  // A different set is a different first page: without this, narrowing to twelve trades after
+  // scrolling through three hundred would keep drawing three hundred rows' worth of nothing.
+  DRAWN = PAGE;
   paintRangeChip();
   if(PICKED && !VIEW.includes(PICKED)) pick(null);
   paintDetail();
@@ -1190,12 +1193,23 @@ const COLUMNS = [
    answers "what happened next" and never "which was the worst". */
 let SORT = {key: null, dir: -1};
 
-/** How many rows the table draws. The plan asks for a virtualised table above 5,000 rows;
- *  this is the honest version of that until there is one — a fixed window, with the count it
- *  is a window onto stated under it. It is a constant and not a literal because J and K walk
- *  the same set, and a keyboard that could step past the last drawn row would select a trade
- *  the reader cannot see. */
-const SHOWN_LIMIT = 400;
+/* ── how many rows are drawn, and why it is not all of them ──────────────────────
+ *
+ * Four hundred rows cost **264 ms of the page's 366**, measured, and no screen shows more
+ * than about fifteen at once. So the table draws a page and grows as the reader scrolls into
+ * it: the first paint builds sixty rows instead of four hundred, and each further page is
+ * appended rather than redrawing the table — appending keeps the focused row, which a
+ * repaint throws away, and the keyboard then walks the whole of what is drawn.
+ *
+ * This is the plan's virtualisation at the scale this data actually has. A true windowing
+ * recycles rows and needs the scroll container's geometry; growing a list does not, and at
+ * four hundred rows the difference is between 40 ms and 264 ms, not between 40 and 4.
+ */
+const PAGE = 60;
+
+/** How many of the filtered set are currently in the document. Reset by anything that
+ *  changes the order or the set, grown by scrolling. */
+let DRAWN = PAGE;
 
 /** The rows in the order the header asks for. A column with no value sorts to the end
  *  whichever way the arrow points: an absent number is not a small one, and letting it
@@ -1211,6 +1225,49 @@ function sorted(rows){
     if(absent(y)) return -1;
     return (typeof x === "number" && typeof y === "number"
       ? x - y : String(x).localeCompare(String(y))) * SORT.dir;
+  });
+}
+
+/** One row of the trade table. Shared by the first paint and by each appended page, so the
+ *  two cannot drift into drawing different rows. */
+function rowHtml(r, i){
+  return `<tr tabindex="0" data-row="${i}"
+    data-trade-id="${esc(String(r.trade_id ?? ""))}"${
+    r === PICKED ? ' class="picked" aria-selected="true"' : ""}>${
+    COLUMNS.map(c => {
+      const raw = r[c.key];
+      const text = c.fmt ? c.fmt(raw) : (raw ?? "—");
+      const cls = [c.left ? "left" : "", c.mono ? "mono" : "",
+                   c.sign && !absent(raw) ? (raw > 0 ? "pos" : raw < 0 ? "neg" : "") : ""]
+                  .filter(Boolean).join(" ");
+      return `<td${cls ? ` class="${cls}"` : ""}${c.title
+        ? ` title="${esc(c.title(raw))}"` : ""}>${esc(text)}</td>`;
+    }).join("")}</tr>`;
+}
+
+/** What a row answers to. `order` is the sorted set the indices point into, so an appended
+ *  page selects the right trade. */
+function bindRow(tr, order){
+  const box = $("runDetail");
+  // A click selects and shades; opening the card is a second, deliberate action. The plan
+  // asks for both and they are different intentions: "what was the book doing while this was
+  // on" is answered by the shading alone, and a drawer that opened on every click would cover
+  // the chart that answers it.
+  tr.addEventListener("click", () => pick(order[+tr.dataset.row]));
+  tr.addEventListener("dblclick", () => openCard(order[+tr.dataset.row]));
+  // Arrows walk the table, Enter opens the card, Escape clears — the design plan's keyboard
+  // rule for tables.
+  tr.addEventListener("keydown", e => {
+    const i = +tr.dataset.row;
+    if(e.key === "ArrowDown" || e.key === "ArrowUp"){
+      e.preventDefault();
+      const next = box.querySelector(`[data-row="${i + (e.key === "ArrowDown" ? 1 : -1)}"]`);
+      if(next){ next.focus(); pick(order[+next.dataset.row]); }
+    }else if(e.key === "Enter"){
+      e.preventDefault(); openCard(order[i]);
+    }else if(e.key === " "){
+      e.preventDefault(); pick(order[i]);
+    }else if(e.key === "Escape"){ pick(null); }
   });
 }
 
@@ -1232,32 +1289,17 @@ function paintDetail(){
     box.innerHTML = `<p class="hint">No trade opened inside the brushed range.</p>`;
     return;
   }
-  const shown = sorted(rows).slice(0, SHOWN_LIMIT);
+  const order = sorted(rows);
+  const shown = order.slice(0, DRAWN);
   box.innerHTML = `<table class="trades"><thead><tr>${
     COLUMNS.map(c => `<th${c.left ? ' class="left"' : ""}><button type="button"
       class="sortby${SORT.key === c.key ? " on" : ""}" data-sort="${esc(c.key)}"
       >${esc(c.name)}${SORT.key === c.key
         ? `<span aria-hidden="true">${SORT.dir < 0 ? "↓" : "↑"}</span>` : ""}</button></th>`).join("")
-  }</tr></thead><tbody>${shown.map((r, i) => `<tr tabindex="0" data-row="${i}"
-    data-trade-id="${esc(String(r.trade_id ?? ""))}"${
-    r === PICKED ? ' class="picked" aria-selected="true"' : ""}>${
-    COLUMNS.map(c => {
-      const raw = r[c.key];
-      const text = c.fmt ? c.fmt(raw) : (raw ?? "—");
-      const cls = [c.left ? "left" : "", c.mono ? "mono" : "",
-                   c.sign && !absent(raw) ? (raw > 0 ? "pos" : raw < 0 ? "neg" : "") : ""]
-                  .filter(Boolean).join(" ");
-      return `<td${cls ? ` class="${cls}"` : ""}${c.title
-        ? ` title="${esc(c.title(raw))}"` : ""}>${esc(text)}</td>`;
-    }).join("")
-  }</tr>`).join("")}</tbody></table>${
-    rows.length > shown.length
-      ? `<p class="hint">The first ${shown.length} of ${rows.length.toLocaleString()} are
-           drawn, in the order the table is sorted by — ${SORT.key
-             ? `${esc(COLUMNS.find(c => c.key === SORT.key)?.name || SORT.key)}, ${
-                 SORT.dir < 0 ? "largest first" : "smallest first"}`
-             : "the order they happened in"}. Sort or narrow the range to bring others into
-           it.</p>` : ""}`;
+  }</tr></thead><tbody>${shown.map((r, i) => rowHtml(r, i)).join("")}</tbody></table>
+    <p class="hint trades-more" id="tradesMore"${order.length > shown.length ? "" : " hidden"}
+      >${shown.length} of ${order.length.toLocaleString()} drawn, in the order the table is
+       sorted by. Scrolling brings the rest in.</p>`;
 
   for(const th of box.querySelectorAll("[data-sort]"))
     th.addEventListener("click", () => {
@@ -1265,34 +1307,39 @@ function paintDetail(){
       // Same column flips the direction; a new one starts descending, because the first
       // question of a sorted column is almost always "which are the biggest".
       SORT = SORT.key === key ? {key, dir: -SORT.dir} : {key, dir: -1};
+      DRAWN = PAGE;                    // a new order is a new first page
       paintDetail();
     });
 
-  for(const tr of box.querySelectorAll("tbody tr")){
-    // A click selects and shades; opening the card is a second, deliberate action. The plan
-    // asks for both and they are different intentions: "what was the book doing while this
-    // was on" is answered by the shading alone, and a drawer that opened on every click
-    // would cover the chart that answers it.
-    tr.addEventListener("click", () => pick(shown[+tr.dataset.row]));
-    tr.addEventListener("dblclick", () => openCard(shown[+tr.dataset.row]));
-    // Arrows walk the table, Enter opens the card, Escape clears — the design plan's
-    // keyboard rule for tables. The rows already carried `tabindex`; nothing listened.
-    tr.addEventListener("keydown", e => {
-      const i = +tr.dataset.row;
-      if(e.key === "ArrowDown" || e.key === "ArrowUp"){
-        e.preventDefault();
-        const next = box.querySelector(`[data-row="${i + (e.key === "ArrowDown" ? 1 : -1)}"]`);
-        if(next){ next.focus(); pick(shown[+next.dataset.row]); }
-      }else if(e.key === "Enter"){
-        e.preventDefault(); openCard(shown[i]);
-      }else if(e.key === " "){
-        e.preventDefault(); pick(shown[i]);
-      }else if(e.key === "Escape"){ pick(null); }
-    });
+  for(const tr of box.querySelectorAll("tbody tr")) bindRow(tr, order);
+
+  // The next page, when the foot of the table comes into view. **Appended, not repainted**: a
+  // repaint throws away the focused row, so the keyboard would walk one step and stop, which
+  // is a bug this table has had once already.
+  const more = $("tradesMore");
+  if(more && !more.hidden){
+    const watch = new IntersectionObserver(entries => {
+      if(!entries[0].isIntersecting) return;
+      const from = DRAWN;
+      DRAWN = Math.min(order.length, DRAWN + PAGE);
+      const body = box.querySelector("tbody");
+      if(!body) return;
+      body.insertAdjacentHTML("beforeend",
+        order.slice(from, DRAWN).map((r, i) => rowHtml(r, from + i)).join(""));
+      for(const tr of [...body.children].slice(from)) bindRow(tr, order);
+      more.textContent = `${DRAWN} of ${order.length.toLocaleString()} drawn, in the order `
+        + `the table is sorted by. Scrolling brings the rest in.`;
+      if(DRAWN >= order.length){ more.hidden = true; watch.disconnect(); }
+      // **Watched inside the box that scrolls, when there is one.** The detail tier is an
+      // `overflow: auto` panel, so a row scrolled out of it is not intersecting the viewport
+      // and an observer on the window never fires — the table simply stopped at sixty with a
+      // line underneath promising more.
+    }, {root: box.scrollHeight > box.clientHeight ? box : null, rootMargin: "400px"});
+    watch.observe(more);
   }
 
-  // A brushed range scrolls the table to the first trade inside it, rather than leaving
-  // the reader to find where the selection starts in four hundred rows.
+  // A brushed range scrolls the table to the first trade inside it, rather than leaving the
+  // reader to find where the selection starts.
   if(SCROLL_TO_FIRST && shown.length){
     SCROLL_TO_FIRST = false;
     box.querySelector("tbody tr")?.scrollIntoView({block: "nearest"});
@@ -1350,7 +1397,7 @@ function openCard(row){
   // open drawer would leave a card on screen with nothing shaded behind it.
   pick(row, {toggle: false});
   replace({card: "1"});
-  const order = sorted(VIEW).slice(0, SHOWN_LIMIT);
+  const order = sorted(VIEW).slice(0, DRAWN);
   const spec = {
     title: `trade ${row.trade_id}`,
     subtitle: `${esc(contractParts(row.contract).underlying)} · ${
@@ -1445,15 +1492,17 @@ function render(query){
   // This lived inside the overview branch of `renderTab`, so a link that landed on any
   // other tab silently dropped the range and the filter while the URL still said they
   // were on.
+  // **Assigned from the query every time, including when the query does not have it.** These
+  // were only set when the key was present, so the module kept the last value: opening a run
+  // with a brushed range, leaving for the log and coming back without one left the table
+  // filtered while the address bar said it was not — the URL is supposed to be the only thing
+  // holding this state, and a leftover in a module is exactly the drift it exists to prevent.
   CLOSED_BY = query.closed ? String(query.closed) : null;
-  if(query.trade != null && query.trade !== ""){
-    const want = String(query.trade);
-    PICKED = (RUN.rows || []).find(r => String(r.trade_id ?? "") === want) || null;
-  }
-  if(query.range){
-    const [from, to] = String(query.range).split("..");
-    RANGE = from && to ? {from, to} : null;
-  }
+  PICKED = query.trade != null && query.trade !== ""
+    ? (RUN.rows || []).find(r => String(r.trade_id ?? "") === String(query.trade)) || null
+    : null;
+  const span = query.range ? String(query.range).split("..") : [];
+  RANGE = span[0] && span[1] ? {from: span[0], to: span[1]} : null;
   recompute();
   renderTab(tab, query);
   // The card is part of the reading a link carries, so a link that says the card was open
