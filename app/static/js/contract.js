@@ -174,6 +174,10 @@ export const CONTRACT = {
          // number somebody typed. Absent where too few runs are on record, which the
          // interface says rather than papering over.
          "pace",
+         // The shared action vocabulary and which of it the engine can execute. The slot
+         // cards cross it with the architecture's per-slot table, so a slot's card says what
+         // will actually happen rather than what the document allows.
+         "actions", "actions.built", "actions.missing",
          "validations",
          // Every registered form of every slot. The composer's variant pickers and their
          // parameter forms are generated from it, so a slot losing its forms here would

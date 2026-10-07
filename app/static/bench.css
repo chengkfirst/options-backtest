@@ -356,3 +356,12 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:v
 }
 .comp-wired{color:var(--warn)}
 .comp-wired b{color:var(--warn)}
+
+/* An action the architecture gives this slot and the engine cannot execute. Shown, struck
+   through, with the engine's own reason on hover — removing it would make the slot look
+   smaller than the design says it is, which is the misreading the line exists to prevent. */
+.comp-emits code.not-built{
+  text-decoration:line-through;
+  text-decoration-color:var(--warn);
+  color:var(--ink-3);
+}

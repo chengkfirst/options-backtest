@@ -70,6 +70,16 @@ def _tradeoff(q: dict[str, str]) -> dict[str, Any]:
 
 
 
+def _actions() -> dict[str, Any]:
+    """The action vocabulary, split into what runs and what does not."""
+    from backtest.core.actions import BUILT, Action
+
+    return {
+        "built": [a.value for a in Action if not BUILT.get(a)],
+        "missing": {a.value: why for a, why in BUILT.items() if why},
+    }
+
+
 def _pace() -> dict[str, float]:
     """Seconds of wall clock per year of backtest, by engine, from the runs on record.
 
@@ -140,6 +150,13 @@ def _meta_payload() -> dict[str, Any]:
             {"a": a, "b": b, "why": why} for a, b, why in COUPLINGS
         ],
         "gaps": _describe_gaps(),
+        # The shared action vocabulary, and **which of it the engine can actually execute**.
+        # `backtest.core.actions.BUILT` is the one definition of that in code and carries the
+        # reason for each gap; the composer crosses it with the architecture's per-slot
+        # vocabulary so a card can say what a slot may emit and what will actually happen.
+        # Read rather than restated, because a note written on this side goes stale the day
+        # the engine grows one of them.
+        "actions": _actions(),
         # How long a backtest actually takes, per engine, measured from the record rather
         # than guessed. The form used to say "roughly four seconds a year", which on this
         # machine's own history is half of what it takes — an estimate that is wrong by

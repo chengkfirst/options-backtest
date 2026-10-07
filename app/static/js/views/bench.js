@@ -262,26 +262,35 @@ const COLUMNS_BY_SLOT = {
           emits: ["HEDGE_ADD", "HEDGE_REMOVE"]},
 };
 
-/** What of a slot's contract the engine actually performs today.
+/** How much of a slot's vocabulary a **registered form** can reach.
  *
- * The architecture gives each slot an action vocabulary — a take profit may REDUCE, move the
- * stop, or ask for a hedge, not only close. What is registered is narrower, and a composer
- * that showed only the controls would let a reader believe the slot is the control. Read from
- * what the registry offers where that is possible; stated here where the gap is structural,
- * with the architecture's own table as the reference.
+ * Two different gaps, and conflating them is what made the first version of this note wrong.
+ *
+ * The first is the engine's: four of the nine actions are not implemented at all, and
+ * `backtest.core.actions.BUILT` is the one definition of which, with the reason. That comes
+ * over the wire and is marked on each action below rather than restated here.
+ *
+ * The second is this one: of the actions that **do** run, a registered form can only ever
+ * emit CLOSE, because every form registered today is a threshold that closes. REDUCE and ADD
+ * are reachable — through the daily `review(ctx, pos)` hook, which is the engine's own
+ * dynamic form of slots 3, 4, 5 and 6 — so a staged exit can be **written**, and cannot be
+ * **configured**. That distinction is the one a researcher needs before choosing between the
+ * two tabs at the top of this page.
  */
-const WIRED = {
-  setup: "nothing is registered. The candidate is always armed, so the gate is open",
-  entry: "the condition fires an OPEN. It cannot decline on the contracts it finds",
-  select: "a feasible region and one ranking target, applied inside Entry",
-  position: "a size per trade. It is not asked again for an ADD or a REDUCE",
-  take_profit: "**CLOSE only.** No registered form reduces, moves the stop, or asks for a "
-             + "hedge — so a staged exit cannot be expressed",
-  stop_loss: "**CLOSE only.** Same: no partial stop, and nothing writes a stop level that a "
-           + "later snapshot reads",
-  headwind: "**the book level only**, as a risk rule: scale down, halt, liquidate. The "
-          + "per-trade headwind runs as the daily review hook and emits nothing of its own",
-  hedge: "nothing is registered at either level",
+const REGISTERED_REACH = {
+  setup: "nothing is registered, so the gate is always open: every candidate is armed.",
+  entry: "the condition fires an OPEN. It cannot decline on the contracts it then finds.",
+  select: "a feasible region and one ranking target, applied inside Entry.",
+  position: "one size, at entry. It is not asked again when a review adds or reduces.",
+  take_profit: "every registered form **closes**. To reduce in stages, or to move the stop "
+             + "as the trade runs, write it in the daily review instead — one function "
+             + "for slots 3, 4, 5 and 6.",
+  stop_loss: "every registered form **closes**. A partial stop is a `Reduce` in the daily "
+           + "review; there is nowhere to record a stop level that moves.",
+  headwind: "the two registered forms are the **book-level** rule — scale down, halt, "
+          + "liquidate. The per-trade headwind is the daily review, which can close, "
+          + "reduce or add.",
+  hedge: "nothing is registered at either level.",
 };
 
 const COLUMN_HEAD = {
@@ -327,13 +336,24 @@ function renderComponents(){
  */
 function contractLine(slot, place){
   if(!place.level) return "";
+  const missing = (META.actions || {}).missing || {};
+  // An action the engine cannot execute is struck through and carries the engine's own reason.
+  // It stays on the card: the architecture gives this slot that action, and a card that
+  // listed only what runs would read as though the slot were smaller than it is.
+  const action = text => {
+    const key = text.replace(/^request /, "").split(" ")[0].toLowerCase();
+    const why = missing[key];
+    return why
+      ? `<code class="not-built" data-tip="Not implemented: ${esc(why)}">${esc(text)}</code>`
+      : `<code>${esc(text)}</code>`;
+  };
   return `<p class="comp-contract">
     <span class="comp-level" data-tip="Where this slot acts, and when the engine asks it: ${
       esc(place.when.replace(/\*\*/g, ""))}">${mark(place.level)}</span>
-    <span class="comp-emits" data-tip="The actions this slot may emit, from the
-      architecture's shared vocabulary. What is wired today is below.">${
-      place.emits.map(e => `<code>${esc(e)}</code>`).join(" ")}</span>
-    <span class="comp-wired">${mark(WIRED[slot] || "")}</span>
+    <span class="comp-emits" data-tip="What this slot may emit, from the architecture's
+      shared vocabulary. A struck-through action is one the engine cannot execute yet.">${
+      place.emits.map(action).join(" ")}</span>
+    <span class="comp-wired">${mark(REGISTERED_REACH[slot] || "")}</span>
   </p>`;
 }
 
