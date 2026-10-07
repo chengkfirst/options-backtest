@@ -96,106 +96,153 @@
 
 /* ── what every run stands on ───────────────────────────────────────────────────
  *
- * A fixed sheet, one table per subject, three columns: the axis, what this run did on it,
- * and what that limits. An assumption and the limitation it causes are the same fact, and
- * the two separate blocks this replaces made the reader hold one in their head while
- * reading the other.
+ * One table, full width. It was six boxes in a two-column grid, and that was unreadable:
+ * each box was 635px, the consequence column had no declared width, and a long sentence
+ * pushed the table past its box and printed over the text of the section beside it. A
+ * sentence needs the width of the page.
  *
- * A row in a good state still shows, in muted text. That is deliberate: a blank cannot be
- * told from an axis nobody examined, and the sheet's whole value is that its shape does
- * not change between a careful run and a careless one. */
+ * `table-layout: fixed` is the fix for the overflow, not a preference — an auto-layout
+ * table sizes itself to its content and will always escape a container it does not fit.
+ * With fixed, the declared widths hold and the prose wraps inside its cell. */
 .evidence {
   margin-top: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-1);
+  overflow: hidden;
 }
-.evidence > summary {
-  cursor: pointer;
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--font-sm);
-  font-weight: 600;
+
+.ev-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
 }
-.evidence > summary::-webkit-details-marker { display: none; }
-.evidence > summary::before { content: "▸"; color: var(--text-muted); font-size: 10px; }
-.evidence[open] > summary::before { content: "▾"; }
-.ev-why { font-size: var(--font-xs); font-weight: 400; color: var(--text-muted); }
+.ev-head h3 { margin: 0; font-size: var(--font-sm); font-weight: 600; }
+.ev-why { font-size: var(--font-xs); color: var(--text-muted); }
 
-.ev-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-  gap: var(--space-4);
-  padding: 0 var(--space-4) var(--space-4);
+/* Two states, both named, neither hidden behind the other. The count is on each button so
+   the choice says what it costs before it is made. */
+.ev-switch { margin-left: auto; display: flex; }
+.ev-switch button {
+  font: inherit;
+  font-size: var(--font-xs);
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ev-switch button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.ev-switch button:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; border-left: 0; }
+.ev-switch button:hover { color: var(--text-primary); }
+.ev-switch button.on {
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
-.ev-sec { border-left: 3px solid var(--border); padding-left: var(--space-3); }
-/* The section's edge carries the worst state inside it, so the sheet can be read at the
-   level of subjects before any row is. */
-.ev-sec.bad { border-left-color: var(--danger); }
-.ev-sec.warn { border-left-color: var(--warning); }
-.ev-sec.ok { border-left-color: var(--success); }
-.ev-sec.leads { border-left-color: var(--accent); }
+.sheet { width: 100%; table-layout: fixed; border-collapse: collapse; }
 
-.ev-sec h3 {
-  margin: 0 0 var(--space-2);
+/* The subject, as a row group rather than a box. A heading inside the table keeps all
+   twenty-two rows on one set of columns, so the eye reads straight down each. */
+.sheet-group th {
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  white-space: normal;
+  border-bottom: 0;
   font-size: var(--font-xs);
   font-weight: 600;
   letter-spacing: .06em;
   text-transform: uppercase;
-  color: var(--text-secondary);
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-}
-.ev-n {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0;
   color: var(--text-muted);
-  background: var(--surface-2);
-  border-radius: 9px;
-  padding: 1px 6px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-1);
 }
+.sheet tr:first-child th { border-top: 0; }
+.sheet-group.leads th { color: var(--accent); }
 
-.sheet { width: 100%; border-collapse: collapse; }
-.sheet th, .sheet td {
-  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+/* `app.css` sets `th, td { white-space: nowrap }` for every table on the page, which is
+   right for a grid of numbers and fatal for a column of prose: the sentence stayed on one
+   line, ran past its cell and printed over whatever was beside it. `overflow-wrap` cannot
+   help while nowrap holds, so it is turned off here rather than worked around. */
+.sheet td, .sheet tbody tr:not(.sheet-group) th {
+  padding: var(--space-2) var(--space-3);
   text-align: left;
   vertical-align: top;
+  font-weight: 400;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border-bottom: 0;
+}
+.sheet tbody tr:not(.sheet-group) + tr:not(.sheet-group) td,
+.sheet tbody tr:not(.sheet-group) + tr:not(.sheet-group) th {
   border-top: 1px solid var(--border);
 }
-.sheet tr:first-child th, .sheet tr:first-child td { border-top: 0; }
+/* The columns, declared for the table rather than on a cell: with fixed layout the widths
+   are taken from the first row, and the first row here spans all three. */
+.col-what { width: 12rem; }
+.col-is { width: 14rem; }
+.col-so { width: auto; }
 
-.sheet th {
-  width: 8.5rem;
+.sheet tbody tr:not(.sheet-group) th {
+  padding-left: var(--space-4);
   font-size: var(--font-xs);
   font-weight: 400;
   color: var(--text-muted);
-  white-space: nowrap;
+  /* `app.css` styles every `th` as a sticky, uppercase, sunk-background table header.
+     That is right for a header row and wrong for a label column: it drew a grey slab down
+     the side of the sheet, set each label to stick to the top of the viewport, and put a
+     second level of uppercase under the subject headings, which already carry it. The
+     subject is the heading here; these are its rows. */
+  background: none;
+  position: static;
+  font-family: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+/* An axis this platform has no good state for. Marked, because "always a limitation" and
+   "a limitation this time" are different things to a reader deciding what to change. */
+.always {
+  margin-left: 5px;
+  font-size: 9.5px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  color: var(--text-muted);
 }
 .sheet-is {
-  width: 11rem;
+  width: 13rem;
   font-family: var(--mono);
   font-size: var(--font-xs);
   color: var(--text-primary);
-  overflow-wrap: anywhere;
 }
 .sheet-so { font-size: var(--font-xs); line-height: 1.5; color: var(--text-secondary); }
 .sheet-so b { color: var(--text-primary); font-weight: 600; }
 
 /* The consequence column carries the state; the other two stay neutral so the eye reads
-   one signal per row rather than three. */
+   one signal per row rather than three. A row in a good state is muted, not green: it is
+   the absence of a problem, not an achievement. */
+/* Only the serious rows are coloured. Colouring all fourteen made the column one shade of
+   red, and a page where everything is emphasised emphasises nothing — the three that say
+   the result cannot be reproduced, has no out-of-sample period and is not priced from a
+   market were the same weight as a note about concurrency. A warning reads as ordinary
+   text; what distinguishes it from a clean row is that there is a sentence at all. */
 .sheet tr.ok .sheet-so { color: var(--text-muted); }
-.sheet tr.warn .sheet-so { color: var(--warning); }
+.sheet tr.warn .sheet-so { color: var(--text-secondary); }
 .sheet tr.bad .sheet-so { color: var(--danger); }
-.sheet tr.bad th, .sheet tr.bad .sheet-is { color: var(--text-primary); }
+.sheet tr.bad th { color: var(--danger); font-weight: 600; }
+.sheet tr.bad .sheet-is { color: var(--text-primary); }
+/* A rule on the row, drawn in the padding of the label cell, so the three that matter are
+   findable by running the eye down the edge rather than by reading. */
+.sheet tr.bad th { box-shadow: inset 2px 0 0 var(--danger); }
+.sheet tbody tr:not(.sheet-group):hover { background: var(--surface-2); }
 
-@media (max-width: 760px) {
-  .sheet th, .sheet-is { width: auto; white-space: normal; }
+@media (max-width: 900px) {
+  .sheet, .sheet tbody, .sheet tr, .sheet td,
+  .sheet tbody tr:not(.sheet-group) th { display: block; width: auto; }
+  .sheet tbody tr:not(.sheet-group) { padding: var(--space-2) var(--space-4); }
+  .sheet-group th { display: block; }
 }
 
 /* The assumptions: a spec sheet, not findings. Label above value, several to a row, and

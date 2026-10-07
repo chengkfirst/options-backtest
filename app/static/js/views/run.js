@@ -515,44 +515,74 @@ const SHEET = [
  * assumption and its consequence are the same fact and reading them apart was the problem
  * with the two separate blocks this replaces. A row in a good state says so rather than
  * going blank: a blank cannot be told from an axis nobody looked at. */
+/* Which rows are showing. The sheet's shape is fixed, but twenty-two rows between the
+   answer and the charts is a wall, and most visits want the fourteen that carry something.
+   Held here rather than in the DOM so it survives the repaint a tab change causes. */
+let SHOW_ALL = false;
+
 function evidence(){
   const leads = standsOutItems();
-  const worstOf = rows => {
-    const lv = rows.map(r => r.limits(RUN).level);
-    return lv.includes("bad") ? "bad" : lv.includes("warn") ? "warn" : "ok";
-  };
+  const every = SHEET.flatMap(sec => sec.rows.map(row => ({sec, row, lim: row.limits(RUN)})));
+  const limiting = every.filter(e => e.lim.level !== "ok");
+  const shown = SHOW_ALL ? every : limiting;
 
-  const sheet = SHEET.map(sec => {
-    const state = worstOf(sec.rows);
-    const n = sec.rows.filter(r => r.limits(RUN).level !== "ok").length;
-    return `<section class="ev-sec ${state}">
-      <h3>${esc(sec.title)}${n ? `<span class="ev-n">${n}</span>` : ""}</h3>
-      <table class="sheet"><tbody>${sec.rows.map(row => {
-        const lim = row.limits(RUN);
-        return `<tr class="${lim.level}">
-          <th>${esc(row.what)}</th>
-          <td class="sheet-is">${esc(String(row.value(RUN)))}</td>
-          <td class="sheet-so">${mark(lim.says)}</td></tr>`;
-      }).join("")}</tbody></table>
-    </section>`;
+  // One table, full width, the subject as a row group. Six boxes in two columns gave each
+  // sentence 635px and no column width, so the consequence ran out of its box and over the
+  // text of the section beside it — the page was unreadable where it mattered most. A
+  // sentence needs the width of the page, and a subject needs a heading, not a border.
+  let current = null;
+  const body = shown.map(({sec, row, lim}) => {
+    const head = sec !== current
+      ? `<tr class="sheet-group"><th colspan="3">${esc(sec.title)}</th></tr>`
+      : "";
+    current = sec;
+    return head + `<tr class="${lim.level}">
+      <th>${esc(row.what)}${row.always
+        ? `<span class="always" title="">always</span>` : ""}</th>
+      <td class="sheet-is">${esc(String(row.value(RUN)))}</td>
+      <td class="sheet-so">${mark(lim.says)}</td></tr>`;
   }).join("");
 
   // Leads are not faults and are not part of the fixed sheet: they are what this
   // particular run did that is worth a second look, so an empty list shows nothing at all.
   const stands = !leads.length ? "" : `
-    <section class="ev-sec leads">
-      <h3>What stands out<span class="ev-n">${leads.length}</span></h3>
-      <table class="sheet"><tbody>${leads.map(f => `<tr class="${f.level}">
+    <tr class="sheet-group leads"><th colspan="3">what stands out</th></tr>`
+    + leads.map(f => `<tr class="${f.level}">
         <th colspan="2">${esc(f.short)}</th>
-        <td class="sheet-so">${mark(f.detail || "")}</td></tr>`).join("")}</tbody></table>
-    </section>`;
+        <td class="sheet-so">${mark(f.detail || "")}</td></tr>`).join("");
 
-  return `<details class="evidence" open>
-    <summary>What this run stands on<span class="ev-why">${
-      SHEET.reduce((a, s) => a + s.rows.filter(r => r.limits(RUN).level !== "ok").length, 0)
-    } of ${SHEET.reduce((a, s) => a + s.rows.length, 0)} axes carry a limitation</span></summary>
-    <div class="ev-grid">${sheet}${stands}</div>
-  </details>`;
+  const counts = `${limiting.length} of ${every.length} carry a limitation`;
+  return `<section class="evidence">
+    <header class="ev-head">
+      <h3>What this run stands on</h3>
+      <span class="ev-why">${counts}</span>
+      <div class="ev-switch" role="group">
+        <button type="button" class="${SHOW_ALL ? "" : "on"}" data-show="limits"
+          >${limiting.length} limiting</button>
+        <button type="button" class="${SHOW_ALL ? "on" : ""}" data-show="all"
+          >all ${every.length}</button>
+      </div>
+    </header>
+    <table class="sheet">
+      <colgroup><col class="col-what"><col class="col-is"><col class="col-so"></colgroup>
+      <tbody>${body}${stands}</tbody>
+    </table>
+  </section>`;
+}
+
+/** The two-state switch over the sheet. Bound after each paint, because the tier is
+ *  rewritten whole and a listener on a replaced node goes with it. */
+function bindEvidence(){
+  for(const b of document.querySelectorAll("[data-show]"))
+    b.addEventListener("click", () => {
+      const want = b.dataset.show === "all";
+      if(want === SHOW_ALL) return;
+      SHOW_ALL = want;
+      // Only this tier is redrawn; the charts below keep their brush and their scroll.
+      const host = document.querySelector(".evidence");
+      host.outerHTML = evidence();
+      bindEvidence();
+    });
 }
 
 /** What this run actually did that is worth a second look.
@@ -852,6 +882,7 @@ function render(query){
       render({...query, tab: button.dataset.tab});
     });
 
+  bindEvidence();
   renderTab(tab, query);
   paintDetail();
 }
