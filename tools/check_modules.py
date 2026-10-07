@@ -39,6 +39,33 @@ ROOT = Path(__file__).resolve().parent.parent
 JS = ROOT / "app" / "static" / "js"
 
 
+
+#: What may sit immediately before a `/` that opens a regex rather than dividing. After a
+#: value — a name, a number, a closing bracket — a slash is division; after an operator, a
+#: comma, or the start of a statement, it opens a pattern. This is the standard heuristic
+#: and it is enough here, because the file is read for identifiers rather than evaluated.
+_BEFORE_REGEX = set("(,=:[!&|?{};+-*%~^<>") | {"\n"}
+
+
+def _is_regex_here(src: str, i: int) -> bool:
+    """Whether the `/` at ``i`` opens a regex literal."""
+    j = i - 1
+    while j >= 0 and src[j] in " \t":
+        j -= 1
+    if j < 0:
+        return True
+    if src[j] in _BEFORE_REGEX:
+        return True
+    # `return /x/` and `typeof /x/` — a keyword, not a value.
+    word = ""
+    k = j
+    while k >= 0 and (src[k].isalnum() or src[k] == "_"):
+        word = src[k] + word
+        k -= 1
+    return word in {"return", "typeof", "case", "in", "of", "new", "delete", "void",
+                    "instanceof", "do", "else", "yield", "await"}
+
+
 def strip_noise(src: str) -> str:
     """Source with comments and string literals blanked out, **keeping the code inside a
     template literal's** ``${...}``.
@@ -70,6 +97,33 @@ def strip_noise(src: str) -> str:
         elif src[i] == "`":
             text, i = _template(src, i)
             out.append(text)
+        elif src[i] == "/" and _is_regex_here(src, i):
+            # A regex literal. Without this the scanner reads `/'/` as a division followed
+            # by an opening quote, and the runaway string swallows the rest of the file —
+            # which is how `esc`'s own `.replace(/'/g, …)` made this guard report six live
+            # exports as missing. The slashes and the body are blanked; a regex contains no
+            # identifier the import check cares about.
+            j = i + 1
+            in_class = False
+            while j < len(src):
+                c = src[j]
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == "[":
+                    in_class = True
+                elif c == "]":
+                    in_class = False
+                elif c == "/" and not in_class:
+                    j += 1
+                    break
+                elif c == "\n":
+                    break          # an unterminated regex: not one after all
+                j += 1
+            while j < len(src) and src[j].isalpha():
+                j += 1             # the flags
+            out.append(re.sub(r"[^\n]", " ", src[i:j]))
+            i = j
         elif src[i] in "\"'":
             quote = src[i]
             j = i + 1
@@ -239,6 +293,14 @@ PARSER_CASES: tuple[tuple[str, str, bool], ...] = (
     ("text inside a template is dropped", "const a = `SURVIVES is only text here`;", False),
     ("a line comment is dropped", "// SURVIVES\nconst a = 1;", False),
     ("a plain string is dropped", 'const a = "SURVIVES";', False),
+    # A quote inside a regex literal. `.replace(/'/g, "&#39;")` in dom.js read as a
+    # division and an opening string, and the runaway swallowed every export after it —
+    # the guard then reported six names as not exported while they sat in the file.
+    ("a quote inside a regex",
+     'const a = s.replace(/\'/g, "x");\nconst b = SURVIVES(5);', True),
+    ("a slash inside a character class",
+     'const a = s.split(/[/]/);\nconst b = SURVIVES(6);', True),
+    ("division is not a regex", "const a = (x) / y; const b = SURVIVES(7);", True),
 )
 
 
