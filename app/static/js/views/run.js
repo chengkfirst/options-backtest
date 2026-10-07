@@ -162,46 +162,35 @@ function assumptions(){
   const cfg = m.config || {};
   const ex = m.execution || {};
   const prov = m.provenance || {};
-  // Each chip carries what it is **for**. A reader who does not already know what λ is
-  // learns nothing from "λ 1.00", and these are the assumptions that decide whether the
-  // numbers below mean anything — the least useful place in the interface to be terse.
+  // Label and value, and nothing hovering behind them.
+  //
+  // Each of these used to carry a sentence in a tooltip, on the reasoning that "λ 1.00"
+  // teaches a reader who does not know what λ is nothing. That reasoning was right and the
+  // fix was wrong: the answer to an unreadable label is a readable label, not an
+  // explanation hidden one hover away where it cannot be scanned, printed or searched. So
+  // the value says what it is — "the whole spread" rather than "1.00" — and the row is
+  // read in one pass.
+  const lam = cfg.costs?.adverse_fraction;
+  const lag = ex.execution_lag_days;
+  const dirty = String(m.code || "").includes("+dirty");
   const chips = [
-    ["period", `${RUN.start_date} → ${RUN.end_date}`,
-     "the range the strategy was run over"],
-    ["capital", money(cfg.notional_capital),
-     "the account the position sizes were worked out against"],
-    ["engine", RUN.engine === "event_driven" ? "event driven" : "trade table",
-     RUN.engine === "event_driven"
-       ? "steps day by day with real portfolio state, so there is an equity curve"
-       : "computes each trade independently and builds no equity curve, so no drawdown "
-         + "and no Sharpe"],
-    ["fill latency", ex.execution_lag_days != null
-      ? `${ex.execution_lag_days} session${ex.execution_lag_days === 1 ? "" : "s"}` : "—",
-     "how long between the decision and the fill. The signal is read on one close and "
-     + "filled on a later one, so nothing is filled on the bar that decided it"],
-    ["fill price (λ)", num(cfg.costs?.adverse_fraction),
-     "how far across the bid/ask the fill lands. 1.00 is the whole spread paid — the "
-     + "pessimistic end. It is tested by a robustness run, never tuned to flatter a result"],
-    ["shadow", ex.shadow_days != null ? `${ex.shadow_days} days` : "—",
-     "how long a contract keeps being quoted after its trade closed. It is what lets "
-     + "\"would a wider stop have worked\" be answered instead of guessed"],
-    ["data", prov.all_synthetic ? "synthetic chain"
-      : prov.mixed ? `${pct(prov.synthetic_share)} synthetic` : "real",
-     prov.all_synthetic
-       ? "the underlying's prices are real; the option prices come from Black-Scholes "
-         + "with no skew, so option-side conclusions describe the formula, not the market"
-       : "where the option prices came from"],
-    ["code", m.code || "—",
-     String(m.code || "").includes("+dirty")
-       ? "the commit this ran on, plus uncommitted changes. '+dirty' means the named "
-         + "commit does not contain the code that ran, so this run cannot be reproduced"
-       : "the commit this ran on. A run cannot be reproduced without it"],
-    ["result id", m.run_id || "—",
-     "the hash of everything that determines this result — config, code and data. Two "
-     + "runs sharing it are the same run; two differing in any input cannot share it"],
+    ["period", `${RUN.start_date} → ${RUN.end_date}`],
+    ["capital", size(cfg.notional_capital)],
+    ["engine", RUN.engine === "event_driven"
+      ? "event driven, with an equity curve" : "trade table, no equity curve"],
+    ["fill delay", lag == null ? "—"
+      : lag === 0 ? "same session" : `${lag} session${lag === 1 ? "" : "s"} after the signal`],
+    ["fill price", absent(lam) ? "—"
+      : lam >= 1 ? "the whole spread paid (λ 1.00)"
+      : `${pct(lam)} across the spread (λ ${num(lam)})`],
+    ["quotes kept after exit", ex.shadow_days != null ? `${ex.shadow_days} days` : "—"],
+    ["option prices", prov.all_synthetic ? "Black-Scholes, no skew"
+      : prov.mixed ? `${pct(prov.synthetic_share)} Black-Scholes` : "real quotes"],
+    ["code", dirty ? `${m.code} — cannot be reproduced` : (m.code || "—")],
+    ["result id", m.run_id || "—"],
   ];
-  return `<dl class="assume">${chips.map(([k, v, why]) => `
-    <div class="assume-item"><dt data-tip="${esc(why)}">${esc(k)}</dt>
+  return `<dl class="assume">${chips.map(([k, v]) => `
+    <div class="assume-item"><dt>${esc(k)}</dt>
       <dd>${esc(v)}</dd></div>`).join("")}</dl>
     <p class="assume-note">Changed by launching another run, never edited here.</p>`;
 }
@@ -409,13 +398,9 @@ function metricCards(){
   const ordered = [...cards.filter(c => c.lead), ...cards.filter(c => !c.lead)];
   return `<dl class="cards">${ordered.map(c => {
     const absentCard = c.value == null || c.value === "—" || c.value === false;
-    const tip = [c.means ? c.means.replace(/\*\*/g, "") : "",
-                 c.better ? `${c.better} is better.` : "",
-                 thin ? `Fewer than ${floor} trades, so this number is shown but cannot `
-                      + `carry weight.` : ""].filter(Boolean).join(" ");
     return `<div class="card${c.lead ? " lead" : ""}${thin ? " thin" : ""}${
       absentCard ? " empty" : ""}">
-      <dt data-tip="${esc(tip)}">${esc(c.name)}${c.better
+      <dt>${esc(c.name)}${c.better
         ? `<span class="card-dir" aria-hidden="true">${
             c.better === "higher" ? "↑" : c.better === "lower" ? "↓" : "→0"}</span>` : ""}</dt>
       <dd>${absentCard ? "—" : esc(c.value)}</dd>
@@ -429,21 +414,36 @@ function metricCards(){
 /** A thin bar beneath the value: the range a different sample would plausibly have given.
  *  Marked when it contains zero, because then the sign is not established and the point
  *  estimate alone would read as a result. */
+/** The range a different sample of the same trades would plausibly have given, drawn
+ *  against zero.
+ *
+ * The earlier bar carried no information. It was a full-width 3px rule under every card,
+ * the same length whatever the interval was, with a zero tick that appeared only when the
+ * interval happened to cross — so on a card where the sign *was* established it was pure
+ * decoration, and there was no way to tell the two states apart except by noticing an
+ * absence. Its text was then clipped by `white-space: nowrap` in a card too narrow for it.
+ *
+ * The one question an interval answers is **is the sign of this result established**, so
+ * zero is always on the scale and always marked, and the interval is a segment placed on
+ * it. An interval sitting wholly to one side reads as established at a glance; one
+ * straddling the mark reads as not. */
 function intervalBar(interval){
-  const crosses = interval.low <= 0 && 0 <= interval.high;
-  const span = interval.high - interval.low || 1;
-  const zeroAt = Math.max(0, Math.min(100, ((0 - interval.low) / span) * 100));
-  // Money formatting and a whole-number level. "95.0% interval -88048 … -36070" wrapped
-  // onto a second line and read as four unrelated numbers; the grouped form fits.
+  const {low, high} = interval;
+  const crosses = low <= 0 && 0 <= high;
+  // The scale always contains zero, so the mark has a fixed meaning across cards.
+  const from = Math.min(0, low), to = Math.max(0, high);
+  const span = (to - from) || 1;
+  const pos = v => ((v - from) / span) * 100;
+  const left = pos(low), width = Math.max(pos(high) - left, 1.5);
   const level = `${Math.round(interval.level * 100)}%`;
-  const why = `What a different sample of the same trades would plausibly have given. `
-    + `${crosses ? "It contains zero, so the sign of this result is not established. " : ""}`
-    + `${(interval.caveat || "").replace(/\*\*/g, "")}`;
-  return `<div class="interval${crosses ? " crosses" : ""}" data-tip="${esc(why)}">
-    <span class="interval-bar">${crosses
-      ? `<i class="interval-zero" style="left:${zeroAt.toFixed(1)}%"></i>` : ""}</span>
-    <span class="interval-text">${level} ${moneyShort(interval.low)} … ${
-      moneyShort(interval.high)}${crosses ? " · spans 0" : ""}</span>
+
+  return `<div class="interval${crosses ? " crosses" : ""}">
+    <span class="interval-track">
+      <i class="interval-span" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"></i>
+      <i class="interval-zero" style="left:${pos(0).toFixed(1)}%"></i>
+    </span>
+    <span class="interval-text">${level} ${moneyShort(low)} to ${moneyShort(high)}${
+      crosses ? ", spans 0" : ""}</span>
   </div>`;
 }
 
@@ -837,7 +837,7 @@ function settingsTab(){
       <section class="setting-group">
         <h4>${esc(g.name)}</h4>
         ${g.rows.length ? `<dl>${g.rows.map(([k, v, why]) => `
-          <dt${why ? ` data-tip="${esc(why)}"` : ""}>${esc(k)}</dt>
+          <dt>${esc(k)}</dt>
           <dd>${esc(String(v))}</dd>`).join("")}</dl>` : ""}
         ${!g.rows.length ? `<p class="setting-none">${
           g.inputs ? "Left alone." : esc(shortGap(g))}</p>` : ""}
@@ -912,7 +912,7 @@ function exitReasonTab(){
 const COST_LABEL = {
   commission: "commission", regulatory: "regulatory fees", slippage: "slippage",
   total: "total cost", gross_pnl: "before costs", net_pnl: "after costs",
-  fees_pct_of_gross: "costs as a share of gross",
+  fees_pct_of_gross: "share of gross",
 };
 /** Costs are money spent. A signed formatter prints 346 spent as "+346", which reads as a
  *  gain; the sign belongs to the P&L rows, not to the cost rows. */
@@ -1014,9 +1014,9 @@ function robustnessTab(){
     <ul class="checks">${(META?.validations || []).map(v => {
       const can = offered.has(v.kind);
       const inputs = (VALID_INPUTS[v.kind] || []).map(i =>
-        `<label for="v_${v.kind}_${i.key}">${esc(i.label)}</label>
-         <input id="v_${v.kind}_${i.key}" value="${esc(i.value)}"
-                ${i.hint ? `data-tip="${esc(i.hint)}"` : ""}>`).join("");
+        `<label for="v_${v.kind}_${i.key}">${esc(i.label)}${
+           i.hint ? ` <span class="vhint">${esc(i.hint)}</span>` : ""}</label>
+         <input id="v_${v.kind}_${i.key}" value="${esc(i.value)}">`).join("");
       return `<li class="${can ? "can" : "cannot"}">
         <b>${esc(v.label)}</b><span>${esc(v.why)}</span>
         ${can ? `<div class="vrow">${inputs}

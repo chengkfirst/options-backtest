@@ -10,7 +10,7 @@
  */
 "use strict";
 
-import {$, onClick, show} from "./dom.js";
+import {$, esc, onClick, show} from "./dom.js";
 import {catchPageErrors, notice} from "./net.js";
 import {go, location_, route, start} from "./router.js";
 import {startTips} from "./ui/tip.js";
@@ -41,7 +41,7 @@ function renderRail(){
   const {path} = location_();
   $("rail").innerHTML = SURFACES.map(s => `
     <a class="rail-item${path === s.path ? " on" : ""}" href="#${s.path}"
-       data-tip="${s.what}${s.pending ? ". Not built yet: " + s.pending : ""}">
+       data-tip="${esc(s.name)}${s.pending ? " — not built yet" : ""}">
       <span class="rail-icon" aria-hidden="true">${s.icon}</span>
       <span class="rail-name">${s.name}</span>
     </a>`).join("");
