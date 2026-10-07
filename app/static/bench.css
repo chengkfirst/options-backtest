@@ -216,3 +216,28 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
   background: var(--sunk);
   color: var(--ink-3);
 }
+
+/* ── what has been changed from the starting configuration ──────────────────────
+ *
+ * A dot on the field, and a count at the top. After ten minutes of editing, "what in here
+ * is mine" is a question the form could not answer at all. */
+.changed-line {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--accent);
+}
+.field { position: relative; }
+.baseline-dot {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+.baseline-dot:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.field.changed > label { color: var(--accent); }

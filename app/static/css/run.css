@@ -829,3 +829,30 @@ td.bar span {
 .plain td, .plain th, .grid-tab td, .grid-tab th {
   font-variant-numeric: tabular-nums;
 }
+
+/* A layer that could not be drawn. It says which part failed and offers the one action
+   that helps — the rest of the page is computed and correct and goes on rendering. */
+.layer-error {
+  margin: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface-1));
+}
+.layer-error h4 { margin: 0 0 var(--space-2); font-size: var(--font-sm); color: var(--danger); }
+.layer-error p {
+  margin: 0 0 var(--space-3);
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+.layer-error button {
+  font: inherit;
+  font-size: var(--font-xs);
+  padding: 3px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  cursor: pointer;
+}

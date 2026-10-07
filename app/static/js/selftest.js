@@ -391,6 +391,75 @@ suite("views — the composer renders and refuses an incomplete rule", async () 
   frame.remove();
 });
 
+/* ── the addendum's state and failure rules ── */
+suite("router — a tab switch is a step, a brush is not", async () => {
+  const r = await import("./router.js");
+  const was = location.hash;
+  // `history.length` is capped and coalesced by browsers, so it says nothing. What matters
+  // is observable: after a step, going back returns to the state before it; after a
+  // replace, it does not.
+  location.hash = "#/x?tab=a";
+  await new Promise(x => setTimeout(x, 80));
+  r.step({tab: "b"});
+  await new Promise(x => setTimeout(x, 120));
+  eq(r.location_().query.tab, "b", "the step took effect");
+  history.back();
+  await new Promise(x => setTimeout(x, 200));
+  eq(r.location_().query.tab, "a", "and back returns to the tab before it");
+  history.forward();
+  await new Promise(x => setTimeout(x, 200));
+  eq(r.location_().query.tab, "b", "and forward returns to it");
+
+  // A replace must not be reachable by going back, or a drag would bury the last real
+  // navigation under a hundred steps.
+  r.replace({range: "1..2"});
+  await new Promise(x => setTimeout(x, 120));
+  history.back();
+  await new Promise(x => setTimeout(x, 200));
+  eq(r.location_().query.tab, "a", "a replace left no step of its own");
+  location.hash = was;
+});
+
+suite("views — a tab that throws keeps its failure to itself", async () => {
+  const net = await import("./net.js");
+  const runs = await net.getJSON(net.API.runs);
+  const id = runs.runs[0].id;
+  const real = await net.getJSON(net.API.run, {id});
+
+  const frame = document.createElement("iframe");
+  frame.style.cssText = "width:1200px;height:800px;border:0";
+  document.getElementById("sandbox").append(frame);
+  // Load the shell on a page that fetches no run, patch `fetch` on **that** window, then
+  // reach the run by changing the hash. Setting `src` or `location.href` builds a new
+  // window and throws the patch away with the old one, which is why the first attempt at
+  // this case found nothing to assert on.
+  frame.src = "/#/bench";
+  await new Promise(r => { frame.onload = r; setTimeout(r, 2500); });
+  await new Promise(r => setTimeout(r, 800));
+
+  // The failure is planted in the **data**, not by patching a module: an ES export cannot
+  // be redefined, and a test that needs to would be testing a shape the product does not
+  // have. A row whose `entry_date` is a number makes the period chart throw on `.slice`,
+  // which is exactly the kind of fault this rule exists for.
+  frame.contentWindow.__poison = {id, poisoned: {...real, rows: [{...real.rows[0], entry_date: 42}]}};
+  frame.contentWindow.eval(`
+    const realFetch = window.fetch;
+    window.fetch = (u, o) => String(u).includes("/api/run?id=" + window.__poison.id)
+      ? Promise.resolve(new Response(JSON.stringify(window.__poison.poisoned),
+          {headers: {"content-type": "application/json"}}))
+      : realFetch(u, o);
+  `);
+  frame.contentWindow.location.hash = `#/runs/${id}?tab=spread`;
+  await new Promise(r => setTimeout(r, 2500));
+
+  const doc = frame.contentDocument;
+  ok(doc.querySelector(".layer-error"), "the failure is drawn where the layer was");
+  ok(doc.querySelector("#retryTab"), "with a way to try again");
+  ok(doc.querySelectorAll(".card").length >= 8,
+     "the metric cards above it still rendered");
+  frame.remove();
+});
+
 /* ── run the lot ── */
 export async function run(){
   const out = document.getElementById("out");

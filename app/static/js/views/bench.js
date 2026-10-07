@@ -96,6 +96,76 @@ function fillDefaults(){
   if($("f_entry_code") && !$("f_entry_code").value) $("f_entry_code").value = d.entry_code || "";
   if($("f_review_code") && !$("f_review_code").value) $("f_review_code").value = d.review_code || "";
   bindFields();
+  markChanged();
+}
+
+/* ── what has been changed, and from what ────────────────────────────────────────
+ *
+ * The addendum asks for a dot on every field that differs from the baseline, with the
+ * baseline value on hover and a way back, and a line at the top saying how many slots
+ * differ. There is no baseline **run** to compare against yet — that needs the comparison
+ * page — but there is a baseline every field already has: the starting value the backend
+ * ships in `META.defaults`, which `check_defaults` holds to being visible rather than
+ * applied on omission.
+ *
+ * So the dot says "you changed this from what the platform starts at", which is the
+ * question a researcher actually asks of a form they have been editing for ten minutes:
+ * what in here is mine. Comparing against another run can replace the source later without
+ * changing any of this.
+ */
+function baselineOf(name){
+  const d = META?.defaults || {};
+  return Object.prototype.hasOwnProperty.call(d, name) ? d[name] : undefined;
+}
+
+/** Whether a control holds something other than its starting value. Compared as strings,
+ *  because a number typed into a text input is a string and `5 !== "5"` would mark every
+ *  untouched numeric field as changed. */
+function isChanged(el){
+  const was = baselineOf(el.name);
+  if(was === undefined || was === null) return false;
+  return String(el.value) !== String(was);
+}
+
+function markChanged(){
+  const form = $("form");
+  if(!form) return;
+  let n = 0;
+  for(const el of form.elements){
+    if(!el.name) continue;
+    const field = el.closest(".field");
+    if(!field) continue;
+    const changed = isChanged(el);
+    field.classList.toggle("changed", changed);
+    if(changed){
+      n++;
+      // The starting value, and a way back to it. Both on the dot, because a reader who
+      // wants to know what they changed from wants to undo it about half the time.
+      let dot = field.querySelector(".baseline-dot");
+      if(!dot){
+        dot = document.createElement("button");
+        dot.type = "button";
+        dot.className = "baseline-dot";
+        field.append(dot);
+        dot.addEventListener("click", () => {
+          el.value = baselineOf(el.name);
+          el.dispatchEvent(new Event("change", {bubbles: true}));
+          el.dispatchEvent(new Event("input", {bubbles: true}));
+          markChanged();
+        });
+      }
+      dot.title = `starts at ${baselineOf(el.name)} — click to put it back`;
+    }else{
+      field.querySelector(".baseline-dot")?.remove();
+    }
+  }
+  const line = $("changedLine");
+  if(line){
+    line.hidden = n === 0;
+    line.textContent = n === 1
+      ? "1 field differs from the starting configuration"
+      : `${n} fields differ from the starting configuration`;
+  }
 }
 
 /* ── the signal reference ──────────────────────────────
@@ -317,6 +387,11 @@ function bindFields(){
   };
   $("comps").querySelectorAll("select").forEach(sel =>
     sel.addEventListener("change", apply));
+  for(const el of $("form").elements){
+    if(!el.name) continue;
+    el.addEventListener("input", markChanged);
+    el.addEventListener("change", markChanged);
+  }
 
   // Choosing a form rebuilds that slot so its parameters appear. Only the components are
   // redrawn, so nothing typed elsewhere in the form is lost.

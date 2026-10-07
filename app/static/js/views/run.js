@@ -24,7 +24,7 @@
 import {$, esc, mark} from "../dom.js";
 import {API, getJSON, notice, postJSON} from "../net.js";
 import {checkContract} from "../contract.js";
-import {go} from "../router.js";
+import {go, step} from "../router.js";
 import {EXCLUDE, REASON, absent, bare, dateLong, fmtVal, label, money, moneyShort,
         num, pct, size}
   from "../fmt.js";
@@ -65,13 +65,23 @@ const TABS = [
           + "engine computes them; they are not kept with the run."},
 ];
 
+/* A finished run never changes, so its record is kept by id for the life of the session —
+ * the addendum's caching rule, and the reason a tab switch or a step back is instant
+ * rather than another eighty-field fetch. Only what the page can change is invalidated:
+ * `archive` writes into the cached record, and `delete` leaves the run entirely. */
+const CACHE = new Map();
+
+export function forget(id){ CACHE.delete(Number(id)); }
+
 export async function enter({params, query}){
   const id = Number(params.id);
   const host = $("view-run");
-  host.innerHTML = `<p class="hint">loading run ${esc(params.id)}…</p>`;
+  const cached = CACHE.get(id);
+  if(!cached) host.innerHTML = `<p class="hint">loading run ${esc(params.id)}…</p>`;
   try{
     if(!META) META = await getJSON(API.meta);
-    RUN = await getJSON(API.run, {id});
+    RUN = cached || await getJSON(API.run, {id});
+    CACHE.set(id, RUN);
   }catch(e){
     host.innerHTML = `<div class="pending"><h2>run ${esc(params.id)}</h2>
       <p class="hint">${esc(e.message)}</p></div>`;
@@ -1079,8 +1089,11 @@ function render(query){
   });
   for(const button of $("view-run").querySelectorAll("[data-tab]"))
     button.addEventListener("click", () => {
-      replace({tab: button.dataset.tab});
-      render({...query, tab: button.dataset.tab});
+      // A step, not a replace: the addendum asks that view state in the URL make back and
+      // forward work, and a tab is the piece a reader moves between on purpose. The hash
+      // change re-enters the route, which renders it — rendering here as well would draw
+      // the tab twice and throw away the chart stack mid-draw.
+      step({tab: button.dataset.tab});
     });
 
   bindEvidence();
@@ -1113,7 +1126,7 @@ async function archiveRun(){
   try{
     await postJSON(API.runArchive, {id: RUN.id, archived: now});
   }catch(e){ notice(`could not ${now ? "archive" : "restore"} run ${RUN.id}: ${e.message}`); return; }
-  RUN.archived = now ? 1 : 0;
+  RUN.archived = now ? 1 : 0;   // the cached record is this object, so it follows
   render({tab: TAB, mark: MARK});
 }
 
@@ -1168,6 +1181,7 @@ async function deleteRun(){
   $("deleteGo").addEventListener("click", async () => {
     try{
       const out = await postJSON(API.runDelete, {id: RUN.id});
+      forget(RUN.id);
       notice(`run ${out.took.run_id} deleted, with ${out.took.notes} note(s) and `
         + `${out.took.files.length} file(s).`);
     }catch(e){ notice(`could not delete run ${RUN.id}: ${e.message}`); return; }
@@ -1176,7 +1190,34 @@ async function deleteRun(){
 }
 
 
+/** Render a tab, keeping a failure inside it.
+ *
+ * The addendum's rule: "a layer that fails shows its own error and retry while the rest of
+ * the page renders". Every renderer was called straight, so one throwing took the whole
+ * tab with it — the metric cards and the trade table above and below it are computed and
+ * correct, and the reader saw a half-drawn page with a console message they never open.
+ *
+ * The error says which part failed and offers the one action that helps, because a chart
+ * that failed on a transient is worth a second attempt and one that failed on its data is
+ * worth knowing about. */
 function renderTab(tab, query){
+  try{
+    renderTabBody(tab, query);
+  }catch(e){
+    const host = $("tierMid");
+    host.innerHTML = `<div class="layer-error">
+      <h4>this tab could not be drawn</h4>
+      <p>${esc(e.message)}</p>
+      <button type="button" id="retryTab">try again</button>
+    </div>`;
+    $("retryTab").addEventListener("click", () => renderTab(tab, query));
+    // Still reported, so a failure that happens once is in the record rather than only on
+    // the screen it happened on.
+    notice(`the ${tab} tab could not be drawn: ${e.message}`);
+  }
+}
+
+function renderTabBody(tab, query){
   TAB = tab;
   const host = $("tierMid");
   const spec = TABS.find(t => t.key === tab);
