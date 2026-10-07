@@ -281,6 +281,13 @@ class TradeTableEngine:
             side=Side.BUY,
             quantity=strategy.quantity,
             multiplier=self.config.contract.multiplier,
+            # The same two inputs as the event-driven engine. Missed here, the two would
+            # diverge on any run that configures the widening -- and the divergence
+            # would look like a slippage effect rather than a missing argument.
+            days_to_expiry=self.market.calendar.sessions_between(
+                entry_quote["asof"], entry_quote["expiry"]),
+            delta=float(entry_quote["delta"]) if "delta" in entry_quote
+                  and entry_quote["delta"] == entry_quote["delta"] else None,
             costs=self.config.costs,
         )
 
@@ -480,6 +487,10 @@ class TradeTableEngine:
             side=Side.SELL,
             quantity=qty,
             multiplier=multiplier,
+            days_to_expiry=self.market.calendar.sessions_between(
+                exit_row["asof"], exit_row["expiry"]),
+            delta=float(exit_row["delta"]) if "delta" in exit_row
+                  and exit_row["delta"] == exit_row["delta"] else None,
             costs=self.config.costs,
         )
         return self._record(

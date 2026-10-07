@@ -1733,6 +1733,12 @@ class EventDrivenEngine:
         price, fees = execute(
             bid=row["bid"], ask=row["ask"], side=intent.side, quantity=intent.quantity,
             multiplier=self.config.contract.multiplier, costs=self.config.costs,
+            # λ widens near expiry and deep out of the money, where the document says a
+            # fill is harder. Both default to no widening, so a run that does not
+            # configure them is unchanged.
+            days_to_expiry=self.market.calendar.sessions_between(
+                day, intent.contract.expiry),
+            delta=_as_float(row.get("delta")),
         )
         ledger.apply_fill(contract=intent.contract, side=intent.side, quantity=intent.quantity,
                           price=price, fees=fees, when=day, trade_id=intent.trade_id)

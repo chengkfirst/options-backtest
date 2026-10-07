@@ -207,8 +207,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "the list of what counts as a ledger write is the real one",
         "tests/test_architecture.py",
-        'LEDGER_WRITES = ("apply_fill", "settle_expiry", "liquidate_stock")',
-        'LEDGER_WRITES = ("apply_fill",)',
+        'LEDGER_WRITES = ("apply_fill", "settle_expiry", "liquidate_stock",',
+        'LEDGER_WRITES = ("apply_fill",)  # (',
         ("tests/test_architecture.py::"
          "test_the_ledger_write_list_is_the_real_one",),
     ),
@@ -315,6 +315,30 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        if not verdict.exercise_now:",
         "        if False:",
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
+    ),
+    Mutation(
+        # One constant λ prices the easiest fill in the book the same as the hardest.
+        "λ widens near expiry",
+        "backtest/execution/costs.py",
+        "    if (costs.near_expiry_days > 0 and days_to_expiry is not None",
+        "    if (False and days_to_expiry is not None",
+        ("tests/test_selection_costs.py::TestLambdaWidensWhereAFillIsHarder",),
+    ),
+    Mutation(
+        "λ widens deep out of the money",
+        "backtest/execution/costs.py",
+        "    if (costs.deep_otm_delta > 0.0 and delta is not None",
+        "    if (False and delta is not None",
+        ("tests/test_selection_costs.py::TestLambdaWidensWhereAFillIsHarder",),
+    ),
+    Mutation(
+        # Two multipliers compound into a number nobody chose; two additions are each
+        # readable in the result as the thing that was set.
+        "the two widenings add rather than multiply",
+        "backtest/execution/costs.py",
+        "        out += costs.deep_otm_extra",
+        "        out *= 1.0 + costs.deep_otm_extra",
+        ("tests/test_selection_costs.py::TestLambdaWidensWhereAFillIsHarder",),
     ),
     Mutation(
         # Folded into realised, a losing strategy reads as a profitable one: over three

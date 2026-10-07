@@ -137,4 +137,124 @@ ACCOUNTING: tuple[Clause, ...] = (
            ("backtest/core/types.py",), needle="mfe_underlying"),
 )
 
-CLAUSES: tuple[Clause, ...] = ACCOUNTING
+#: Layer 4 · execution. The clauses, not the module names -- `FillModel` exists and
+#: "size capped by a participation rate of volume" does not.
+EXECUTION: tuple[Clause, ...] = (
+    Clause("OrderGenerator", "target minus current, to orders",
+           ("backtest/portfolio/target.py",), needle="def orders("),
+    Clause("OrderGenerator", "sell before buy so cash suffices",
+           ("backtest/portfolio/target.py",), needle="o.quantity > 0"),
+    Clause("OrderGenerator", "round to whole contracts",
+           ("backtest/portfolio/positioning.py",), needle="int(budget // premium)"),
+    Clause("OrderGenerator", "split large orders TWAP- or VWAP-style",
+           ("backtest/portfolio/target.py",),
+           absent="orders go out whole. Splitting needs a participation cap to split "
+                  "against, which needs daily contract volume -- the same block as "
+                  "`4.2.participation`. On a daily bar there is also nowhere to put the "
+                  "slices: TWAP over one price is one order"),
+    Clause("FillModel", "buys at ask, sells at bid",
+           ("backtest/execution/costs.py",), needle="def fill_price"),
+    Clause("FillModel", "limit orders fill only when the price trades through",
+           ("backtest/execution/costs.py",),
+           absent="every order is a market order. A limit needs intraday quotes to know "
+                  "whether the price traded through it -- on a daily bar the only "
+                  "honest answer is the close, and filling a limit at the close is a "
+                  "market order with extra steps"),
+    Clause("FillModel", "size capped by a participation rate of volume",
+           ("backtest/execution/costs.py",),
+           absent="needs daily contract volume, which the synthetic chain does not "
+                  "produce and no real feed is wired yet. It is `4.2.participation`"),
+    Clause("FillModel", "size capped by displayed size",
+           ("backtest/execution/costs.py",),
+           absent="needs bid and ask **sizes**, which the schema does not ask for and no "
+                  "source here supplies. Adding the column without a source would be a "
+                  "cap that never binds"),
+    Clause("FillModel", "unfilled remainder carries over or cancels",
+           ("backtest/engine/loop.py",), needle="EventKind.EXIT_DEFERRED"),
+    Clause("SlippageModel", "a multiple of the half-spread",
+           ("backtest/execution/costs.py",), needle="adverse_fraction"),
+    Clause("SlippageModel", "wider near expiry",
+           ("backtest/execution/costs.py",), needle="near_expiry_days"),
+    Clause("SlippageModel", "wider for deep out-of-the-money strikes",
+           ("backtest/execution/costs.py",), needle="deep_otm_delta"),
+    Clause("SlippageModel", "square-root impact for the underlying",
+           ("backtest/execution/costs.py",),
+           absent="needs ADV and a k calibrated from live fills, which is "
+                  "`4.1.impact`. It is also about trades in the **underlying**, and "
+                  "this system trades options"),
+    Clause("CostModel", "per-contract commission",
+           ("backtest/core/config.py",), needle="commission_per_contract"),
+    Clause("CostModel", "exchange, ORF and OCC clearing fees; SEC and TAF on sells",
+           ("backtest/core/config.py",),
+           absent="one combined `regulatory_fee_per_contract` rather than the five "
+                  "named. The **total** is what reaches a result and the default of "
+                  "0.05 is the right order of magnitude, so this is a reporting "
+                  "difference: a researcher cannot see which fee grew when a venue "
+                  "changes one. Splitting it is a day's work and needs the current "
+                  "schedules, which are a fact about the venues rather than about this "
+                  "system"),
+    Clause("CostModel", "borrow fees on shorts",
+           ("backtest/core/config.py",),
+           absent="no short-share position is possible: the ledger refuses a naked "
+                  "short, and a cash-secured put needs no borrow. Delivered shares from "
+                  "a put exercise are **short** for one session, which is the one case "
+                  "this would bite -- and a one-session borrow on 100 shares is cents"),
+    Clause("CostModel", "margin interest",
+           ("backtest/accounting/ledger.py",),
+           absent="no margin model, stated rather than missing: the ledger refuses the "
+                  "positions that would need one. Interest **on cash** is booked, which "
+                  "is the other half of the same line"),
+    Clause("ExerciseModel", "OCC exercise by exception at $0.01",
+           ("backtest/accounting/ledger.py",), needle="auto_exercise_threshold"),
+    Clause("ExerciseModel", "early exercise of American calls before ex-dividend",
+           ("backtest/data/options/american.py",), needle="def value("),
+    Clause("ExerciseModel", "cash or margin needed to take delivery",
+           # Both engines, because both settle an expiry and the note has to be in
+           # whichever one a reader is looking at.
+           ("backtest/engine/loop.py", "backtest/engine/vectorized.py"),
+           needle="to take delivery"),
+    Clause("ExerciseModel", "physical for equity and ETF, cash for index",
+           ("backtest/core/types.py",), needle="class SettlementStyle"),
+    Clause("MarketRule", "spread and open-interest rejection",
+           ("backtest/execution/costs.py",), needle="max_relative_spread"),
+    Clause("MarketRule", "T+1 settlement",
+           ("backtest/accounting/ledger.py",), needle="def sellable"),
+    Clause("MarketRule", "trading hours and session phases",
+           ("backtest/core/clock.py",),
+           absent="the engine is daily and every bar is a session, so there are no "
+                  "hours to be outside of. It is `0.3.phases` and needs intraday data"),
+    Clause("MarketRule", "trading halts",
+           ("backtest/execution/costs.py",),
+           absent="needs a halt feed. A quote-less day is marked untradable by the "
+                  "cleaning stage, which catches a halt's **effect** without knowing it "
+                  "was a halt"),
+    Clause("MarketRule", "Limit Up-Limit Down bands",
+           ("backtest/execution/costs.py",),
+           absent="an intraday band on the underlying, and this engine sees one close "
+                  "per day. Needs the same data as the session phases"),
+    Clause("MarketRule", "option tick sizes",
+           ("backtest/execution/costs.py",),
+           absent="fills are not rounded to a tick. The error is at most half a tick "
+                  "per fill -- $0.005 on a penny-quoted contract against a λ of a full "
+                  "half-spread -- so it is an order of magnitude below the cost model's "
+                  "own dominant term, and it would be wrong to round a *model* price to "
+                  "a tick as though it were a quote"),
+    Clause("MarketRule", "position and exercise limits",
+           ("backtest/execution/costs.py",),
+           absent="**the OCC limit per underlying is a published external number I do "
+                  "not have.** Building it would mean inventing the figure, which is "
+                  "worse than not having it: a limit set to a made-up number binds at "
+                  "the wrong size and reads as enforced"),
+    Clause("MarketRule", "short-sale borrow availability",
+           ("backtest/execution/costs.py",),
+           absent="needs a borrow feed, and no short-share position is possible here "
+                  "anyway except the one session after a put exercise"),
+    Clause("MarketRule", "the pattern day trader rule",
+           ("backtest/execution/costs.py",),
+           absent="it applies to margin accounts below $25,000 and this is a "
+                  "non-margin account. Also unreachable: the rule counts round trips "
+                  "within one session, and the enforced execution lag makes those "
+                  "impossible -- the same coincidence that hides the T+1 rule"),
+)
+
+CLAUSES: tuple[Clause, ...] = ACCOUNTING + EXECUTION

@@ -77,7 +77,9 @@ def check_tradable(bid, ask, costs: CostConfig, *, flags: str = "") -> Tradabili
     return Tradability.yes(spread)
 
 
-def fill_price(bid: float, ask: float, side: Side, costs: CostConfig) -> float:
+def fill_price(bid: float, ask: float, side: Side, costs: CostConfig, *,
+               days_to_expiry: int | None = None,
+               delta: float | None = None) -> float:
     """The fill price.
 
     ``adverse_fraction`` is the document's λ: 0 takes the mid, 1 takes the adverse side
@@ -99,7 +101,8 @@ def fill_price(bid: float, ask: float, side: Side, costs: CostConfig) -> float:
     """
     mid = (bid + ask) / 2.0
     adverse = ask if side is Side.BUY else bid
-    price = mid + (adverse - mid) * costs.adverse_fraction
+    price = mid + (adverse - mid) * effective_lambda(
+        costs, days_to_expiry=days_to_expiry, delta=delta)
     return max(price, 0.0)
 
 
@@ -127,6 +130,33 @@ class FeeBreakdown:
 ZERO_FEES = FeeBreakdown(0.0, 0.0, 0.0)
 
 
+def effective_lambda(costs: CostConfig, *, days_to_expiry: int | None = None,
+                     delta: float | None = None) -> float:
+    """λ for one contract, widened near expiry and deep out of the money.
+
+    The document says slippage is "a multiple of the half-spread, **wider near expiry and
+    for deep out-of-the-money strikes**", and λ was a single constant -- which prices the
+    easiest fill in the book the same as the hardest. Both widenings default to zero, so
+    a run that does not ask for them gets the constant and is unchanged.
+
+    **They add rather than multiply.** Two multipliers compound into a number nobody
+    chose -- 1.5 x 1.5 is 2.25, which is past the cap the config refuses -- while two
+    additions are each readable in the result as the thing that was set.
+
+    An absent input does not widen. A missing days-to-expiry or delta is not evidence of
+    an easy fill, but inventing a widening from an unknown would put a cost in the result
+    that no observation supports; the absence is the data layer's to report.
+    """
+    out = costs.adverse_fraction
+    if (costs.near_expiry_days > 0 and days_to_expiry is not None
+            and days_to_expiry <= costs.near_expiry_days):
+        out += costs.near_expiry_extra
+    if (costs.deep_otm_delta > 0.0 and delta is not None
+            and abs(float(delta)) < costs.deep_otm_delta):
+        out += costs.deep_otm_extra
+    return out
+
+
 def order_fees(quantity: int, costs: CostConfig, multiplier: int) -> FeeBreakdown:
     """One order's fees, broken out.
 
@@ -149,8 +179,17 @@ def exercise_fees(quantity: int, costs: CostConfig) -> FeeBreakdown:
 
 
 def execute(
-    *, bid: float, ask: float, side: Side, quantity: int, multiplier: int, costs: CostConfig
+    *, bid: float, ask: float, side: Side, quantity: int, multiplier: int,
+    costs: CostConfig, days_to_expiry: int | None = None,
+    delta: float | None = None,
 ) -> tuple[float, FeeBreakdown]:
-    """The fill price and the fees. :func:`check_tradable` must pass first."""
-    price = fill_price(bid, ask, side, costs)
+    """The fill price and the fees. :func:`check_tradable` must pass first.
+
+    ``days_to_expiry`` and ``delta`` widen λ where the document says a fill is harder --
+    near expiry and deep out of the money. Both optional and both defaulting to no
+    widening, so a caller that does not pass them gets the constant λ and the behaviour
+    every run had before.
+    """
+    price = fill_price(bid, ask, side, costs, days_to_expiry=days_to_expiry,
+                       delta=delta)
     return price, order_fees(quantity, costs, multiplier)
