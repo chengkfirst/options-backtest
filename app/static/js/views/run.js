@@ -1203,7 +1203,7 @@ function renderTab(tab, query){
   if(tab === "settings"){ host.innerHTML = settingsTab(); return; }
   if(tab === "spread"){ spreadTab(host); return; }
   if(tab === "slice"){ sliceTab(host); return; }
-  if(tab === "attribution"){ host.innerHTML = attributionTab(); return; }
+  if(tab === "attribution"){ attributionTab(host); return; }
   if(tab === "trades"){ host.innerHTML = exitReasonTab(); return; }
   if(tab === "execution"){ host.innerHTML = costsTab(); return; }
   if(tab === "robustness"){
@@ -1400,18 +1400,26 @@ function shortGap(g){
  * than the whole loss and gamma gave a third of it back.
  *
  * Returns markup and then paints, because the tab's host is written in one go. */
-function attributionTab(){
+function attributionTab(host){
   const attr = RUN.attribution || RUN.analysis?.attribution;
-  if(!attr || !attr.totals)
-    return `<p class="hint">No attribution for this run.</p>`;
-  // Painted after the host has the element to draw into.
-  requestAnimationFrame(() => renderAttribution(attr, RUN.net_pnl ?? null));
+  if(!attr || !attr.totals){
+    host.innerHTML = `<p class="hint">No attribution was recorded for this run, so there `
+      + `is nothing to split into delta, gamma, vega and theta.</p>`;
+    return;
+  }
+  // Written, then painted — in that order and in the same turn. It used to return markup
+  // and schedule the paint on `requestAnimationFrame`, which works on a visible page and
+  // not otherwise: a browser throttles rAF in an off-screen frame, so the chart simply
+  // never appeared. Every other tab takes its host and paints into it, and nothing here
+  // needed a frame boundary — `innerHTML` is synchronous, so the element exists on the
+  // next line.
   const bad = attr.high_residual;
-  return `<div class="pad">
+  host.innerHTML = `<div class="pad">
     <div class="chart"><svg id="attr" role="img"
       aria-label="P&amp;L attribution by Greek"></svg></div>
     ${bad ? `<p class="hint warn-text">${bad} ${bad === 1 ? "trade has" : "trades have"} a
        residual too large to place, so that much of this is unattributed.</p>` : ""}</div>`;
+  renderAttribution(attr, RUN.net_pnl ?? null);
 }
 
 function exitReasonTab(){

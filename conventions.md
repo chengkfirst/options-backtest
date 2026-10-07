@@ -46,6 +46,7 @@ python -m tools.check --fast    # for a small change, skipping the slow ones
 | **contrast** | a colour pair too close to read, in either theme. Verified in reverse by the palette it was written for: the design plan's proposed values failed its own 4.5:1 rule in **twenty text pairs** across the two themes, and one slot colour was invisible on the dark ground | fast |
 | **modules** | an interface module importing a name nothing exports, or using one it did not import. There is no bundler, so that raises only when the code path runs | fast |
 | **evidence** | the standing-assumptions sheet going stale or going quiet: a row that writes its value instead of reading the record, one that cannot report a good state, or a permanent limitation of the platform left undeclared. Checking is the backend's; this holds the sheet that says what the machinery assumed | fast |
+| **selftest** | the browser self-test losing a module. It runs every frontend module against the cases that have broken them — absence printed as a number, a chart given no rows, an escape safe in text and not in an attribute — at `/selftest.html`; this holds that it still covers the tree | fast |
 | **baseline** | an unintended change in results | 8 s |
 | **test suite** | behavioural regression | 2 min |
 | **doc examples** | the snippets in the README not running | 1 min |
