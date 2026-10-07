@@ -95,9 +95,53 @@ const SKELETON = `<section class="tier-top">
 </section>
 <div class="skeleton sk-chart"></div>`;
 
+/* ── a tab switch is not a new page ─────────────────────────────────────────────
+ *
+ * A tab is a **step** in the history, so it arrives as a hash change and re-enters the route
+ * — and the route's job is to render the page. Rendering the page meant rebuilding the
+ * verdict, eight metric cards, the standing-assumptions sheet, the chart stack and four
+ * hundred table rows in order to change which chart sits between them, which measured at
+ * about a second against the plan's budget of a hundred milliseconds for a tab switch with
+ * the data already in hand.
+ *
+ * Nothing above the tabs depends on which tab is open, so only the tab's own body is redrawn.
+ */
+
+/** Whether this entry differs from what is on screen **only** in which tab is open.
+ *
+ * Compared against the view's own live state rather than a snapshot of the last query,
+ * because the brush, the mark and the selected trade reach the URL through `replace`, which
+ * deliberately does not re-enter the route — a snapshot would be stale the moment anyone
+ * dragged across a chart.
+ *
+ * Deliberately strict: any other difference, or a page that is not already on screen, takes
+ * the full path. Back and forward can change several things at once, and a light path that
+ * guessed wrong would leave the page describing a reading it is not showing.
+ */
+function onlyTheTabChanged(id, query){
+  if(!RUN || Number(RUN.id) !== id || !$("tierMid")) return false;
+  const same = [
+    [query.mark === "liq" ? "liq" : "mid", MARK],
+    [query.scale === "log" ? "log" : "linear", SCALE],
+    [query.range || "", RANGE ? `${RANGE.from}..${RANGE.to}` : ""],
+    [query.closed || "", CLOSED_BY || ""],
+    [query.trade || "", PICKED ? String(PICKED.trade_id ?? "") : ""],
+    [query.card ? "open" : "", cardOpen() ? "open" : ""],
+  ];
+  if(same.some(([asked, showing]) => asked !== showing)) return false;
+  return (TABS.some(t => t.key === query.tab) ? query.tab : "overview") !== TAB;
+}
+
 export async function enter({params, query}){
   const id = Number(params.id);
   const host = $("view-run");
+  if(onlyTheTabChanged(id, query)){
+    const tab = TABS.some(t => t.key === query.tab) ? query.tab : "overview";
+    for(const button of $("view-run").querySelectorAll("[data-tab]"))
+      button.classList.toggle("on", button.dataset.tab === tab);
+    renderTab(tab, query);
+    return;
+  }
   const cached = CACHE.get(id);
   let late = 0;
   if(!cached)
@@ -184,10 +228,18 @@ function walk(by){
   openCard(next);
 }
 
+/** Which mark the book is drawn at. Display only, like the scale beside it.
+ *
+ * It redrew the whole page, which measured at about 300 ms with four hundred rows in the
+ * table — and the metric cards, the verdict and the sheet do not depend on the mark at all:
+ * they were computed on the run's configured one and say so. Only the chip and the chart
+ * stack change, so only those are redrawn. */
 function setMark(mark){
   MARK = mark;
   replace({mark: MARK});
-  render({tab: TAB, mark: MARK, scale: SCALE});
+  const chip = $("markToggle");
+  if(chip) chip.textContent = `showing the ${MARK === "liq" ? "bid" : "mid"} mark`;
+  if(TAB === "overview") renderTab("overview", {});
 }
 
 /** The vertical scale of the equity layer. Display only, and labelled as such: the metrics

@@ -505,6 +505,24 @@ suite("views — one link restores the whole reading, on any tab", async () => {
   ok(chip.textContent.includes(from), "the range is named");
   if(reason) ok(doc.getElementById("clearClosed"), "the slot filter has its own way out");
   ok(doc.getElementById("clearRange"), "and so does the range");
+
+  // **And a tab switch keeps all of it.** Switching tabs redraws only the tab's own body now
+  // — the whole page took about 300 ms with four hundred rows in the table, against the
+  // plan's budget of 100 ms — so what the light path must never do is leave the tiers above
+  // describing a reading the page is no longer showing.
+  // Scoped to the top tier: the execution tab draws cost cards of its own with the same
+  // class, so an unscoped count measures two different bands at once.
+  const cardsBefore = doc.querySelectorAll(".tier-top .card").length;
+  doc.querySelector('[data-tab="execution"]').click();
+  await new Promise(r => setTimeout(r, 600));
+  eq(doc.querySelectorAll(".tier-top .card").length, cardsBefore,
+     "the metric band survives a tab switch");
+  ok(doc.getElementById("rangeChip") && !doc.getElementById("rangeChip").hidden,
+     "and the range chip is still there");
+  eq(doc.querySelectorAll("#runDetail tbody tr").length, shown,
+     "and the table is still filtered to the same trades");
+  ok(frame.contentWindow.location.hash.includes("range="),
+     "and the link still carries the range");
   frame.remove();
 });
 
