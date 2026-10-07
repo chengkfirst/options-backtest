@@ -37,12 +37,24 @@ class Tradability:
         return cls(False, reason, spread)
 
 
-def check_tradable(bid, ask, costs: CostConfig) -> Tradability:
-    """An absent quote, or a spread over the limit, means untradable.
+def check_tradable(bid, ask, costs: CostConfig, *, flags: str = "") -> Tradability:
+    """An absent quote, a spread over the limit, or a cleaning rule means untradable.
 
     An estimated price is never substituted for an absent quote — that would let
     the backtest fill on a contract that had no quote at all.
+
+    ``flags`` is the row's ``quality_flags``. A cleaning rule that marked a row
+    untradable has to be **read here**, at the one place an order is refused -- the stage
+    itself only writes the flag, and a flag nothing reads is a cleaning rule that reports
+    and does not clean. See ``data/options/clean.py``.
     """
+    from backtest.data.options.clean import UNTRADABLE_FLAG
+
+    if flags and UNTRADABLE_FLAG in str(flags):
+        marks = [part for part in str(flags).split("|")
+                 if part.startswith(UNTRADABLE_FLAG)]
+        return Tradability.no(
+            f"a cleaning rule marked this row untradable ({', '.join(marks)})")
     try:
         bid_f, ask_f = float(bid), float(ask)
     except (TypeError, ValueError):

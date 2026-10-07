@@ -266,7 +266,8 @@ class TradeTableEngine:
         contract = selection.contract.unwrap()
         entry_quote = selection.quote
         assert entry_quote is not None
-        tradable = check_tradable(entry_quote["bid"], entry_quote["ask"], self.config.costs)
+        tradable = check_tradable(entry_quote["bid"], entry_quote["ask"], self.config.costs,
+                                  flags=str(entry_quote.get("quality_flags", "")))
         if not tradable.ok:
             self.events.record(
                 EventKind.NOT_TRADABLE, entry_day,
@@ -333,7 +334,12 @@ class TradeTableEngine:
 
     def _exit_price_of(self, row: pd.Series) -> Maybe[float]:
         """The exit price: selling, so the adverse side (the bid)."""
-        tradable = check_tradable(row["bid"], row["ask"], self.config.costs)
+        tradable = check_tradable(
+            row["bid"], row["ask"], self.config.costs,
+            # The same read as the event-driven engine. Missed here, the two
+            # would diverge on any cleaned dataset -- which is the one
+            # cross-check this project rests on.
+            flags=str(row.get("quality_flags", "")))
         if not tradable.ok:
             return Maybe.missing(tradable.reason or "untradable")
         from backtest.execution.costs import fill_price

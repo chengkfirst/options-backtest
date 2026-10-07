@@ -176,6 +176,37 @@ Two boundaries:
 
 ---
 
+# Cleaning rules
+
+```python
+# skip (needs your own data file)
+r = run(**config, chain={
+    "kind": "file", "path": "your/data.parquet",
+    "clean": ["crossed_quote", "below_intrinsic", "no_quote",
+              {"wide_spread": 0.20}],
+})
+print(r.raw.chain.cleaning_report.text())
+```
+
+**No rule is on by default**, and that is deliberate. A platform-chosen cleaning rule is
+the platform deciding which market conditions your strategy is tested through — and the
+register lists cleaning as a group-1 choice: **test its sensitivity, never optimise it.**
+Cleaner data can remove stressed periods and bias the result toward calm markets, so the
+reading that counts is the same run with the rules off, compared over the stressed
+stretches rather than over the whole range.
+
+Two things a rule can do, and the difference matters:
+
+- **mark untradable** — the row stays with its prices and no order fills against it. The
+  default for a wide spread or a missing quote, which is the document's own instruction:
+  never forward-fill a quote-less contract, because a halted contract at yesterday's
+  price is the most flattering thing a backtest can do with missing data.
+- **drop** — the row leaves. Only for a row that is not a price at all: a crossed quote,
+  or an ask below intrinsic value.
+
+Nothing writes a price. A cleaned price is a price somebody made up, and the one thing
+worse than bad data is bad data that looks fine.
+
 # Wiring in your own data
 
 **The synthetic option chain is a test fixture, not a data source.** Its IV is constant,

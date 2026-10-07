@@ -1700,7 +1700,8 @@ class EventDrivenEngine:
                     f"the {intent.kind.value} was decided on {intent.quantity} and {held} "
                     f"was held at the fill, so it is {wanted}", str(intent.contract))
                 intent = replace(intent, quantity=wanted)
-        tradable = check_tradable(row["bid"], row["ask"], self.config.costs)
+        tradable = check_tradable(row["bid"], row["ask"], self.config.costs,
+                                   flags=str(row.get("quality_flags", "")))
         if not tradable.ok:
             self.events.record(EventKind.NOT_TRADABLE, day, tradable.reason or "", str(intent.contract))
             return None

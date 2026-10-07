@@ -117,7 +117,63 @@ def _file(opts, market, config):
         column_map=opts.get("column_map"),
         scale=opts.get("scale"),
         strict=bool(opts.get("strict", True)),
+        cleaning=_cleaning_from(opts.get("clean")),
     )
+
+
+def _cleaning_from(given):
+    """Cleaning rules from the config, by name.
+
+    ``clean=["crossed_quote", "no_quote", {"wide_spread": 0.20}]``. Named rather than
+    passed as objects so a run's cleaning survives into the YAML config file and back --
+    a rule set that cannot be written down is a rule set a run cannot reproduce.
+
+    ``None`` means no rules. There is no default set, for the reason in
+    ``data/options/clean.py``: a platform-chosen cleaning rule is the platform deciding
+    which market conditions a strategy is tested through.
+    """
+    if given is None:
+        return None
+    from backtest.data.options import clean as rules
+
+    BY_NAME = {
+        "crossed_quote": rules.crossed_quote,
+        "below_intrinsic": rules.below_intrinsic,
+        "no_quote": rules.no_quote,
+        "wide_spread": rules.wide_spread,
+    }
+    built = []
+    for item in given:
+        if isinstance(item, str):
+            name, arg = item, None
+        elif isinstance(item, Mapping) and len(item) == 1:
+            (name, arg), = item.items()
+        else:
+            raise StartupError(
+                f"a cleaning rule is a name or a one-entry mapping of name to its "
+                f"threshold, got {item!r}"
+            )
+        maker = BY_NAME.get(name)
+        if maker is None:
+            raise StartupError(
+                f"{name!r} is not a cleaning rule; one of {', '.join(sorted(BY_NAME))}"
+            )
+        if name == "wide_spread":
+            if arg is None:
+                raise StartupError(
+                    "wide_spread needs its threshold: "
+                    "{\"wide_spread\": 0.20} means a spread up to 20% of the mid is "
+                    "tradable. Which spreads a strategy can live with is the "
+                    "researcher's choice, not the platform's"
+                )
+            built.append(maker(max_share_of_mid=float(arg)))
+        elif name == "below_intrinsic" and arg is not None:
+            built.append(maker(tolerance=float(arg)))
+        else:
+            if arg is not None:
+                raise StartupError(f"{name!r} takes no threshold, got {arg!r}")
+            built.append(maker())
+    return rules.Cleaning(rules=tuple(built))
 
 
 register("synthetic", _synthetic)

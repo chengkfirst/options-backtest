@@ -106,14 +106,7 @@ COMPONENTS: tuple[Component, ...] = (
     Component("Clean", "data",
               "apply explicit rules; every rule configurable and logged; suspended or "
               "quote-less contracts marked untradable, never forward-filled",
-              absent="**absent, and it is the gap a real dataset hits first.** "
-                     "`check_frame` reports and does not act, so between 'this data has "
-                     "wide-spread days' and 'the run used them' there is nothing: a "
-                     "dataset is either refused whole or used whole. The register lists "
-                     "data-cleaning rules as a group-1 choice -- sensitivity only, "
-                     "never optimised, 'compare results with and without, focusing on "
-                     "stress periods' -- and that comparison needs cleaning to be a "
-                     "thing that can be switched off"),
+              needle="class Cleaning"),
     Component("PITalignment", "data", "every record carries event_time and available_at",
               needle="available_at"),
     Component("Universe", "data",

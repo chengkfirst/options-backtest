@@ -372,6 +372,7 @@ class FileChainSource:
         column_map: Mapping[str, str] | None = None,
         scale: Mapping[str, float] | None = None,
         strict: bool = True,
+        cleaning=None,
     ) -> None:
         self.path = Path(path)
         self.market = market
@@ -384,6 +385,18 @@ class FileChainSource:
                 + report.summary(printout=False)
             )
         self.report = report
+        # **Cleaning runs after validation and before anything derived.** After, because
+        # a rule needs the quality report's own findings to be worth writing; before,
+        # because an IV solved from a crossed quote is a number produced from data the
+        # researcher had decided to remove.
+        #
+        # `None` means no rules, which is what every run did before this existed and is
+        # why adding it moves no result. See `data/options/clean.py` for why there is no
+        # default set.
+        from backtest.data.options.clean import Cleaning
+
+        self.cleaning = cleaning if cleaning is not None else Cleaning()
+        frame, self.cleaning_report = self.cleaning.apply(frame)
         #: Whether the availability dates were supplied or assumed. Set by `_prepare`,
         #: read by provenance: a run whose look-ahead protection rests on an assumption
         #: should say so rather than read the same as one where the data carried it.

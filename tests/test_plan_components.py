@@ -121,6 +121,64 @@ class TestTheInventoryMatchesTheCode:
         assert not shared, f"these appear in both inventories: {sorted(shared)}"
 
 
+@kind("guard")
+class TestTheTwoInventoriesAgree:
+    """Where both tables describe the same thing, they must say the same thing.
+
+    This is the next failure mode after the one that produced this file: two lists of
+    the same system, maintained separately, drifting until a requirement is marked built
+    and the component it rests on is marked absent. Each would read fine on its own.
+
+    Only the pairs that genuinely describe one thing are listed. A requirement is a
+    behaviour and a component is a thing, so most of them do not pair at all -- and
+    inventing a pairing to raise the count would make the check fail on a difference
+    that is not one.
+    """
+
+    #: ``(requirement id, component name)`` where both describe the same piece.
+    PAIRS = (
+        ("1.quality", "Validator"), ("1.corporate", "Adjuster"),
+        ("1.rule1", "PITalignment"), ("0.3.cut", "Access"),
+        ("0.1.bus", "EventLoop"), ("0.2.state", "Runner"),
+        ("2.1.vocabulary", "SignalCombiner"), ("3.1.actions", "RiskRule"),
+        ("3.2.target", "OrderGenerator"), ("3.3.scenario", "ScenarioRule"),
+        ("4.2.fees", "CostModel"), ("4.2.exercise", "ExerciseModel"),
+        ("4.2.early_exercise", "ExerciseModel"),
+        ("5.1.two_engines", "VectorizedEngine"), ("5.1.resume", "Runner"),
+        ("5.2.tradebook", "TradeBook"), ("5.3.attribution", "GreeksAttribution"),
+        ("6.1.metrics", "Metrics"), ("6.1.report", "Report"),
+        ("6.4.trials", "ExperimentTracker"), ("7.1.api", "JobQueue"),
+        ("7.2.live", "LiveAdapter"),
+    )
+
+    def test_both_names_in_a_pair_exist(self):
+        """A pair naming something neither inventory holds is a pair that checks
+        nothing, which is how a cross-check comes to pass vacuously."""
+        from tests.plan_components import BY_NAME
+        from tests.requirements_map import BY_ID
+
+        unknown = [f"{rid}/{cname}" for rid, cname in self.PAIRS
+                   if rid not in BY_ID or cname not in BY_NAME]
+        assert not unknown, f"these pairs name something not in an inventory: {unknown}"
+
+    def test_a_paired_requirement_and_component_agree(self):
+        from tests.plan_components import BY_NAME
+        from tests.requirements_map import BY_ID
+
+        disagree = []
+        for rid, cname in self.PAIRS:
+            requirement, component = BY_ID[rid], BY_NAME[cname]
+            if bool(not requirement.not_built) != component.built:
+                disagree.append(
+                    f"{rid} is "
+                    f"{'built' if not requirement.not_built else 'not built'} and "
+                    f"{cname} is {'built' if component.built else 'absent'}")
+        assert not disagree, (
+            "the two inventories describe the same pieces differently:\n  "
+            + "\n  ".join(disagree)
+        )
+
+
 class TestWhatTheInventorySays:
     """Read as a report rather than a pass or fail, like the other measurements here."""
 
