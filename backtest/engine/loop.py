@@ -439,6 +439,16 @@ class EventDrivenEngine:
         self._prev_equity = counters.get("prev_equity", 0.0)
         self._last_greeks = None
         self._closed_pnl = records          # the same list, referenced not copied
+        # **A run starts carrying nothing.** `forget` cannot be the whole answer: a trade
+        # still open when the range ends is deliberately left unclosed, so it has no
+        # record and its state is still held -- correctly, for this run. Trade ids restart
+        # at 1 (above), so a second run of the same strategy object would find those marks
+        # waiting under the ids it is about to reuse. Measured before this line existed:
+        # `research.positioning.compare` with the identical sizing method three times
+        # returned 27 / 29 / 27 trades, and the `run_id` was the same for all three, so
+        # nothing in the output distinguished the contaminated run.
+        for bound in self._stateful_components().values():
+            bound.set_state({})
         if held is not None:
             for slot, state in held.component_state.items():
                 component = strategy.components.get(slot)
@@ -2106,11 +2116,9 @@ class EventDrivenEngine:
         if trade is None:
             raise InvariantError(f"the exit intent {intent.trade_id} has no matching "
                                  f"open trade")
-        # The trade is over: its components forget it. Without this a long run keeps one
-        # state entry per trade for ever, a snapshot of it grows without bound, and a
-        # trade_id reused later inherits a closed trade's high-water mark.
-        for bound in self._stateful_components().values():
-            bound.forget(intent.trade_id)
+        # The trade is over, and `_record` is what forgets its component state -- here
+        # and on the other two close paths, which this block used to be the only
+        # equivalent of.
         reason = (resolve_exit_reason(list(intent.exit_reasons), self._conflict_policy)
                   if intent.exit_reasons else ExitReason.TIME_EXIT)
         return self._record(trade, exit_day=day, exit_price=price, exit_fees=fees,
@@ -2284,6 +2292,17 @@ class EventDrivenEngine:
 
     def _record(self, trade: OpenTrade, *, exit_day, exit_price, exit_fees, exit_quote,
                 reason, suppressed, exit_deferred: int = 0):
+        # **A record means the trade is over, so its components forget it -- here, in the
+        # one place every close path goes through.** It used to be done by the exit-intent
+        # branch of `_execute`, which is one of the three: `_settle` (passive expiry) and
+        # `_early_exercise` both returned a record with the state left in place. A
+        # checkpoint then grew with the expiry count rather than with the open-trade
+        # count, and a trade id reused by a later run inherited a closed trade's
+        # high-water mark. Three calls would have fixed it and could rot apart again; the
+        # invariant is "no state is held for any trade that has a record", and this is
+        # where a record is made.
+        for bound in self._stateful_components().values():
+            bound.forget(trade.trade_id)
         mult = self.config.contract.multiplier
         direction = 1 if trade.side is Side.BUY else -1
         # The remaining contracts' P&L plus what reductions already banked. Without
