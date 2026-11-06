@@ -984,3 +984,93 @@ Verified after the fixes: `tools.check --fast` → `OK  all 18 guards passed`;
 `check_language` → `OK  278 files, all English`; every markdown link in every document
 resolves except `docs/plans/README.md → agent-setup-report.md`, which Phase 8 writes.
 
+### 7.3 `quant-auditor` on `adf0495` — DONE, two findings, neither fixed
+
+Output: `docs/findings/audit-adf0495.md` (208 lines), headed as an **audit, not a research
+result** — a finding about the code, not about the market, so the Data/Baselines/Result
+shape `docs/findings/README.md` prescribes does not apply and the file says why.
+
+It checked that the code it audited is still the code it ran against:
+`backtest/signals/stop_loss/_trailing`, `_trailing_initial` and the whole of
+`backtest/core/component.py` are byte-identical at `c2f1d1f` to the commit, so the
+experiments speak to what the commit introduced.
+
+**Four of the six checks clean, with evidence for each**: timing (the exit is an ordinary
+`Intent` with `execute_on=cal.shift(day, lag)`, `loop.py:804`, `:820-831`); look-ahead
+(`_trailing` reads today's ratio and its own accumulated past, the view is
+`DataView.at(day, …)` at `loop.py:1371`, and the component is called from exactly one place);
+realism assumptions (none touched, `fraction` is required with no default); thresholds
+(no numeric cut added).
+
+**Finding 1 — per-trade component state outlives the run.**
+`core/component.py:210` and `engine/loop.py:2113`. **I verified this myself rather than
+taking it**, because it is the most consequential claim of the night:
+
+- `forget` is called on **one** of the three close paths — the exit-intent path at
+  `loop.py:2113`. Confirmed by parsing `loop.py`: `_settle` → does not call it;
+  `_early_exercise` → does not call it; `run` → never clears `_state`.
+- `_state.clear()` appears **once** in `Bound`, inside `set_state`.
+- Trade ids restart at 1 each run, so the next run of the same strategy object inherits a
+  closed trade's high-water mark.
+
+The auditor's behavioural half: `research/positioning.compare` with the **identical** sizing
+method three times returns 27 / **29** / 27 trades, reproducibly, and seeding one state entry
+moves a trade's exit by two days and $84. Exposed callers include `sdk.delay_test` and
+`sdk.realism_test` — **the look-ahead and realism tests themselves**. Invisible in the
+output, and `run_id` is identical either way. Already inherited by `ratchet` (`bb3e61b`).
+
+**Finding 2 — the trailing stop's high-water mark starts below entry, not at entry.**
+`signals/stop_loss/__init__.py:60-73`. `initial_state` is called lazily on the first decide
+call, on the fill day, with an **exit-side** `premium_ratio` — measured negative on 33 of 33
+trades (≈ -0.0198). So the stop is looser than its stated rule by the round-trip cost, and
+the docstring, the parameter description and the test all say otherwise (the test feeds
+`0.0` by hand).
+
+**Neither is fixed**, as hard rule 5 requires — no behaviour change to the engine tonight.
+Both are in the report under "Found, not fixed", with file and line.
+
+### 7.4 `research-lead` → `docs/research/plan.md` — DONE
+
+753 lines, marked **DRAFT — for discussion** at the top, and it says in its own words that
+the one thing the role depends on — a person arguing back — has not happened, then separates
+the decisions that are its own from the ones the data forces.
+
+**20 entries**, every one with the six required parts, split honestly rather than padded:
+
+- **4 answerable tonight**, on the synthetic chain, underlying-side only.
+- **5 answerable but gated on a person naming the strategy** — the falsification group needs
+  a strategy to falsify.
+- **6 need a capability that does not exist** → next step is a spec, and it wrote none, which
+  is what its definition requires.
+- **5 blocked on real option data**, named individually (1.2 VRP term structure, 1.3 deep-ITM
+  LEAPS, 3.1 stop placement in premium terms, 3.2 fixed ratio against trailing, and 2.2/2.3
+  in their option-P&L form), plus 5.6 which is doubly blocked.
+
+**The data ask is specific**, which is what the plan asked for: eight required columns from
+`describe_schema()` (`asof`, `symbol`, `expiry`, `strike`, `right`, `bid`, `ask`,
+`underlying_price`), daily EOD, `open_interest` and `available_at` the two optionals worth
+paying for. And the useful part — **the cheapest sample differs sharply by question**: the
+VRP term-structure entry needs no chain at all, one nearest-ATM `iv` row per
+`(asof, expiry)`, tens of thousands of rows for ten years of QQQ, and it is the one place
+`research-questions.md` says a real edge might exist. The exit research needs a narrow strike
+grid across three deliberately chosen regime stretches rather than ten continuous years.
+
+**It was not agreeable**, which was the point of the role:
+
+- It **demoted the whole falsification group** below the event studies, overriding
+  `research-questions.md`'s own "highest priority" — because the only configuration in the
+  repository is an interface demo nobody chose as a thesis, and falsifying it would spend the
+  project's first pre-registered test on a strategy no one intends to trade. It then argued
+  the counter-case against itself and said it would not resist it hard. That is the one
+  decision it asks a person to argue with.
+- It **left the hold-out unfixed, deliberately**, saying why: 2015-2024 has been run and
+  1999-2026 studied, so no uncontaminated period of usable length exists, and both remaining
+  options are bad. Leaving it open is worse than choosing, but the choice is the human's.
+- It reported **three rows of `requirements.md` that the code contradicts** (the setup slot
+  *is* wired as the Armed gate at `loop.py:886-919`; MFE/MAE *does* have the underlying-terms
+  half; shadow tracking and counterfactual exits *are* built), two stale items in
+  `research-questions.md`, and one wrong the other way — 1.1 prescribes Monte Carlo and there
+  is **no path simulator anywhere in `backtest/`**. It may edit neither file; those go to 7.5.
+- It noted that the result in `research-questions.md` 2.1 is **a finding living in the wrong
+  file** — no configuration, no guard state, no caveats.
+
