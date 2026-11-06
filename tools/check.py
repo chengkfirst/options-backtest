@@ -35,6 +35,7 @@ noise nobody reads.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -79,9 +80,17 @@ GUARDS: tuple[tuple[str, list[str], bool], ...] = (
 def main() -> int:
     ap = argparse.ArgumentParser(description="run every guard")
     ap.add_argument("--fast", action="store_true", help="skip the slow guards")
+    ap.add_argument("--verbose", action="store_true",
+                    help="print a failed guard's whole output, not only its last line. "
+                         "Implied when CI is set in the environment")
     args = ap.parse_args()
 
+    # Somewhere you cannot re-run the guard by hand, the one-line hint is not a hint --
+    # it is the whole report. See :func:`_show_everything`.
+    verbose = args.verbose or bool(os.environ.get("CI"))
+
     results: list[tuple[str, bool, float, str]] = []
+    failures: list[tuple[str, list[str], str]] = []
     for name, cmd, slow in GUARDS:
         if slow and args.fast:
             continue
@@ -92,6 +101,7 @@ def main() -> int:
         if not ok:
             lines = [x for x in (r.stdout + r.stderr).strip().splitlines() if x.strip()]
             tail = lines[-1] if lines else "(no output)"
+            failures.append((name, cmd, r.stdout + r.stderr))
         results.append((name, ok, time.time() - t0, tail))
         print(f"  {'OK  ' if ok else 'FAIL'} {name:13s} {time.time() - t0:5.1f}s"
               + (f"   {tail[:70]}" if tail else ""))
@@ -101,11 +111,46 @@ def main() -> int:
     print()
     if bad:
         print(f"FAIL  {len(bad)} guard(s) did not pass: {', '.join(bad)}")
-        print("  See the hints above; run one on its own for its full output.")
+        if verbose:
+            _show_everything(failures)
+        else:
+            print("  See the hints above; run one on its own for its full output,")
+            print("  or re-run with --verbose to print it here.")
         return 1
     print(f"OK  all {len(results)} guards passed"
           + ("  (--fast: slow ones skipped)" if args.fast else ""))
     return 0
+
+
+def _show_everything(failures: list[tuple[str, list[str], str]]) -> None:
+    """Print each failed guard's whole output, under the command that produced it.
+
+    ## Why this exists
+
+    A failing guard normally prints one line here, and the footer says to run it on its
+    own for the rest. That is right at a terminal and useless anywhere else -- and
+    "anywhere else" now includes the thing most likely to be the first to see a failure.
+
+    The continuous-integration run reported::
+
+        FAIL test suite    1472.4s   1 failed, 1408 passed, 1 skipped
+
+    and that was the entire report. One test out of 1410 had failed, on a clean clone,
+    which is the case CI exists to catch -- and the name of the test was nowhere, because
+    pytest's own summary had been captured and thrown away but for its last line. Nobody
+    can act on that without re-running twenty-five minutes of suite.
+
+    So: the tail stays the default, because at a terminal the next thing you do is run
+    the one guard; and where you cannot do that, everything is printed. ``CI`` is set by
+    GitHub Actions and by every other runner; ``--verbose`` is for the same need locally,
+    such as a run redirected to a file.
+    """
+    for name, cmd, output in failures:
+        print()
+        print(f"{'=' * 72}")
+        print(f"  {name}  --  {' '.join(str(c) for c in cmd)}")
+        print(f"{'=' * 72}")
+        print(output.rstrip() or "(no output)")
 
 
 def _record(*, passed: bool, partial: bool) -> None:

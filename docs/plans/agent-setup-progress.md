@@ -884,3 +884,43 @@ had a table headed "The four guards that live here" listing **five**. Corrected.
 exactly the kind of hand-written count `doc-keeper` exists for, in a file written tonight —
 which is the argument for running 7.5 over the new documents and not only the old ones.
 
+### 7.1c CI found a failure, and could not say what it was — DONE
+
+**The CI workflow went red**, on the architecture-move commit and on the one after it. Two
+runs, the same failure, so not flaky. This is 2.3 working: a guard caught something.
+
+Then the second problem, which is worse than the first:
+
+```
+FAIL test suite    1472.4s   1 failed, 1408 passed, 1 skipped
+```
+
+**That was the entire report.** One test out of 1410 failed on a clean clone — exactly the
+case CI exists to catch — and the name of the test was nowhere. `tools.check` captures each
+guard's output and prints only its **last line**, then says "run one on its own for its full
+output". At a terminal that is right: the next thing you do is run the one guard. In CI you
+cannot, and twenty-five minutes of suite had produced one unusable line.
+
+A guard that detects a failure it cannot describe is most of the way to no guard at all —
+the reader's next move is to re-run everything, and the move after that is to stop reading.
+
+Fixed in `tools/check.py`: a new `_show_everything()` prints each failed guard's whole
+output under the command that produced it, when `--verbose` is given **or when `CI` is set**
+(GitHub Actions sets it, as does every other runner). The one-line tail stays the default,
+because the terminal case was not wrong.
+
+This is a **strengthening**, not a loosening: nothing newly passes, nothing is exempted, the
+same guards run. What changes is only how much of a failure's own output survives.
+
+*Verified in reverse*, with a non-English line planted in `conventions.md`:
+
+| Run | Output |
+|---|---|
+| default | `FAIL 1 guard(s) did not pass: language` + the hint, as before |
+| `--verbose` | the same, then the guard's full output: `conventions.md:292  计划` under `language -- python tools/check_language.py` |
+| `CI=true`, no flag | identical to `--verbose` — which is what GitHub now gets |
+| restored, `CI=true` | `OK  all 18 guards passed` — a green run is unchanged |
+
+The failing test's identity is still unknown at this point; the full suite is running
+locally, and this push makes the next CI run name it either way.
+
