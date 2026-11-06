@@ -58,19 +58,31 @@ UNDERLYING = register(Variant(
 
 
 def _trailing_initial(ctx: Mapping[str, Any]) -> dict:
-    """The high-water mark a trade starts at.
+    """The high-water mark a trade starts at: **the entry**, which is ``0.0``.
 
-    The **entry**, not zero. A trailing stop that began at zero would allow the premium
-    to halve before the mark caught up, which is a fixed stop for the first part of the
-    trade and a trailing one afterwards -- two rules wearing one name.
+    ``0.0`` is not a cut and not a default. ``premium_ratio`` is
+    ``exit_price / entry_price - 1`` measured against *this trade's* entry, so zero **is**
+    the entry in the only terms this form reads. Starting anywhere else makes the give-back
+    something other than a give-back from what was paid.
 
-    ``premium_ratio`` is 0.0 at entry by construction, so this is 0.0 in practice and is
-    written as a read rather than a constant: a form that hardcoded the entry would be
-    wrong the first time one is restored mid-trade from a snapshot.
+    **This used to read ``ctx["premium_ratio"]``, and that was not the entry.**
+    ``initial_state`` is called lazily, on the form's first call for a trade, and under the
+    one-day execution lag that call happens on the fill day with the **exit side** of the
+    quote -- below the entry by the round-trip cost, measured at -0.0198 on 33 of 33 trades
+    on the fixture. The mark therefore started below the entry and the stop was looser than
+    its own rule by that much, in the direction of fewer and later stop exits, with nothing
+    in the trade log showing which mark an exit was measured from. The docstring, the
+    variant's description and the test all said the entry; only the code said otherwise.
+
+    "Measure the give-back from the first price the trade could be sold at" is a defensible
+    rule and would be a **different form**, with its own name and its own version -- not
+    this one wearing this one's description.
+
+    ``ctx`` is unread, which is the point: nothing about the first day the form happens to
+    be called on may move where the mark starts. A mark restored mid-trade from a snapshot
+    comes through :meth:`Bound.set_state`, which does not call this.
     """
-    ratio = ctx.get("premium_ratio")
-    return {"high_water": float(ratio) if ratio is not None and math.isfinite(ratio)
-                           else 0.0}
+    return {"high_water": 0.0}
 
 
 def _trailing(ctx: Mapping[str, Any], *, fraction: float) -> bool:
@@ -166,12 +178,17 @@ RATCHET = register(Variant(
 
 
 TRAILING = register(Variant(
-    slot="stop_loss", name="trailing", version=1,
-    describes="out when the premium falls by a fraction **from its best**, not from "
-              "entry. Asks how much of what the trade had it may give back, where a "
-              "fixed stop asks how much of what was paid it may lose. On a trade that "
-              "doubled and halved, a 0.5 fixed stop does not fire and a 0.5 trailing "
-              "stop does",
+    # **Version 2, because the rule changed and not only the code.** Until version 1 was
+    # corrected the mark started at the fill day's exit-side price rather than at the
+    # entry, so the stop was looser by the round-trip cost. A result produced by either
+    # would otherwise carry the same reference and read as the same run.
+    slot="stop_loss", name="trailing", version=2,
+    describes="out when the premium falls by a fraction **from its best**, where the best "
+              "starts at the entry and never falls. Asks how much of what the trade had "
+              "it may give back, where a fixed stop asks how much of what was paid it may "
+              "lose. On a trade that doubled and halved, a 0.5 fixed stop does not fire "
+              "and a 0.5 trailing stop does; on one that only ever fell, the two fire "
+              "together",
     params=(Param("fraction", "float", "how much of the best premium may be given back",
                   lo=0.0, hi=2.0),),
     decide=_trailing,
