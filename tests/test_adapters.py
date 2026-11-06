@@ -293,6 +293,31 @@ class TestTheFileSourceIsUsableOnRealVolumes:
     The thresholds below are deliberately loose — ten times the measured figure. What is
     being guarded is the **order of magnitude**, because the failure was not "a bit slow",
     it was "unusable", and a tight bound would go red on a slower machine for no reason.
+
+    ## Why these two carry ``@pytest.mark.timing``
+
+    The paragraph above turned out to be right about the risk and wrong about the size of
+    it. On a GitHub two-core runner the construction measured **40.9s** and **21.1s** on
+    two runs of near-identical code, against a 20s bound — so the ten-times headroom is
+    not enough for hardware that is roughly twenty times slower than the machine the
+    figure was taken on. The branch's CI went red and green alternately, on the runner it
+    happened to land on rather than on anything in the diff.
+
+    **The bound is not loosened**, because it is the only thing that states what
+    "usable" meant, and raising it until CI is quiet would make it state nothing. Instead
+    the two tests are marked, and the marker decides where they are a signal:
+
+    - **locally they run exactly as before** — this is the machine the 1.9s and 101s
+      figures were measured on, so a regression here is a regression in the code
+    - **the blocking CI job deselects them** (``PYTEST_ADDOPTS: -m "not timing"``), since
+      a red light that reports the runner's load is a red light nobody reads
+    - **a non-blocking CI step runs them and prints the measured durations**, so the
+      numbers stay visible and a real tenfold regression is still obvious in the log
+
+    What is given up is stated plainly: a performance regression that only CI would catch
+    no longer fails the build. That is the right trade only because the figure is
+    machine-dependent and the guard is an order-of-magnitude one; it would be the wrong
+    trade for any assertion about a result.
     """
 
     @staticmethod
@@ -322,6 +347,7 @@ class TestTheFileSourceIsUsableOnRealVolumes:
         "best_offer": "ask", "spot_px": "underlying_price", "impl_vol_pct": "iv",
     }
 
+    @pytest.mark.timing
     def test_construction_is_seconds_and_not_minutes(self, market, chain, config,
                                                      tmp_path):
         import time
@@ -342,6 +368,7 @@ class TestTheFileSourceIsUsableOnRealVolumes:
         )
         assert len(source.snapshot(source._frame["asof"].iloc[0])) > 0
 
+    @pytest.mark.timing
     def test_a_contract_lookup_does_not_scan_the_table(self, market, chain, config,
                                                        tmp_path):
         """``series()`` is called once per open position per session, so a full scan
