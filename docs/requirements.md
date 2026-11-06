@@ -4,8 +4,8 @@
 > answer: where is the platform, what is still missing, and what do I believe exists that
 > does not.
 >
-> The architecture is **[docs/architecture.md](docs/architecture.md)**, a faithful
-> transcription of `Plan/backtest-system-architecture.pdf`, which remains the original.
+> The architecture is **[architecture.md](architecture.md)**, a faithful
+> transcription of `docs/originals/backtest-system-architecture.pdf`, which remains the original.
 > Sections are citable by number: 5.1 is `docs/architecture.md#section-5-1`. This file is the only
 > record of **what is built against it** — layer by layer, and criterion by criterion.
 > There is no second copy of the architecture here; where the two would disagree, the
@@ -188,7 +188,7 @@ happening.
 | 5.2 | A `TradeBook` beside the ledger: one record per `trade_id` with setup, entry, every action and its component, MFE and MAE in premium **and underlying** terms, P&L split main/hedge; shadow tracking after close | Mostly done. `accounting/tradebook.py` holds the record, every action with its component (1.35), and shadow tracking. MFE/MAE now in both terms (1.38). **No main/hedge split** — there are no hedge legs, which needs multi-leg. Dividends, interest, corporate actions and `sellable quantity under the settlement rule` are absent |
 | 5.3 | Daily P&L split into delta, gamma, vega, theta and residual | Done. `accounting/attribution.py`, with a residual-share threshold above which the split is declared untrustworthy rather than reported — the Taylor expansion has failed and the numbers do not describe the P&L they claim to |
 | 6.1 | Baselines, metrics in five categories, attribution, report, compare | Baselines done (delta-equivalent and random entry, each carrying whether it survives a synthetic chain). Of the metric categories: return, risk, risk-adjusted (including the Deflated Sharpe) and trade are built; **the options category is partial** — theta paid and vega P&L come from the attribution, IV at entry vs realised volatility over the holding period does not exist. `compare` exists for forms (1.40) and runs; **no visual report** — there is no HTML or notebook export, only the interface |
-| 6.2 | Pre-launch checklist | **built**. The document's section 6.2 lists eight criteria ([docs/architecture.md](docs/architecture.md), section 6.2), and `research/prelaunch.py` puts them together as a gate: each is `pass`, `fail` or `unknown`, **unknown is not a soft pass** (an unrun criterion says what to run and `ready` stays false), the thesis is an argument rather than a guess, and every threshold involved comes from `core/thresholds.py`. Reachable as `r.prelaunch(thesis=…, trials=n)` |
+| 6.2 | Pre-launch checklist | **built**. The document's section 6.2 lists eight criteria ([architecture.md](architecture.md), section 6.2), and `research/prelaunch.py` puts them together as a gate: each is `pass`, `fail` or `unknown`, **unknown is not a soft pass** (an unrun criterion says what to run and `ready` stays false), the thesis is an argument rather than a guess, and every threshold involved comes from `core/thresholds.py`. Reachable as `r.prelaunch(thesis=…, trials=n)` |
 | 6.3 | All seven components researched with the same tools; each comparison a pair of runs differing in one component, recorded in the tracker | The tools exist and are shared: ablation, counterfactual exits, baselines, MFE/MAE, variant comparison (1.40), the trial tracker. **Four of the seven slots have more than one form** — stop loss (4), take profit (2), headwind (2) and positioning (4), twelve registered variants in all — so "variant swap" is available for those four and not for setup, entry or hedge |
 | 6.4 | The research protocol: locked hold-out used once, trials counted and deflated, staged research on walk-forward folds, confidence intervals not point estimates, pooling across underlyings, counterfactual results are in-sample, metrics from daily book P&L | Mixed. Trials counted and deflated (`research/tracker.py`), intervals rather than point estimates (`validation/intervals.py`), walk-forward and purged k-fold folds (`validation/splits.py`), counterfactual results labelled in-sample in their own output, metrics from the daily equity curve, and the locked hold-out enforced by `research/holdout.py` — a run overlapping it raises unless `unlock="<why>"` is given and recorded (criterion 1.53). **No pooling across underlyings** — one underlying at a time |
 | 7.1 | REST API, job queue, result store, web UI, live adapter, auth | The local service has a handful of endpoints and is not the document's REST API; a run blocks its request. The result store exists (`app/store.py`, SQLite plus Parquet) and now exports a run as a runnable config (1.42). The web UI exists and generates its form from the parameter schemas, as the document asks. **No job queue, no live adapter, no auth** |
@@ -366,7 +366,7 @@ direction rather than a verdict.
 
 ## Goal one, continued: the criteria the architecture document adds
 
-> These come from [docs/architecture.md](docs/architecture.md) and were not in this list
+> These come from [architecture.md](architecture.md) and were not in this list
 > before. Most are structural: they are what makes the seven slots separately
 > researchable, which is the whole of use two. The layer tables above say where each one stands in
 > the code.

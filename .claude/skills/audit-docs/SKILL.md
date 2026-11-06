@@ -90,7 +90,7 @@ then go red for a reason nobody could explain.
 ## What is not rot, and must not be "fixed"
 
 - **A disagreement with `docs/architecture.md`** or the other two transcriptions. Those are
-  faithful transcriptions of the PDFs in `Plan/`, which are the originals. A disagreement is
+  faithful transcriptions of the PDFs in `docs/originals/`, which are the originals. A disagreement is
   either work not yet done — which belongs in `requirements.md` with its reason — or a
   deliberate deviation, which belongs in `conventions.md`, and three already are. An edit to
   a transcription would also be undone by the next `tools/pdf_to_md.py` run, silently.

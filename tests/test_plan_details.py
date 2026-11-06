@@ -130,7 +130,7 @@ class TestTheFiguresWereRead:
     this, which is the only way "we read the whole plan" stays true as the plan changes.
     """
 
-    PLAN = pathlib.Path("Plan/backtest-system-architecture.pdf")
+    PLAN = pathlib.Path("docs/originals/backtest-system-architecture.pdf")
 
     @kind("guard")
     def test_every_figure_in_the_pdf_is_in_the_inventory(self):

@@ -7,12 +7,12 @@ months). Two uses:
 2. **Validating it over the long run once settled** — optimisation, falsification,
    cross-checking
 
-> Where it stands and what is missing → **[requirements.md](requirements.md)**
+> Where it stands and what is missing → **[requirements.md](docs/requirements.md)**
 > (every criterion with its status)
 > The architecture → **[docs/architecture.md](docs/architecture.md)**
-> (searchable and quotable; `Plan/backtest-system-architecture.pdf` remains the original)
-> What is built against it, layer by layer → **[requirements.md](requirements.md)**
-> Which questions the platform is meant to answer → **[research-questions.md](research-questions.md)**
+> (searchable and quotable; `docs/originals/backtest-system-architecture.pdf` remains the original)
+> What is built against it, layer by layer → **[requirements.md](docs/requirements.md)**
+> Which questions the platform is meant to answer → **[research-questions.md](docs/research-questions.md)**
 
 ---
 
@@ -590,7 +590,7 @@ python -m tools.baseline update     # update the regression baseline (prints the
 | components | the definitions being self-consistent; a form field must be a `run()` parameter |
 | doc examples | the python blocks in this README actually run |
 
-The checking rules and the bar for a new guard are in [conventions.md](conventions.md).
+The checking rules and the bar for a new guard are in [conventions.md](docs/conventions.md).
 
 ## Layout
 

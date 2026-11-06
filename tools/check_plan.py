@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-REQUIREMENTS = ROOT / "requirements.md"
+REQUIREMENTS = ROOT / "docs" / "requirements.md"
 
 #: Every numbered section of the architecture document, with a short title.
 #:

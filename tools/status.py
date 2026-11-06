@@ -109,9 +109,9 @@ def _requirements() -> list[str]:
     "the statistics are honest" cannot be judged automatically. So this only counts
     them and says they are hand-written, rather than pretending they were computed.
     """
-    path = ROOT / "requirements.md"
+    path = ROOT / "docs" / "requirements.md"
     if not path.exists():
-        return ["  (requirements.md is absent)"]
+        return ["  (docs/requirements.md is absent)"]
     text = path.read_text(encoding="utf-8")
     rows = re.findall(r"^\| (\d+\.\d+) \| (.+?) \| (.+?) \|", text, re.M)
     counts = {"done": 0, "partial": 0, "missing": 0}

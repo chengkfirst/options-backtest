@@ -14,7 +14,7 @@ it.
 
 ## The four groups are the document's, not this file's
 
-``Plan/backtest-system-architecture.pdf``, "Research and Trade-off Register", divides every
+``docs/originals/backtest-system-architecture.pdf``, "Research and Trade-off Register", divides every
 choice in the system into four groups **and gives each a different rule**. That taxonomy is
 the one used here. An earlier version of this file invented its own, which was the same
 mistake in miniature: a classification nobody agreed to, presented as structure.

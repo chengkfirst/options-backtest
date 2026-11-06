@@ -1,6 +1,6 @@
 # `tests/` — what the guards rest on
 
-[conventions.md](../conventions.md) is the rulebook; this is what applies here in
+[conventions.md](../docs/conventions.md) is the rulebook; this is what applies here in
 particular. Read the rulebook first — this file does not repeat it.
 
 ## Three markers on every test

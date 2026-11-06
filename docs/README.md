@@ -5,7 +5,7 @@ by **what makes a document wrong**, because that decides who may change it and w
 
 | Directory | What is in it | What makes one wrong |
 |---|---|---|
-| [`architecture.md`](architecture.md) | the architecture, transcribed from the PDF in `Plan/` | nothing here — it is a transcription, and the PDF is the original. A disagreement with the code is the code's business, or a new decision |
+| [`architecture.md`](architecture.md) | the architecture, transcribed from the PDF in `docs/originals/` | nothing here — it is a transcription, and the PDF is the original. A disagreement with the code is the code's business, or a new decision |
 | [`plans/`](plans) | a piece of work with a beginning and an end, plus its progress file | it stops being followed. A plan nobody is working from is history, not a plan |
 | [`specs/`](specs) | one file per feature: goal, non-goals, acceptance criteria, the tests that prove them | the thing was built differently. Then the spec is amended, or it is not the spec |
 | [`decisions/`](decisions) | one file per decision: context, options, choice, why, consequences | **a decision never goes stale.** It records what was known at the time. Superseded, not edited |

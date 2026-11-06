@@ -158,7 +158,7 @@ def _status_problems() -> list[str]:
     for req in REQUIREMENTS:
         by_section.setdefault(req.section, []).append(req)
 
-    text = (ROOT / "requirements.md").read_text(encoding="utf-8").splitlines()
+    text = (ROOT / "docs" / "requirements.md").read_text(encoding="utf-8").splitlines()
     problems: list[str] = []
     for number, line in enumerate(text, start=1):
         # A status row: `| 0.1 | what the document asks | the status |`

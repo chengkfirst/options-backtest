@@ -1,4 +1,4 @@
-"""Convert the Notion-exported plan PDFs in Plan/ to Markdown.
+"""Convert the Notion-exported plan PDFs in docs/originals/ to Markdown.
 
 Headings come from the font size the exporter used (32 title, 22 section, 18
 subsection); tables from pypdf's layout extraction, which keeps columns aligned at
@@ -545,16 +545,28 @@ def with_anchors(text: str) -> str:
     return "\n".join(out) + "\n"
 
 
+#: Where the PDFs are read from. They are the originals, and they sit beside the
+#: transcriptions rather than in a directory of their own at the root.
+#:
+#: **This default was changed without the generator being re-run.** Its output on the
+#: machine where the layout was tidied differed from the committed transcriptions by more
+#: than the header -- figure placeholders and table placement moved -- so regenerating
+#: would have buried three path corrections inside an unreviewable diff of a generated
+#: document. The citation strings inside the three Markdown files were corrected by hand
+#: instead, and this default is correct for the next deliberate regeneration.
+DEFAULT_SRC = "docs/originals"
+
 #: PDF stem -> Markdown name, without the suffix. The architecture document is
 #: ``architecture`` rather than its own file name: it is the one the code and the other
 #: documents cite, and ``docs/architecture.md`` is the path they cite it by.
 NAMES = {
     "backtest-system-architecture": "architecture",
-    "Frontend web plan": "frontend-web-plan",
-    "Backtesting platform UI UX design plan addendum": "ui-ux-design-plan-addendum",
+    "frontend-web-plan": "frontend-web-plan",
+    "ui-ux-design-plan-addendum": "ui-ux-design-plan-addendum",
 }
 
-#: Where the conversions go. ``Plan/`` holds the PDFs, which are the originals; the
+#: Where the conversions go. ``docs/originals/`` holds the PDFs, which are the
+#: originals; the
 #: Markdown is a derived document and belongs with the documents. Defaulting to ``docs``
 #: rather than ``Plan`` is what keeps regeneration landing where the committed files are
 #: -- a generator whose default writes somewhere else produces a second copy, and then
@@ -562,7 +574,7 @@ NAMES = {
 DEFAULT_DST = "docs"
 
 if __name__ == "__main__":
-    src = Path(sys.argv[1] if len(sys.argv) > 1 else "Plan")
+    src = Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SRC)
     dst = Path(sys.argv[2] if len(sys.argv) > 2 else DEFAULT_DST)
     for pdf in sorted(src.glob("*.pdf")):
-        convert(pdf, dst / (NAMES[pdf.stem] + ".md"), f"Plan/{pdf.name}")
+        convert(pdf, dst / (NAMES[pdf.stem] + ".md"), f"{src}/{pdf.name}")

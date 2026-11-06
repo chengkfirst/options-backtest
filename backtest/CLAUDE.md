@@ -1,6 +1,6 @@
 # `backtest/` — the engine
 
-[conventions.md](../conventions.md) is the rulebook; this is what applies here in
+[conventions.md](../docs/conventions.md) is the rulebook; this is what applies here in
 particular. Read the rulebook first — this file does not repeat it.
 
 ## The six that catch the most, here
