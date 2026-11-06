@@ -429,3 +429,20 @@ one place the names are decided.
 
 Verified: `tools.check --fast` → `OK  all 18 guards passed`.
 
+### 3.3 Nested `CLAUDE.md` files — DONE
+
+Three new files, each under the 120-line cap and each opening by pointing at
+`conventions.md` as the rulebook rather than copying it:
+
+| File | Lines | What it carries |
+|---|---|---|
+| `backtest/CLAUDE.md` | 84 | the two price sets and two time conventions; T's close decides and T+1's close fills, with the three consequences that are paid for rather than bugs; `Maybe[T]` and no bare `None`/`NaN`/`0`; every threshold in `core/thresholds.py`; no hidden strategy default and where the last one hid; a slot never calling another slot; the run fingerprint; `engine/loop.py` and `EventDrivenEngine.run` as the hottest file and method, so changes are small and come with tests; the layer rule; may not edit `app/`; the synthetic chain is a fixture |
+| `app/CLAUDE.md` | 86 | declare in `CONTRACT` **before** reading, at the depth it is read, and the three silent failures that produced the rule; review in `states.html`, which shows the states you did not think of; no bundler, so a bad import raises only when the path runs; the five interface guards in a table; no silent failure on the page — no empty `catch`, absence never printed as a number; may not edit `backtest/`; the form is generated, not hand-coded |
+| `tests/CLAUDE.md` | 84 | the `req`, `kind` and `layer` markers, and **why `kind` separates `guard` from `unit`** — a unit failure is a bug, a guard failure is a bug detector going dark; what a `req` claim is and is not; everything passes offline through `conftest.py`; the synthetic chain is a fixture, so an option-side assertion on it asserts the fixture's arithmetic; **the baseline is never updated to make a change pass**, and `--fast` records itself as not passing for the same reason |
+
+Each says what its area may **not** do, which is the half that makes the split worth having:
+the engine may not edit `app/` and routes a contract change through a spec; the interface may
+not edit `backtest/` and routes a missing field the same way.
+
+Verified: `tools.check --fast` → `OK  all 18 guards passed`.
+
