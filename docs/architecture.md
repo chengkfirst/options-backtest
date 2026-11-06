@@ -189,10 +189,12 @@ strategy:
     fill_latency: tbd            # e.g. next quote 5 minutes later
 ```
 
+<a id="section-0"></a>
 ## Layer 0: Foundation
 
 The foundation defines the contract every layer shares: events, the component interface, time and data visibility, and correctness checks. Fix it first, and the layers above can be built and swapped independently.
 
+<a id="section-0-1"></a>
 ### 0.1 Events
 
 Events are the only way layers communicate. Every event is immutable and carries a timestamp ts and a sequence number seq for ordering within the same instant.
@@ -215,6 +217,7 @@ Events are the only way layers communicate. Every event is immutable and carries
 
 Processing order within one timestamp is fixed: corporate actions and contract adjustments → market data → signals → portfolio and risk → orders → fills → expiry settlement → accounting → end-of-day snapshot.
 
+<a id="section-0-2"></a>
 ### 0.2 Component protocol
 
 All replaceable logic implements one base class. A component reads context and affects the system only by returning events. It never mutates the account directly.
@@ -242,6 +245,7 @@ ctx provides clock (current time and calendars), data (the data view), portfolio
 
 Components register by name. The parameter schema drives both config validation and auto-generated web forms.
 
+<a id="section-0-3"></a>
 ### 0.3 Clock and data view
 
 - Clock: trading calendar (holidays, half days), session phases (opening cross, continuous trading, closing cross) in US Eastern time and the expiry calendar. It is the single source of now.
@@ -250,6 +254,7 @@ Components register by name. The parameter schema drives both config validation 
 
 - Timing rule: the relation between signal time and fill time is set once in config and strategies cannot override it. For options, use fixed intraday snapshots: the signal at snapshot t sees completed daily bars plus the snapshot itself, never that day's close, and the fill uses a later quote at t plus a decision latency (for example signal at 15:45 ET, fill at 15:50 ET). Filling on the same quote the signal was computed from is a subtle form of look-ahead.
 
+<a id="section-0-4"></a>
 ### 0.4 Error prevention
 
 | Risk | Mechanism | Where |
@@ -266,16 +271,19 @@ Components register by name. The parameter schema drives both config validation 
 
 Invariants checked at minimum: cash ≥ 0 for non-margin accounts; position quantity equals cumulative fills; equity equals cash plus position value at the current multiplier; daily P&L equals equity change minus external flows; no open position in an expired contract.
 
+<a id="section-0-5"></a>
 ### 0.5 Configuration and versioning
 
 Four things uniquely define a run: strategy config (components and parameters), code commit, data snapshot ID and run settings (period, initial capital, cost model). Their hash forms the `run_id`.
 
 Config is YAML, validated against a schema (for example pydantic) at load time. Unknown fields raise errors.
 
+<a id="section-0-6"></a>
 ### 0.6 Logging and traceability
 
 Every fill can be traced back through fill → order → target → signal → component, along with the data values used at the time (including the IV and Greeks at entry). Logs have three levels: decision log (on by default), full event stream (for debugging), and errors and warnings.
 
+<a id="section-1"></a>
 ## Layer 1: Data
 
 The data layer turns raw data into clean data that was truly available at time t. Most of a backtest's credibility is decided here, and for options most of the extra work is here too.
@@ -306,6 +314,7 @@ Four hard rules:
 3. An option price and the underlying price used together must come from the same timestamp window.
 4. Anything fitted (regime models, IV rank percentiles, surface smoothing, normalization statistics) is fitted only on data before t, using rolling or expanding windows. Regime models report filtered, not smoothed, probabilities, since smoothing uses future data.
 
+<a id="section-2"></a>
 ## Layer 2: Signals
 
 The signal layer answers what to buy or sell and how strongly. How much belongs to the portfolio layer, and whether it can fill belongs to execution.
@@ -327,6 +336,7 @@ The signal layer hosts most of the seven strategy components (see Strategy Model
 | RollRule | — | Replace legs with a later expiry or new strike | To be defined, optional |
 | SignalCombiner | — | Merge actions issued in the same period | Applies the lifecycle's conflict policy (to be defined) |
 
+<a id="section-2-1"></a>
 ### 2.1 Signal output
 
 | Field | Meaning |
@@ -340,6 +350,7 @@ The signal layer hosts most of the seven strategy components (see Strategy Model
 | reason | What triggered it, with the data values used |
 | component_id | The component and variant version that produced it |
 
+<a id="section-2-2"></a>
 ### 2.2 Two interface styles
 
 - Cross-sectional: score all candidates each period, as in multi-factor stock selection. Input is `cross_section`, output is a set of scored signals.
@@ -347,6 +358,7 @@ The signal layer hosts most of the seven strategy components (see Strategy Model
 
 Most long-options strategies are time-series rules on the underlying, followed by a contract selector that queries chain. Both styles implement the same Component protocol, and the engine treats them alike.
 
+<a id="section-2-3"></a>
 ### 2.3 Boundaries
 
 - Exit, Headwind and Hedge components may read positions (entry premium, holding days, current Greeks, MFE and MAE so far) but never place orders.
@@ -354,6 +366,7 @@ Most long-options strategies are time-series rules on the underlying, followed b
 
 The full config example, organized by the seven components, is in the Strategy Model section.
 
+<a id="section-3"></a>
 ## Layer 3: Portfolio and Risk
 
 This layer turns signals into target positions and makes sure the portfolio stays within risk limits before any order goes out. Order of work: rebalance check → sizing → optimization (optional) → constraints → portfolio risk → target portfolio.
@@ -371,6 +384,7 @@ For a long-options book, the maximum loss on each position is the premium paid. 
 | ScenarioRule | — | Stress the book | Revalue on a grid of spot moves, IV moves and time, with an explicit sticky-strike or sticky-delta assumption; block trades that breach a scenario loss limit |
 | PortfolioHedgeRule | 7 Hedge / Protection (book-wide) | Protect the whole book | To be defined; hedge legs tagged with their own trade_id |
 
+<a id="section-3-1"></a>
 ### 3.1 Risk actions
 
 When a rule triggers it emits a RiskEvent. Actions are limited to a few kinds so they can be audited:
@@ -380,10 +394,12 @@ When a rule triggers it emits a RiskEvent. Actions are limited to a few kinds so
 - Liquidate: close named contracts or the whole book.
 - Pause strategy: until a person or a rule resumes it.
 
+<a id="section-3-2"></a>
 ### 3.2 Output
 
 TargetPortfolioEvent holds the target quantity for each contract plus the reason for every adjustment (which signal, which constraint cut it). Execution turns the gap between target and current positions into orders.
 
+<a id="section-3-3"></a>
 ### 3.3 Who owns which risk
 
 | Type | Examples | Layer |
@@ -391,6 +407,7 @@ TargetPortfolioEvent holds the target quantity for each contract plus the reason
 | Per trade | 3 Take Profit, 4 Stop Loss, 5 Headwind on one position, 7 Hedge on one position, rolls | Layer 2 Signals |
 | Portfolio | 6 Positioning, total premium, Greeks budgets, 5 Headwind on the whole book, 7 Hedge on the whole book, drawdown breaker, scenario limits | Layer 3 Portfolio and Risk |
 
+<a id="section-4"></a>
 ## Layer 4: Execution Simulation
 
 Execution decides how much of the target can fill and at what price. Its defaults should lean pessimistic: most of the gap between backtest and live comes from here, and for long options the single biggest source is filling at mid instead of paying the spread.
@@ -406,6 +423,7 @@ Execution decides how much of the target can fill and at what price. Its default
 | ExerciseModel | What happens at expiry | Close before expiry (default) or exercise; OCC exercise by exception at expiry (contracts $0.01 or more in the money are auto-exercised unless instructed otherwise); early exercise of American calls before ex-dividend dates; cash or margin needed to take delivery of shares; physical settlement for equity and ETF options, cash settlement (AM or PM) for index options, all into an ExpiryEvent |
 | SimBroker | One interface for the outside | submit, cancel, on_snapshot; emits FillEvent and OrderStatusEvent; the live broker implements the same interface |
 
+<a id="section-4-1"></a>
 ### 4.1 Option fill price
 
 A buy fills at the mid price plus a multiple λ of the half-spread. λ = 1 means paying the full ask; test λ = 1.5 to see how much of the edge survives worse fills. Sells mirror this against the bid.
@@ -419,6 +437,7 @@ For large trades in the underlying, the square-root impact model is a common sta
 
 `\text{impact} = k \cdot \sigma \cdot \sqrt{\frac{Q}{\text{ADV}}}`
 
+<a id="section-4-2"></a>
 ### 4.2 Suggested defaults
 
 - Signal on snapshot t, fill on the quote at t plus the decision latency (for example 15:45 ET signal, 15:50 ET fill), always at bid or ask, never the close.
@@ -427,10 +446,12 @@ For large trades in the underlying, the square-root impact model is a common sta
 - Participation cap: start at 5% to 10% of daily contract volume, then run a sensitivity test.
 - Close positions before the final days to expiry unless exercise is part of the strategy. Log every rejected order and partial fill so research can report their share.
 
+<a id="section-5"></a>
 ## Layer 5: Engine and Accounting
 
 The engine drives events in the right order; accounting records every change in money exactly. Build them separately: scheduling can be complex, bookkeeping must be simple, testable and always correct.
 
+<a id="section-5-1"></a>
 ### 5.1 Engine
 
 | Component | Responsibility | Details |
@@ -443,6 +464,7 @@ The engine drives events in the right order; accounting records every change in 
 
 Event-driven is the primary mode for options. Contract selection, rolls and expiry are path-dependent, so vectorized results on option P&L are not trustworthy. Use the vectorized engine to screen views on the underlying, then validate in event-driven mode.
 
+<a id="section-5-2"></a>
 ### 5.2 Accounting
 
 | Component | Responsibility | Details |
@@ -461,6 +483,7 @@ A TradeBook sits beside the ledger: one record per trade_id with its setup, entr
 
 At every end of day the engine runs the invariant checks from 0.4. If any fails, the run stops and dumps its state.
 
+<a id="section-5-3"></a>
 ### 5.3 Greeks P&L attribution
 
 Each position's daily value change is split using the Greeks from the start of the day, where S is the underlying price, σ is implied volatility and t is time:
@@ -472,6 +495,7 @@ Each position's daily value change is split using the Greeks from the start of t
 
 A large residual ε points to bad data, a jump, or a model mismatch, and is worth investigating.
 
+<a id="section-6"></a>
 ## Layer 6: Research and Reports
 
 Research must answer whether a result is real, not just show a good-looking equity curve. Long-options strategies make this harder: they usually win rarely, earn most of their profit from a few large trades, and pay a persistent volatility risk premium.
@@ -487,6 +511,7 @@ Research must answer whether a result is real, not just show a good-looking equi
 | Report | Visual output | Equity vs benchmark, drawdowns, monthly returns heatmap, rolling Sharpe, net Greeks over time, premium at risk, IV at entry vs realized volatility, trade list; HTML or notebook export |
 | Compare | Side-by-side results | Runs across parameters or versions; day-by-day backtest vs live gap analysis |
 
+<a id="section-6-1"></a>
 ### 6.1 Metrics
 
 | Category | Metrics |
@@ -498,6 +523,7 @@ Research must answer whether a result is real, not just show a good-looking equi
 | Options | Theta paid, vega P&L, IV at entry vs realized volatility over the holding period, average spread paid as % of premium |
 | Capacity | Participation distribution; return decay as capital grows |
 
+<a id="section-6-2"></a>
 ### 6.2 Pre-launch checklist
 
 - Out-of-sample performance does not collapse
@@ -509,6 +535,7 @@ Research must answer whether a result is real, not just show a good-looking equi
 - Greeks attribution matches the thesis (a directional strategy should earn mainly from delta)
 - Total number of parameter sets tried is recorded
 
+<a id="section-6-3"></a>
 ### 6.3 Component research
 
 All seven strategy components are researched with the same tools, built once here and reused for every component:
@@ -526,6 +553,7 @@ Each comparison is a pair of runs differing in one component only, recorded in t
 
 Interaction tests cover dependencies between slots (see Component interactions): vary two slots jointly, for example Take Profit × Stop Loss or Headwind × Hedge, and compare the joint effect with the sum of the single-slot effects. A large gap means the two slots should be researched and tuned together.
 
+<a id="section-6-4"></a>
 ### 6.4 Research protocol
 
 Seven slots, each with variants and parameters, plus lifecycle settings, form a very large search space. With a low-frequency strategy that produces relatively few trades, the main risk is fitting history rather than finding an edge. These rules apply to all component research:
@@ -538,6 +566,7 @@ Seven slots, each with variants and parameters, plus lifecycle settings, form a 
 6. Counterfactual exit results are in-sample by construction; any change they suggest must be confirmed out-of-sample before adoption.
 7. Compute return and risk metrics from daily mark-to-market P&L of the whole book, not from per-trade returns, so overlapping trades are counted correctly.
 
+<a id="section-7"></a>
 ## Layer 7: Interfaces
 
 The interface layer exposes the system to people and programs, and guarantees that backtest and live trading run the same strategy code with only the data feed and broker swapped.
@@ -552,6 +581,7 @@ The interface layer exposes the system to people and programs, and guarantees th
 | LiveAdapter | Connect to real markets | Real-time underlying and option quote feeds, live broker implementing the SimBroker interface, paper trading, live vs simulated fill reconciliation, kill switch |
 | Auth | Team use | Users and roles, strategy visibility, audit log |
 
+<a id="section-7-1"></a>
 ### 7.1 REST API draft
 
 | Method | Path | Purpose |
@@ -567,6 +597,7 @@ The interface layer exposes the system to people and programs, and guarantees th
 | GET | /datasets | Available datasets and snapshot versions |
 | GET | /chains/{underlying}? date= | Option chain with quotes, IV and Greeks as of a date |
 
+<a id="section-7-2"></a>
 ### 7.2 Switching between backtest and live
 
 | Module | Backtest | Paper trading | Live |

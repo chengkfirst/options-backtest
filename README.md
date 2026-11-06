@@ -9,7 +9,8 @@ months). Two uses:
 
 > Where it stands and what is missing → **[requirements.md](requirements.md)**
 > (every criterion with its status)
-> The architecture → **`Plan/backtest-system-architecture.pdf`**
+> The architecture → **[docs/architecture.md](docs/architecture.md)**
+> (searchable and quotable; `Plan/backtest-system-architecture.pdf` remains the original)
 > What is built against it, layer by layer → **[requirements.md](requirements.md)**
 > Which questions the platform is meant to answer → **[research-questions.md](research-questions.md)**
 

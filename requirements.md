@@ -4,7 +4,9 @@
 > answer: where is the platform, what is still missing, and what do I believe exists that
 > does not.
 >
-> The architecture is **`Plan/backtest-system-architecture.pdf`**. This file is the only
+> The architecture is **[docs/architecture.md](docs/architecture.md)**, a faithful
+> transcription of `Plan/backtest-system-architecture.pdf`, which remains the original.
+> Sections are citable by number: 5.1 is `docs/architecture.md#section-5-1`. This file is the only
 > record of **what is built against it** — layer by layer, and criterion by criterion.
 > There is no second copy of the architecture here; where the two would disagree, the
 > document is right and this file is the gap.
@@ -364,7 +366,7 @@ direction rather than a verdict.
 
 ## Goal one, continued: the criteria the architecture document adds
 
-> These come from `Plan/backtest-system-architecture.pdf` and were not in this list
+> These come from [docs/architecture.md](docs/architecture.md) and were not in this list
 > before. Most are structural: they are what makes the seven slots separately
 > researchable, which is the whole of use two. The layer tables above say where each one stands in
 > the code.

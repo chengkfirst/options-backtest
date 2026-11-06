@@ -1,6 +1,7 @@
 # Working conventions
 
-> This file is independent of `Plan/backtest-system-architecture.pdf` (the architecture)
+> This file is independent of [docs/architecture.md](docs/architecture.md) (the architecture,
+> transcribed from the PDF in `Plan/`)
 > and [requirements.md](requirements.md) (what is built against it). It covers one thing
 > only: **how to make sure what gets built is right, and does not break quietly.**
 

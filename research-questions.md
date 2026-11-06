@@ -279,7 +279,7 @@ hard blocker at present.
 
 ## 8. The four groups of choice, and which may be optimised
 
-> From `Plan/backtest-system-architecture.pdf`, "Research and Trade-off Register". The
+> From [docs/architecture.md](docs/architecture.md), "Research and Trade-off Register". The
 > full register is there; what matters here is the **discipline**, because it decides
 > which of the questions above may be answered by searching for the best value.
 

@@ -500,18 +500,69 @@ def convert(pdf: Path, out_md: Path, source: str) -> None:
     for lig, plain in LIGATURES.items():
         text = text.replace(lig, plain)
     text = re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
+    text = with_anchors(text)
     out_md.write_text(text, encoding="utf-8")
     print(f"{pdf.name}\n   -> {out_md.name}  ({len(text)} chars, wrap at {wrap_at})")
 
 
+# ------------------------------------------------------------------------- anchors
+
+#: A heading that carries a section designator, which is how the rest of the project
+#: refers to this document: ``tools/check_plan.py`` holds the list of sections as
+#: ``("0.1", "Events")``, ``("5.1", "Engine")``, ``("1", "Data")``, and criteria in
+#: ``requirements.md`` are numbered to match. Matches ``## Layer 5: ...`` and
+#: ``### 5.1 ...``; everything else is left alone.
+SECTION_HEADING = re.compile(r"^(#{1,6}) (?:Layer (\d+)\b|(\d+(?:\.\d+)+)(?=[\s.]))")
+
+
+def with_anchors(text: str) -> str:
+    """Put a stable anchor before every heading that carries a section number.
+
+    ## Why the generated anchor and not the heading's own
+
+    A Markdown renderer derives an anchor from the heading text, so section 5.1 becomes
+    ``#51-engine``. That works until someone cites it, because the citation then carries
+    the title as well as the number -- and a citation that has to spell the title is one
+    that breaks when the title is reworded, which is the opposite of stable. It also
+    cannot be written by anyone who knows only the number, which is the case for every
+    citation from code and from ``requirements.md``.
+
+    ``<a id="section-5-1"></a>`` is derivable from the number alone: section ``5.1`` is
+    ``docs/architecture.md#section-5-1``, ``Layer 1`` is ``#section-1``. The numbers come
+    from the PDF and the PDF is frozen, so the anchors do not move.
+
+    Emitted here, in the generator, rather than added to the Markdown -- the file says at
+    the top not to edit it by hand, and hand-added anchors would be gone at the next
+    regeneration with nothing raising.
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        m = SECTION_HEADING.match(line)
+        if m:
+            number = m.group(2) or m.group(3)
+            out.append(f'<a id="section-{number.replace(".", "-")}"></a>')
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+#: PDF stem -> Markdown name, without the suffix. The architecture document is
+#: ``architecture`` rather than its own file name: it is the one the code and the other
+#: documents cite, and ``docs/architecture.md`` is the path they cite it by.
 NAMES = {
-    "backtest-system-architecture": "backtest-system-architecture",
+    "backtest-system-architecture": "architecture",
     "Frontend web plan": "frontend-web-plan",
     "Backtesting platform UI UX design plan addendum": "ui-ux-design-plan-addendum",
 }
 
+#: Where the conversions go. ``Plan/`` holds the PDFs, which are the originals; the
+#: Markdown is a derived document and belongs with the documents. Defaulting to ``docs``
+#: rather than ``Plan`` is what keeps regeneration landing where the committed files are
+#: -- a generator whose default writes somewhere else produces a second copy, and then
+#: two accounts of the plan drift apart, which is what the header of each file warns of.
+DEFAULT_DST = "docs"
+
 if __name__ == "__main__":
     src = Path(sys.argv[1] if len(sys.argv) > 1 else "Plan")
-    dst = Path(sys.argv[2] if len(sys.argv) > 2 else "Plan")
+    dst = Path(sys.argv[2] if len(sys.argv) > 2 else DEFAULT_DST)
     for pdf in sorted(src.glob("*.pdf")):
         convert(pdf, dst / (NAMES[pdf.stem] + ".md"), f"Plan/{pdf.name}")
