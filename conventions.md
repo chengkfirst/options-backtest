@@ -42,7 +42,7 @@ python -m tools.check --fast    # for a small change, skipping the slow ones
 | **shipped** | files that exist locally and not in git | fast |
 | **language** | anything in the project that is not English | fast |
 | **components** | the seven components' definitions being self-consistent; **a field must be a real `run()` parameter** | fast |
-| **wiring** | the interface declares `CONTRACT` in `bench.js`, checked against a real response — **at the depth it is read**, so a renamed nested field fails too | fast |
+| **wiring** | the interface declares `CONTRACT` in `app/static/js/contract.js`, checked against a real response — **at the depth it is read**, so a renamed nested field fails too | fast |
 | **contrast** | a colour pair too close to read, in either theme. Verified in reverse by the palette it was written for: the design plan's proposed values failed its own 4.5:1 rule in **twenty text pairs** across the two themes, and one slot colour was invisible on the dark ground | fast |
 | **modules** | an interface module importing a name nothing exports, or using one it did not import. There is no bundler, so that raises only when the code path runs | fast |
 | **evidence** | the standing-assumptions sheet going stale or going quiet: a row that writes its value instead of reading the record, one that cannot report a good state, or a permanent limitation of the platform left undeclared. Checking is the backend's; this holds the sheet that says what the machinery assumed | fast |
@@ -69,7 +69,7 @@ method's old name after it was renamed.
 How it works:
 
 1. What the interface needs from the backend is written in `CONTRACT` in
-   `app/static/bench.js`
+   `app/static/js/contract.js`
 2. **The interface checks it at runtime** — a missing field is reported at once, and
    `undefined` never seeps into rendering
 3. **`check_wiring` checks the same declaration against a real response** before committing
@@ -196,7 +196,7 @@ Already done:
 
 | The fact | Where it is defined | What is generated from it |
 |---|---|---|
-| What the seven components are and what they ask for | `backtest/components.py` | the interface's form, the gap list, `tools/status.py` |
+| What the seven components are and what they ask for | `COMPONENTS` in `backtest/core/slots.py` | the interface's form, the gap list, `tools/status.py` |
 | The dependency layers | `LAYERS` in `tools/check_deps.py` | the check itself |
 | Each signal's meaning and unit | `SIGNAL_META` in `signals/registry.py` | the interface reference, `describe_signals()` |
 | Which columns wiring in data needs | `SCHEMA` in `data/adapters.py` | the health check, the documentation table |

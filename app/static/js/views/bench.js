@@ -217,8 +217,8 @@ function insertSignal(name){
 }
 
 /* ── the seven components' forms, generated from the backend definition ───────
-   What a component is and what it asks for is defined once, in
-   backtest/components.py. The interface draws from it rather than hand-coding — two
+   What a component is and what it asks for is defined once, as COMPONENTS in
+   backtest/core/slots.py. The interface draws from it rather than hand-coding — two
    definitions always drift. */
 const STATUS_MARK = { done: "", partial: "partial", missing: "not built" };
 

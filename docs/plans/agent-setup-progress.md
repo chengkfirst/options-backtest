@@ -122,3 +122,51 @@ whole block.
 So the inner-line marker no longer buys an exemption, and the guard catches the import that
 hid behind it.
 
+### 1.3 Stale references — DONE
+
+Swept the whole repository, not only the listed places: every `` `path/to/file.ext` `` in
+every `.md`, and every such path in `.py`/`.js` comments, tested against the filesystem.
+**Exactly two paths in the project do not exist**: `app/static/bench.js` and
+`backtest/components.py`. Both are the ones the plan named; there was no third.
+
+| Where | Was | Is |
+|---|---|---|
+| `conventions.md:45` (guard table) | `CONTRACT` in `bench.js` | `CONTRACT` in `app/static/js/contract.js` |
+| `conventions.md:72` (the front/back rule) | `app/static/bench.js` | `app/static/js/contract.js` |
+| `conventions.md:199` (defined once) | `backtest/components.py` | `COMPONENTS` in `backtest/core/slots.py` |
+| `tools/status.py:17` (docstring) | `backtest/components.py` | `COMPONENTS` in `backtest/core/slots.py` |
+| `app/static/js/views/bench.js:221` (comment) | `backtest/components.py` | `backtest/core/slots.py`, as `COMPONENTS` |
+
+**Not changed:** `tests/test_components.py:176` also names `app/static/bench.js`, and
+correctly — it is the comment recording the move the test was repaired for. A history that
+names the old path is not a stale reference.
+
+Where the components really are, read rather than guessed: `COMPONENTS` is a
+`tuple[Component, ...]` at `backtest/core/slots.py:123`, and that is what the interface's
+form, the gap list and `tools/status.py` are generated from. `backtest/core/component.py` is
+a different thing — the swappable-form protocol (`register`, `decide`, name and version into
+the fingerprint) — so citing it here would have been a second wrong pointer.
+
+**The `requirements.md` resume contradiction.** Read `engine/runner.py`, `engine/loop.py`
+and `api/sdk.py` before deciding which side was wrong. `Checkpoint` is a frozen dataclass at
+`engine/runner.py:52`; `until=` and `resume_from=` are parameters of
+`EventDrivenEngine.run` at `engine/loop.py:361`, which takes a checkpoint and puts one on
+the result; `api/sdk.py:596` passes both through from `run()`. So **resume is built**, and:
+
+- The Layer 5 table row (line 119) said "No resume from a state snapshot" — flatly wrong,
+  and replaced with what is built, where, and what is still absent (no scheduler; the batch
+  runner is sequential).
+- Criterion 5.1 (line 185) was right that resume is built but pointed only at
+  `engine/runner.py`, which holds the `Checkpoint` and not the resuming. It now names both
+  halves, so a reader looking for `resume_from=` finds it.
+
+**The README `research/` note.** The ambiguity was real: the layout block above the note
+lists the packages inside `backtest/`, `research/` among them, and the note then said
+"`research/` ... is not version controlled". Replaced with a two-row table naming
+`backtest/research/` (code, version controlled, guarded) against `/research/` at the root
+(the local record, excluded), and the `.gitignore` leading slash that separates them —
+which is the thing that once excluded the whole code package while `git status` stayed clean.
+
+Verified: `tools.check --fast` → `OK  all 18 guards passed`. The `doc claims` guard, which
+reads documents against code, is among them.
+

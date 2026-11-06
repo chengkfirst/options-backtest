@@ -680,6 +680,20 @@ research/   baselines.py   is it the signal, the structure, or the drift
             anomaly.py     eight rules that stay silent when nothing fires
 ```
 
-`research/` is your local research record (run history, trade logs, notes) and is **not
-version controlled** — it is your asset rather than code, and a SQLite binary cannot be
-merged. To back it up, copy that directory on its own.
+Those are the packages **inside `backtest/`**, which is the one place the layout is
+ambiguous and has to be said rather than inferred: there are two directories named
+`research/` and they are opposites.
+
+| | What it is | Version controlled |
+|---|---|---|
+| `backtest/research/` | code — the research tools listed above | **yes**, and a guard holds it so |
+| `/research/`, at the repository root | your local research record: run history, trade logs, notes | **no** |
+
+`/research/` at the root is your asset rather than code, and a SQLite binary cannot be
+merged, so it is excluded. To back it up, copy that directory on its own.
+
+The leading slash in `.gitignore` is what separates the two, and it is not cosmetic:
+without it, `research/` matches a directory of that name **at any depth** and excludes
+`backtest/research/` as well. That happened — six research modules went unpublished while
+their tests were pushed, so a fresh clone crashed and `git status` was clean the whole
+time. `tools/check_shipped.py` exists for it.
