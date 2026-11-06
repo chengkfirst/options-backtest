@@ -242,3 +242,41 @@ The gap is worth naming: **every case in the original list was a single line**, 
 them could have caught it. The thing that caught it was running the guard on real work
 rather than on its own test cases.
 
+### 2.2 A git pre-commit hook — DONE
+
+File: `tools/githooks/pre-commit` (new, executable, POSIX `sh`).
+
+Runs `tools.check --fast` and exits 1 on any failure. `--fast` rather than the full run
+because the full run costs ~14 minutes here, 803s of it the test suite, and a hook that
+costs fourteen minutes is a hook people disable — the full run is still required before
+pushing, and 2.3's CI workflow does it on every push.
+
+Interpreter: `BACKTEST_PYTHON` if set and executable, else `/opt/anaconda3/bin/python`,
+else `python3`; if none, it exits 1 naming what to set rather than failing obscurely. The
+`.venv` in this repository has no pandas, so the interpreter on `PATH` is not a safe
+default.
+
+Two limits stated in the script rather than left to be discovered:
+
+- It checks the **working tree**, because that is what `tools.check` reads. A commit whose
+  staged subset is broken while the tree is fine still passes. Nothing automatic answers
+  "is the staged subset coherent" — that is what reading `git diff --cached --name-only`
+  is for, and it is why the hook in 2.1 exists at the other end.
+- `git commit --no-verify` skips it, as with any pre-commit hook. Left as a feature: the
+  alternative is a hook people turn off permanently the first time it is wrong. A skipped
+  guard is still red, and CI says so on the push.
+
+*Verified by running the script directly* — `core.hooksPath` is **not** set, as the plan
+requires; the human enables it:
+
+| Run | Result |
+|---|---|
+| clean tree | `OK  all 18 guards passed  (--fast …)`, exit 0 |
+| planted failure: a non-English line appended to `conventions.md` | `FAIL  1 guard(s) did not pass: language`, then the refusal text, exit 1 |
+| failure removed | `git diff` empty; clean-tree run passes again |
+| `BACKTEST_PYTHON=/opt/anaconda3/bin/python` | that interpreter is named on the first line |
+| `BACKTEST_PYTHON=/no/such/python` | falls through to the project's Python rather than crashing |
+| `git config --get core.hooksPath` | unset — **not enabled by this session** |
+
+`CLAUDE.md` gets the one-line enablement instruction in 2.4.
+

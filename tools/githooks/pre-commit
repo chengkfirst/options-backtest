@@ -1,0 +1,84 @@
+#!/bin/sh
+# Refuse a commit the guards do not pass.
+#
+# ## Why this exists
+#
+# "Any failure means no commit" is the project's rule and it was held by whoever
+# remembered to run the guards first. Three of the guards in tools/check.py were written
+# and then never registered there, so a convention this project holds to was checked only
+# by whoever thought of it -- which is the state conventions.md calls a wish rather than a
+# convention. The same is true one level up: a rule about what must happen before a commit
+# belongs in the thing that makes the commit.
+#
+# ## What it runs, and what it does not
+#
+# `tools.check --fast`, not the full run. The full run takes about fourteen minutes here,
+# 800 seconds of it the test suite, and a hook that costs fourteen minutes is a hook people
+# disable. --fast skips the test suite, the doc examples and nothing else; the full run is
+# still required before pushing, and the CI workflow does it on every push.
+#
+# It checks the **working tree**, not the staged set, because that is what tools.check
+# reads. So it will pass a commit whose staged subset is broken while the tree as a whole
+# is fine. Said here rather than left to be discovered: this hook answers "is the tree
+# green", and nothing automatic in this repository answers "is the staged subset coherent"
+# -- that is what reading `git diff --cached --name-only` is for.
+#
+# ## Enabling it
+#
+# Git does not run hooks from a tracked directory on its own. Once, per clone:
+#
+#     git config core.hooksPath tools/githooks
+#
+# That is deliberately a person's decision rather than something a script does on their
+# behalf: it changes where git looks for every hook in the repository.
+#
+# ## Skipping it
+#
+# `git commit --no-verify` skips it, as with any pre-commit hook. That is a feature, not a
+# hole -- the alternative is a hook people turn off permanently the first time it is wrong.
+# A skipped guard is still a red guard, and CI will say so on the push.
+
+set -eu
+
+# A Python with the dependencies. The .venv in this repository has no pandas, so the
+# interpreter on PATH is not a safe default.
+#   1. BACKTEST_PYTHON, for a machine where neither of the next two is right
+#   2. the project's own, which CLAUDE.md names
+#   3. python3, so a fresh clone on another machine gets a useful error from the guards
+#      rather than "no such file" from the hook
+if [ -n "${BACKTEST_PYTHON:-}" ] && [ -x "${BACKTEST_PYTHON}" ]; then
+    PY="${BACKTEST_PYTHON}"
+elif [ -x /opt/anaconda3/bin/python ]; then
+    PY=/opt/anaconda3/bin/python
+elif command -v python3 >/dev/null 2>&1; then
+    PY="$(command -v python3)"
+else
+    echo "pre-commit: found no Python to run the guards with." >&2
+    echo "  Set BACKTEST_PYTHON to an interpreter that has pandas, or install the" >&2
+    echo "  dependencies: pip install -e \".[dev]\"" >&2
+    exit 1
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+echo "pre-commit: ${PY} -m tools.check --fast"
+if "${PY}" -m tools.check --fast; then
+    exit 0
+fi
+
+cat >&2 <<'MESSAGE'
+
+pre-commit: refused. A guard did not pass, and any failure means no commit.
+
+Run the one that failed on its own for its full output, for example:
+
+    /opt/anaconda3/bin/python tools/check_language.py
+
+If a guard really could be ignored, the guard itself should change -- see
+conventions.md, "The fixed check". Weakening it to get a commit through is the one
+thing this project refuses.
+
+To commit anyway: git commit --no-verify. The guard stays red, and CI will say so.
+MESSAGE
+exit 1
