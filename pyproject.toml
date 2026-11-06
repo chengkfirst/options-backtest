@@ -17,6 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==7.4.0"]
+# Only tools/pdf_to_md.py needs this, and only when a plan PDF has changed. Pinned
+# like the rest: the conversion reads font sizes and glyph positions, so a different
+# extractor version could silently read the same PDF differently.
+docs = ["pypdf==6.16.2"]
 
 [build-system]
 requires = ["setuptools>=68"]
