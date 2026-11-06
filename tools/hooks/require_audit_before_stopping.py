@@ -140,7 +140,17 @@ def main() -> int:
     if payload.get("stop_hook_active"):
         return 0
 
-    raw_root = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or "."
+    # **No fallback to the working directory.** It used to end `or "."`, which meant
+    # that on input it could not read -- an empty payload, a missing `cwd` -- the hook
+    # judged *the repository it happened to be standing in*. So the case the tests call
+    # "stands aside on unreadable input" blocked whenever `backtest/` was dirty, which
+    # is every engine session mid-work; the test passed only because the tree was clean
+    # when it ran. Green by accident of state, which is the shape this project refuses.
+    #
+    # A hook that cannot tell what it is being asked about says nothing.
+    raw_root = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR")
+    if not raw_root:
+        return 0
     try:
         root = Path(raw_root).resolve()
     except (TypeError, ValueError, OSError):

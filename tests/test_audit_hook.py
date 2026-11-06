@@ -133,14 +133,33 @@ class TestTheLoopGuard:
 
 
 class TestItStandsAsideRatherThanTrapping:
+    """Every case here runs with `backtest/` **deliberately dirty**.
+
+    That is not decoration. These cases used to run from the repository root with
+    whatever state the tree happened to be in, and the hook used to fall back to the
+    current directory when it could not read a `cwd` -- so on unreadable input it
+    judged the repository it was standing in. With a clean tree it stood aside and the
+    test passed; with a dirty one it blocked, which is every engine session mid-work.
+    The test was green by accident of state, and `engine-dev` found it by having a
+    dirty tree.
+
+    Running them against a repository that *would* block if the hook looked is what
+    makes "stands aside" mean something.
+    """
+
     @pytest.mark.parametrize("raw", [
-        "", "not json", "[]", "null",
+        "", "   ", "not json", "[]", "null",
         '{"hook_event_name": "Stop"}',                      # no cwd
+        '{"hook_event_name": "Stop", "cwd": ""}',
         '{"hook_event_name": "Stop", "cwd": "/no/such/dir"}',
         '{"hook_event_name": "Stop", "cwd": 7}',
     ])
-    def test_unreadable_input_does_not_block(self, raw):
-        assert _run(raw).returncode == 0, f"blocked on {raw!r}"
+    def test_unreadable_input_does_not_block(self, raw, repo):
+        (repo / "backtest/core/maybe.py").write_text("dirty = 1\n", encoding="utf-8")
+        assert _stop(repo).returncode == 2, (
+            "precondition: this repository would block on a readable payload, so "
+            "standing aside below is the hook's choice and not the tree's state")
+        assert _run(raw, cwd=repo).returncode == 0, f"blocked on {raw!r}"
 
     def test_a_directory_that_is_not_a_git_repository_does_not_block(self, tmp_path):
         (tmp_path / "backtest").mkdir()
