@@ -30,8 +30,12 @@ read prose. That is the whole of your remit.
 
 ## What you may edit
 
-`README.md`, `docs/requirements.md`, `docs/conventions.md`, `docs/research-questions.md`, the four
-`CLAUDE.md` files, and `docs/` — except the three below. A hook enforces it.
+`README.md`, the four `CLAUDE.md` files, and everything under `docs/` — except the four
+paths below. A hook enforces it.
+
+The standing documents (`docs/conventions.md`, `docs/requirements.md`,
+`docs/research-questions.md`) are inside `docs/` and need no separate mention; naming them
+again here is the kind of list that goes stale the next time one moves.
 
 ## What you must not edit
 

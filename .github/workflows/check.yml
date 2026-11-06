@@ -43,14 +43,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      # `docs` as well as `dev`, and the reason is a guard that was dark. pypdf is
-      # declared in the `docs` extra, and tests/test_plan_details.py opens the
-      # architecture PDF behind `pytest.importorskip("pypdf")` -- so the check that
-      # every figure in the plan is in the inventory had been **skipping in every CI
-      # run since this workflow was added**, printing OK the whole time. Installing the
-      # extra is what makes that guard real here.
+      # `dev` now carries pypdf, which the figure guard needs. It used to sit in a
+      # `docs` extra nobody installed, so tests/test_plan_details.py skipped behind
+      # `importorskip` in every CI run since this workflow was added -- printing OK the
+      # whole time. Moving it rather than installing a second extra here is what makes
+      # that guard real on a fresh clone too, not only on this runner.
       - name: Install the project and its development dependencies
-        run: pip install -e ".[dev,docs]"
+        run: pip install -e ".[dev]"
 
       # No --fast. This is the run that would have caught both failures above.
       #

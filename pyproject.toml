@@ -20,11 +20,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest==7.4.0"]
-# Only tools/pdf_to_md.py needs this, and only when a plan PDF has changed. Pinned
-# like the rest: the conversion reads font sizes and glyph positions, so a different
-# extractor version could silently read the same PDF differently.
-docs = ["pypdf==6.16.2"]
+# pypdf is here rather than in an extra of its own, and the reason is a guard that was
+# dark. tests/test_plan_details.py reads every figure out of the architecture PDF behind
+# `pytest.importorskip("pypdf")`, so wherever pypdf was absent that check skipped -- and a
+# skip prints no differently from a pass in a summary. It was in a `docs` extra nobody
+# installs, so the guard was quiet in CI and quiet on any fresh clone.
+#
+# Pinned like the rest: the conversion reads font sizes and glyph positions, so a
+# different extractor version could read the same PDF differently.
+dev = ["pytest==7.4.0", "pypdf==6.16.2"]
 
 [build-system]
 requires = ["setuptools>=68"]

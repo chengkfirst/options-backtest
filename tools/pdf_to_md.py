@@ -23,6 +23,7 @@ Two things the PDF does not carry in its text and this therefore reconstructs:
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from collections import Counter
@@ -578,4 +579,10 @@ if __name__ == "__main__":
     src = Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SRC)
     dst = Path(sys.argv[2] if len(sys.argv) > 2 else DEFAULT_DST)
     for pdf in sorted(src.glob("*.pdf")):
-        convert(pdf, dst / (NAMES[pdf.stem] + ".md"), f"{src}/{pdf.name}")
+        # The citation stamped into the generated header. Normalised rather than
+        # taken from argv as given: `python tools/pdf_to_md.py $PWD/docs/originals`
+        # would otherwise write an absolute machine path into three documents, and
+        # the next reader would see three headers change and read it as the
+        # documents having changed.
+        citation = Path(os.path.relpath(src / pdf.name, Path.cwd())).as_posix()
+        convert(pdf, dst / (NAMES[pdf.stem] + ".md"), citation)

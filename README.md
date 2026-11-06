@@ -7,12 +7,12 @@ months). Two uses:
 2. **Validating it over the long run once settled** — optimisation, falsification,
    cross-checking
 
-> Where it stands and what is missing → **[requirements.md](docs/requirements.md)**
+> Where it stands and what is missing → **[docs/requirements.md](docs/requirements.md)**
 > (every criterion with its status)
 > The architecture → **[docs/architecture.md](docs/architecture.md)**
 > (searchable and quotable; `docs/originals/backtest-system-architecture.pdf` remains the original)
-> What is built against it, layer by layer → **[requirements.md](docs/requirements.md)**
-> Which questions the platform is meant to answer → **[research-questions.md](docs/research-questions.md)**
+> What is built against it, layer by layer → **[docs/requirements.md](docs/requirements.md)**
+> Which questions the platform is meant to answer → **[docs/research-questions.md](docs/research-questions.md)**
 
 ---
 
@@ -590,13 +590,13 @@ python -m tools.baseline update     # update the regression baseline (prints the
 | components | the definitions being self-consistent; a form field must be a `run()` parameter |
 | doc examples | the python blocks in this README actually run |
 
-The checking rules and the bar for a new guard are in [conventions.md](docs/conventions.md).
+The checking rules and the bar for a new guard are in [docs/conventions.md](docs/conventions.md).
 
 ## Layout
 
 The tree follows the architecture document's eight layers, and `tools/check_deps.py` fails
 the build on a dependency that points upward. Square brackets mark a directory the
-document specifies that **does not exist here yet**; `requirements.md` says why for each
+document specifies that **does not exist here yet**; `docs/requirements.md` says why for each
 one.
 
 ```
