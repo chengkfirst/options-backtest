@@ -216,3 +216,29 @@ which reads as a broken project rather than an unsupported interpreter.
 Verified: `tomllib` parses the file and reports `>=3.11,<3.13` with the two pins unchanged;
 `tools.check --fast` → `OK  all 18 guards passed`.
 
+**A false positive, found by the hook refusing its own first real use.** Worth recording in
+full, because it is the failure the hook's own docstring warns about.
+
+The command was an explicit, correct add of the three new files, chained into
+`git commit -F -` with a here-document — and the message quoted `` `git add -A` `` as the
+thing it forbids. The hook split the whole string on `&&`, `;` and newlines, found the
+sentence in the message body, read it as a command, and refused.
+
+A here-document body is **data**: it is written to a file or piped to a program, and no
+part of it is executed. This repository's documents quote `git add -A` on nearly every page
+about committing, and so does every commit message explaining why a commit is narrow — so
+a hook that reads those bodies as commands refuses exactly the commits that respect the
+rule it holds. That is how a guard gets switched off.
+
+Fixed in `without_heredocs()`: bodies are dropped before anything is read as a command,
+tracking `<<EOF`, `<<-EOF`, `<<'EOF'` and `<<"EOF"`, several on one line, closing in order.
+Nine cases added, in two directions — six multi-line commands whose bodies quote the
+forbidden forms must pass, and three where a **closed** body is followed by a real broad
+add must still be refused, so a here-document cannot become the way to hide one.
+
+`pytest tests/test_git_add_hook.py -q` → `69 passed`.
+
+The gap is worth naming: **every case in the original list was a single line**, so none of
+them could have caught it. The thing that caught it was running the guard on real work
+rather than on its own test cases.
+
