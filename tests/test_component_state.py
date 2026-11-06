@@ -196,9 +196,10 @@ class TestTheSnapshot:
 @kind("guard")
 class TestWhatTheRegistryRefuses:
     def test_a_stateful_form_with_no_initial_state_is_refused(self):
-        """The state a form starts a trade with is part of the form — a trailing stop
-        starts at the entry price, not at zero — so a platform-chosen default would be
-        the platform deciding a research parameter."""
+        """The state a form starts a trade with is part of the form — a trailing
+        stop's high-water mark starts at the trade's entry, and not at whatever price
+        the form happens to be shown first — so a platform-chosen default would be the
+        platform deciding a research parameter."""
         with pytest.raises(StartupError) as caught:
             register(Variant(slot="stop_loss", name="_stateless_claim", version=1,
                              describes="x", params=(), decide=lambda ctx: False,
@@ -414,6 +415,12 @@ class TestStateDoesNotCrossRuns:
     #: run to find under an id it is about to reuse. Every trade here closes through the
     #: exit intent, so `forget` covers all of them -- what this configuration isolates is
     #: the other half: the leftover of a trade the range never closed.
+    #:
+    #: **It is the configuration the fix was measured on**, and on the suite's bars it
+    #: leaves exactly one mark, 0.817 on trade 136, which is above the 0.5 give-back and
+    #: so fires the moment a second run reuses that id: 135 / 136 / 135 trades across
+    #: three runs of one object before the fix. That the mark clears `fraction` is what
+    #: makes the test below able to fail, so the test asserts it rather than trusting it.
     RUN = dict(
         symbol="QQQ", start="2022-01-01", end="2023-12-31",
         entry="close > sma_20 * 1.02",
@@ -430,13 +437,30 @@ class TestStateDoesNotCrossRuns:
         return [(r.trade_id, r.entry_date, r.exit_date, str(r.contract),
                  r.exit_reason.value, round(r.net_pnl, 8)) for r in records]
 
-    @staticmethod
-    def _again(result):
+    #: What `run()` would pass on to the engine's constructor and `_again` would not.
+    #: `_again` builds a plain engine, so a configuration setting any of these would be
+    #: re-run under different execution settings and the second run would differ for a
+    #: reason that is not the leak -- while the failure message blamed the leak. Asserted
+    #: below rather than remembered: `max_concurrent=5` is exactly what turned 113 trades
+    #: into 114 in the measurements behind this fix, so the mechanism is live.
+    ENGINE_SETTINGS = ("max_concurrent", "shadow_days", "risk", "scenario_limit",
+                       "premium_budget", "exposure", "enforce_capital")
+
+    @classmethod
+    def _again(cls, result):
         """The same strategy object, through a fresh engine over the same range."""
         from backtest.engine.loop import EventDrivenEngine
 
-        return EventDrivenEngine(result._market, result._chain, result._signals,
-                                 result.raw.config).run(result.raw.strategy)
+        carried = sorted(set(cls.RUN) & set(cls.ENGINE_SETTINGS))
+        assert not carried, (
+            f"RUN sets {carried}, which reaches the engine's constructor, and this helper "
+            f"builds a plain engine -- so the second run would be run under different "
+            f"execution settings and differ for a reason that is not the leak. Pass them "
+            f"here too, or take them out of RUN"
+        )
+        return EventDrivenEngine(market=result._market, chain=result._chain,
+                                 signals=result._signals,
+                                 config=result.raw.config).run(result.raw.strategy)
 
     @pytest.fixture(scope="class")
     def first(self):
@@ -446,11 +470,44 @@ class TestStateDoesNotCrossRuns:
 
     @pytest.mark.req("0.4.reproducible")
     def test_the_same_strategy_object_run_twice_gives_the_same_trades(self, first):
-        stop = first.raw.strategy.components["stop_loss"]
-        assert stop.get_state(), (
+        """The measured symptom, with the precondition that makes it able to fail.
+
+        **"The first run left something behind" is not that precondition.** Asserting only
+        that is how this test came to read as evidence while carrying none: on another set
+        of bars the same configuration leaves six marks whose largest is 0.075, a second
+        run inherits every one of them, and not one trade moves -- 0.075 is nowhere near
+        the 0.5 give-back, so no inherited mark fires anything. The leak was fully present
+        and the test was green.
+
+        What has to hold is that an inherited mark can **fire** the stop on the trade that
+        reuses its id. The arithmetic: the reused trade's own ratio is at most 0 on its
+        first session (the engine shows the form the exit side of the quote, which is below
+        the entry), so an inherited mark of at least `fraction` gives a give-back of at
+        least `fraction` straight away -- the trade this range left open is stopped out
+        instead, which is a record the first run does not have. A leftover below `fraction`
+        proves nothing in either direction, and this now says so instead of passing.
+        """
+        fraction = self.RUN["components"]["stop_loss"]["params"]["fraction"]
+        marks = {int(trade): held["high_water"] for trade, held
+                 in first.raw.strategy.components["stop_loss"].get_state().items()}
+        assert marks, (
             "the first run left no state behind, so a second run has nothing to inherit "
             "and this test cannot see the leak. Choose a range that ends with a trade "
             "open"
+        )
+        firing = {trade: round(mark, 4) for trade, mark in marks.items()
+                  if mark >= fraction}
+        assert firing, (
+            f"the first run left {len(marks)} mark(s), "
+            f"{ {t: round(m, 4) for t, m in marks.items()} }, and none of them reaches "
+            f"the {fraction} give-back this stop fires on. A second run can inherit every "
+            f"one of them and still produce the same trades, so this test would pass with "
+            f"the leak fully present -- it is not evidence of anything in this state. "
+            f"Point it at a range whose open trades end at a mark of {fraction} or more, "
+            f"or rely on test_a_run_does_not_inherit_state_set_before_it, which does not "
+            f"wait for the data to cooperate. The suite's own bars leave 0.817 on trade "
+            f"136 here; under BACKTEST_TEST_ONLINE=1 the bars are a vendor's and this "
+            f"configuration was never measured on them"
         )
         second = self._again(first)
         expected, got = self._rows(first.raw.records), self._rows(second.records)
@@ -459,6 +516,7 @@ class TestStateDoesNotCrossRuns:
             f"the first run's {len(expected)}.\n"
             f"  only in the first run:  {[r for r in expected if r not in got][:3]}\n"
             f"  only in the second run: {[r for r in got if r not in expected][:3]}\n"
+            f"The marks the first run left that can fire on their own: {firing}. "
             f"The run_id is the same either way, so nothing in the output says which "
             f"figures came from the contaminated run"
         )
