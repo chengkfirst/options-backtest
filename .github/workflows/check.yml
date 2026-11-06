@@ -43,8 +43,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      # `docs` as well as `dev`, and the reason is a guard that was dark. pypdf is
+      # declared in the `docs` extra, and tests/test_plan_details.py opens the
+      # architecture PDF behind `pytest.importorskip("pypdf")` -- so the check that
+      # every figure in the plan is in the inventory had been **skipping in every CI
+      # run since this workflow was added**, printing OK the whole time. Installing the
+      # extra is what makes that guard real here.
       - name: Install the project and its development dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,docs]"
 
       # No --fast. This is the run that would have caught both failures above.
       #
@@ -60,6 +66,15 @@ jobs:
         env:
           PYTEST_ADDOPTS: -m "not timing"
         run: python -m tools.check
+
+      # The figure guard skipped here for months. Asserting that it *ran* is the only
+      # way that stays fixed -- a skip prints no differently from a pass in a summary.
+      - name: The figure guard must have run, not skipped
+        run: |
+          python -m pytest tests/test_plan_details.py -q -rs \
+            -k test_every_figure_in_the_pdf_is_in_the_inventory | tee /tmp/figure.txt
+          grep -q "1 passed" /tmp/figure.txt || {
+            echo "::error::the figure guard did not pass -- it was skipped or failed"; exit 1; }
 
       # Not blocking, by design: this reports a number, it does not judge it. A real
       # tenfold regression is still obvious in the log, and `continue-on-error` keeps a
