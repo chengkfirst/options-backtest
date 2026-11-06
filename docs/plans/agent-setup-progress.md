@@ -90,3 +90,35 @@ appears in exactly one file, so it is the field whose wiring can be removed clea
 So the guard does catch a de-wired field, and it is the field names it checks, not the file
 it reads.
 
+### 1.2 The doc-examples loophole — DONE
+
+Confirmed before fixing. `tools/check_docs.py` skipped a block on `SKIP_MARK in code` — the
+marker **anywhere** in it. Of the README's 20 Python blocks, exactly one was exempted by
+accident: the data-adapter block, whose `# skip` sat on a commented-out fourth line, and
+whose first line imported `backtest.data.adapters` — a module that does not exist. The one
+block with a wrong import was the one block never run.
+
+Files: `tools/check_docs.py`, `README.md`.
+
+- The rule is now `is_skipped()`: the **first non-empty line** must start with `# skip`.
+  The module docstring says so, and records what the old rule cost.
+- `README.md`: the import corrected to `backtest.data.options.adapters`, and the block split
+  — `describe_schema()` runs; `check_file("your/path")` moved to its own block whose first
+  line is `# skip (needs your own data file)`.
+- Every other block checked under both rules: the runnable set is identical
+  (`[1, 3, 4, 7, 10]` of 20 either way), so no other block changes behaviour. The
+  `# skip (…)` markers already sat on first lines.
+- `/opt/anaconda3/bin/python tools/check_docs.py` → `the doc-code check passed (5 blocks)`.
+  It was 4 before: the corrected adapter block is the fifth, now actually run.
+
+*Verified in reverse* — planted the exact failure the old rule allowed: the wrong module
+back on the first line **and** a `# skip` on an inner line, which previously exempted the
+whole block.
+
+- `tools/check_docs.py` → `the doc-code check failed (1/5 blocks did not run)` /
+  `README.md, python block 7: ModuleNotFoundError: No module named 'backtest.data.adapters'`
+- Restored; guard passes again (5 blocks).
+
+So the inner-line marker no longer buys an exemption, and the guard catches the import that
+hid behind it.
+

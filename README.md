@@ -260,10 +260,16 @@ trusted.
 Three steps, with a tool for each:
 
 ```python
-from backtest.data.adapters import check_file, describe_schema
+from backtest.data.options.adapters import describe_schema
 
 print(describe_schema())    # 1. which columns, what each means, what absence costs
-# check_file("your/path")   # 2. a health check before any run: fatal / warning  # skip
+```
+
+```python
+# skip (needs your own data file)
+from backtest.data.options.adapters import check_file
+
+check_file("your/path")     # 2. a health check before any run: fatal / warning
 ```
 
 ```python
