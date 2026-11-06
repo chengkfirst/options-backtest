@@ -65,6 +65,8 @@ const DIMENSIONS = [
    'What does the first run take: installing, getting data, writing a configuration? Is there an interface beyond a script? What does a result look like, and does it say what it assumed? How good are the error messages when the data is wrong?'],
   ['licence and health',
    'The licence, exactly, and whether it permits what we would want. Then: last commit, release cadence, open issue count, number of contributors, whether tests exist and run in CI. A project worth learning from and a project worth depending on are different questions.'],
+  ['AI and agent integration',
+   'Does the project expose itself to LLM agents at all -- an MCP server, agent skills, a tool-calling interface, a documented API meant for a model rather than a person? Does it run an automated research loop, where a model proposes a hypothesis, an experiment runs, and the result is read back? If it does, the question that matters most: **which data does that loop see when it judges a result** -- the training split, a validation split, or the test period? Is the number of trials counted, and is anything deflated or corrected for the search? What stops the loop selecting on noise? Quote the file that decides it. A loop that reads its test period to choose its next hypothesis is a search whose reported result is in-sample, however the code is arranged.'],
 ]
 
 const CLAIMS_SCHEMA = {
@@ -175,6 +177,14 @@ if (!us) {
 const repos = (args && args.repos) || []
 const date = (args && args.date) || null
 
+/* Leads: `{ "<repo>": ["<claim to check, with the file to start from>"] }`.
+ *
+ * A lead is a hypothesis from a skim, **never a conclusion**. Each one comes back
+ * confirmed with a file and a line, corrected, or reported wrong -- and an unverified
+ * lead does not reach the report at all. The distinction is the whole value: a skim
+ * that is written up as a finding is how a guess acquires a citation. */
+const leads = (args && args.leads) || {}
+
 if (!repos.length || !date) {
   log('Nothing to do: pass { repos: [github urls], date: "YYYY-MM-DD" }. The date is an argument because a workflow script cannot read the clock.')
   return { error: 'repos and date are both required', got: { repos: repos.length, date } }
@@ -195,7 +205,17 @@ const perRepo = await pipeline(
 First, clone it read-only into a scratch directory OUTSIDE this project:
 
     mkdir -p ${SCRATCH}
-    git clone --depth 1 ${repo} ${SCRATCH}/<repo-name>
+    git clone --depth 1 --filter=blob:limit=1m ${repo} ${SCRATCH}/<repo-name>
+
+For a repository with a very large tree -- more than about 3,000 files -- add a sparse
+checkout of only what the dimensions need, which is normally the documentation, the
+backtest or engine package, and the data and model packages:
+
+    git -C ${SCRATCH}/<repo-name> sparse-checkout set docs <engine-pkg> <data-pkg>
+
+**Record in your report what you did not check out.** A dimension answered from a partial
+tree is answered from a partial tree, and saying so is the difference between a limit and
+a mistake.
 
 (If another agent has already cloned it, use the existing clone. Do not pull, do not
 install, do not run.)
@@ -206,6 +226,12 @@ The questions for this dimension:
 
 ${questions}
 
+${(leads[repo] || []).length ? `**Leads to check for this repository.** These are guesses from a skim, not
+findings. For each one: confirm it with a file and a line, correct it, or report it as
+wrong. Do not repeat one back unverified.
+
+${(leads[repo] || []).map((l, i) => `  ${i + 1}. ${l}`).join('\n')}
+` : ''}
 For context, this is what the project you are comparing against does — use it to judge
 what is worth reporting, and to fill in better_than_ours:
 
@@ -250,6 +276,46 @@ The claims:
 ${JSON.stringify(claims, null, 1).slice(0, 20000)}`,
       { label: `cross-check ${repo.split('/').pop()}`, phase: 'Cross-check', schema: VERDICT_SCHEMA },
     ).then((v) => ({ repo, claims, checked: (v && v.checked) || [] }))
+  },
+
+  // Stage 3 -- one file per repository, written before the synthesis reads any of them.
+  // The synthesis is a comparison and is rewritten whenever the set of repositories
+  // changes; these are the record of what was found in one project, and a later run can
+  // compare against them rather than starting over. They are also where a partial
+  // checkout gets declared.
+  (verdict, repo) => {
+    if (!verdict || !verdict.claims || !verdict.claims.length) return verdict
+    const slug = repo.split('/').pop().replace(/[^a-zA-Z0-9._-]/g, '-')
+    return agent(
+      `Write what was found about ${repo} to \`docs/research/benchmarks/${slug}.md\`.
+
+This is the per-repository record, not the comparison — write what **this** project does
+and why, so that a later benchmark can compare against it rather than reading the
+repository again from scratch.
+
+Sections, in this order:
+
+  # ${slug}
+  **Repository:** ${repo} · **Read on:** ${date} · **Licence:** <as read from its own LICENSE file>
+  ## What it is, in a paragraph
+  ## The eight dimensions
+  One subsection each, with the file behind every claim. Where a dimension could not be
+  answered, say so and say what would answer it.
+  ## What was not checked out
+  If the clone was partial, name the directories that were left out. A dimension answered
+  from a partial tree is answered from a partial tree.
+  ## Claims that did not survive the cross-check
+  Every verdict that came back overstated, wrong or file_not_found, with what the file
+  actually shows. **This section is the point of keeping these files**: it is the record
+  of what looked true and was not, and it is what stops the next run believing it.
+
+Everything in English. Cite a file for every claim; leave out anything you cannot cite.
+
+The claims and their verdicts:
+
+${JSON.stringify(verdict, null, 1).slice(0, 40000)}`,
+      { label: `record ${slug}`, phase: 'Cross-check' },
+    ).then(() => verdict)
   },
 )
 
