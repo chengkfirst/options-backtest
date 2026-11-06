@@ -266,7 +266,7 @@ six months is why it was decided this way, not what the diff already shows.
 
 ## The guards that are not part of `tools.check`
 
-Four of them, each outside the fixed check because of *when* or *where* it has to run
+Five of them, each outside the fixed check because of *when* or *where* it has to run
 rather than what it reads. Same bar as any other guard: a concrete failure first, then the check,
 verified in reverse.
 
@@ -276,6 +276,7 @@ verified in reverse.
 | [`tools/githooks/pre-commit`](../tools/githooks/pre-commit) · enabled per clone with `git config core.hooksPath tools/githooks` | a commit made while a guard is red. Runs `tools.check --fast` and refuses on failure | "any failure means no commit" was held by whoever remembered to run the guards. That is the state the first line of this file calls a wish — and this project has the evidence: three guards in `tools/check.py` were written and never registered there, so they ran only when someone thought of them |
 | [`.github/workflows/check.yml`](../.github/workflows/check.yml) · the **full** check on every push and pull request | anything that only fails on a clean clone | `backtest/research/` was excluded by a `.gitignore` rule missing its leading slash: six modules unpublished, their tests pushed, every local guard green and `git status` clean. Only a clone on another machine shows that class of failure |
 | [`tools/hooks/restrict_paths.py`](../tools/hooks/restrict_paths.py) · a `PreToolUse` hook registered **per agent**, in `.claude/agents/<name>.md` | a builder agent editing outside the paths it owns — the engine reaching into `app/`, or the reverse. **`Write` and `Edit` only: it does not watch `Bash`,** so it removes the easy way across the line and not every way | "I will not edit that directory" is a promise about every future turn. The failure it answers to is the plausible one: an engine change needs one field in the composer, the agent is right there, it reaches across, and nothing raises. The guards would still catch a contract *mismatch*; they cannot catch one agent owning both sides, which is what makes a mismatch likely |
+| [`tools/hooks/require_audit_before_stopping.py`](../tools/hooks/require_audit_before_stopping.py) · a `Stop` hook, registered in `.claude/settings.json` | a session finishing with uncommitted changes under `backtest/` and no report in `docs/findings/` newer than them | An engine change can make a **result** wrong while the run finishes, raises nothing and reports a number. `quant-auditor` catches that and found two such defects here — component state outliving a run under an identical `run_id`, and a trailing stop's mark starting below entry on every trade. Neither was found by a guard; both were found because somebody remembered. It stands aside when `stop_hook_active` is set, because a Stop hook that blocks twice is a session nobody can end |
 
 Why each is outside `tools.check` rather than in it: the first has to run **before** a
 command, which no checker invoked afterwards can do; the second has to run **at** the
