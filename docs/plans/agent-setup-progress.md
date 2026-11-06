@@ -63,3 +63,30 @@ So `--fast` runs during the work and the full run at the end, as the plan's 0.3 
 
 ### 0.3 Plan and progress file committed — PENDING
 
+---
+
+## Phase 1 — What was red, and the documents that rotted
+
+### 1.1 `components` guard on a clean clone — DONE (already fixed)
+
+The plan expected `tests/test_components.py::TestDescribe::test_fields_match_real_run_parameters`
+to read `app/static/bench.js` and raise `FileNotFoundError`. It does not: the test already
+reads **the whole `app/static/js/` tree** (`js.rglob("*.js")`, line 180), and the comment at
+line 176 records the move it was repaired for. Confirmed by reading the test, and by the
+guard passing in 0.2. Nothing to fix.
+
+**Verified in reverse anyway**, because a green guard proves nothing about what it catches.
+Three interface fields are cleared only by the JS-tree read — `risk_pct`, `notional` and
+`target_vol`, which reach `run()` neither directly nor through `app/runner.py`. `target_vol`
+appears in exactly one file, so it is the field whose wiring can be removed cleanly:
+
+- `app/static/js/views/bench.js:893`, `target_vol: +o.target_vol` renamed to
+  `vol_target: +o.vol_target` — the shape of the real failure, a field renamed on one side.
+- `pytest tests/test_components.py -q` → `1 failed, 17 passed`:
+  `AssertionError: these interface fields reach neither run() nor the runner that assembles
+  its arguments ... ['target_vol']`
+- Restored, `git diff` empty, `pytest tests/test_components.py -q` → `18 passed`.
+
+So the guard does catch a de-wired field, and it is the field names it checks, not the file
+it reads.
+
