@@ -335,3 +335,38 @@ the hook is for the case where sessions still share one, which is the ordinary c
 `CLAUDE.md` is 89 lines, under the 100 the plan asks for; 3.4 adds the agent roster to it
 once the agents exist. Verified: `tools.check --fast` → `OK  all 18 guards passed`.
 
+---
+
+## Phase 3 — Documents and context the agents work from
+
+### 3.1 Directory structure — DONE
+
+Created, each with a `README.md` saying what belongs there, the naming scheme and the shape
+of an entry: `docs/` (an index `README.md`), `docs/plans/`, `docs/specs/`,
+`docs/decisions/`, `docs/findings/`, `docs/research/`, `docs/ideas/`, `docs/feedback/`,
+`docs/radar/` (plus `seen.md` and `ignore.md` as empty-but-shaped files).
+
+The index is organised by **what makes each kind of document wrong**, because that is what
+decides who may change it and when — a decision never goes stale and is superseded rather
+than edited; a spec is wrong when the thing was built differently; a finding is wrong when
+its data or configuration is misstated, not when the result turns out otherwise.
+
+Three of the READMEs carry a rule that is a real constraint rather than a formality, and
+each names the failure behind it:
+
+- `findings/`: the synthetic chain has constant IV, no skew, no term structure, so an
+  option-side conclusion is **unanswerable** on it rather than imprecise. Every finding
+  states which chain it used and what it therefore cannot claim. Plus the unconditional
+  baseline, the logical trade as the unit, and how many configurations were tried.
+- `ideas/`: all five filters required, and "what result would kill it" fixed before the
+  work. A backlog where nothing can be ruled out grows without bound and is read by nobody.
+- `feedback/`: **the one directory an agent may not write to.** It holds the only input
+  nothing in this repository can derive — what happened in real use. An agent inventing an
+  observation there would be inventing evidence.
+
+`docs/radar/seen.md` and `ignore.md` are created with their format and a line saying
+nothing is in them yet, rather than left absent: the scout prompt tells the task to skip
+what is in them, and a missing file would be an error on its first run.
+
+Verified: `tools/check_language.py` → `OK  253 files, all English`.
+
