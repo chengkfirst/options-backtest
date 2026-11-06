@@ -437,14 +437,22 @@ class TestStateDoesNotCrossRuns:
         return [(r.trade_id, r.entry_date, r.exit_date, str(r.contract),
                  r.exit_reason.value, round(r.net_pnl, 8)) for r in records]
 
-    #: What `run()` would pass on to the engine's constructor and `_again` would not.
-    #: `_again` builds a plain engine, so a configuration setting any of these would be
+    #: What `run()` would pass on and `_again` would not. `_again` builds a plain engine
+    #: and calls `.run(strategy)` bare, so a configuration setting any of these would be
     #: re-run under different execution settings and the second run would differ for a
     #: reason that is not the leak -- while the failure message blamed the leak. Asserted
     #: below rather than remembered: `max_concurrent=5` is exactly what turned 113 trades
     #: into 114 in the measurements behind this fix, so the mechanism is live.
+    #:
+    #: **Two groups, and the second is the one that was missed.** The first seven reach
+    #: the engine's *constructor*; `until` and `resume_from` reach `run()` itself
+    #: (`api/sdk.py:596`). Scoping this to the constructor looked complete and was not:
+    #: `until=` is the obvious way to make a twenty-second test faster, and adding it
+    #: would have the first run stop early and the second run the whole range -- a
+    #: divergence of hundreds of trades, reported under a message about state leaking.
     ENGINE_SETTINGS = ("max_concurrent", "shadow_days", "risk", "scenario_limit",
-                       "premium_budget", "exposure", "enforce_capital")
+                       "premium_budget", "exposure", "enforce_capital",
+                       "until", "resume_from")
 
     @classmethod
     def _again(cls, result):
