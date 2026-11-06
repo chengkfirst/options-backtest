@@ -200,7 +200,7 @@ Already done:
 | What the seven components are and what they ask for | `COMPONENTS` in `backtest/core/slots.py` | the interface's form, the gap list, `tools/status.py` |
 | The dependency layers | `LAYERS` in `tools/check_deps.py` | the check itself |
 | Each signal's meaning and unit | `SIGNAL_META` in `signals/registry.py` | the interface reference, `describe_signals()` |
-| Which columns wiring in data needs | `SCHEMA` in `data/adapters.py` | the health check, the documentation table |
+| Which columns wiring in data needs | `SCHEMA` in `data/options/adapters.py` | the health check, the documentation table |
 
 **Not yet done, recorded honestly**: the statuses of the acceptance criteria in
 `requirements.md` are hand-written. Criteria like "the interface is clear" or "the

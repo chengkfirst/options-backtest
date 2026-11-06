@@ -1074,3 +1074,92 @@ grid across three deliberately chosen regime stretches rather than ten continuou
 - It noted that the result in `research-questions.md` 2.1 is **a finding living in the wrong
   file** — no configuration, no guard state, no caveats.
 
+### 7.5 `doc-keeper` across the documents — DONE, ~24 corrections
+
+Run the same way as the others (its definition read and followed). It swept the paths and
+counts first, as its definition prescribes, then went document by document.
+
+**What it corrected, and the shape of it.** Almost every correction is the same kind:
+`requirements.md` saying a thing is **absent** when it was built and nobody went back to
+the sentence. That is the rot its definition names as the worst — "a behavioural statement
+rots most completely, because the feature arrives and nobody searches the documents for the
+sentence saying it does not exist."
+
+- The engine "has no Armed state" and slot 1 is "not wired as a gate" — both built
+  (`signals/lifecycle.py:46-52, 302-349`, `engine/loop.py:886-919`).
+- Shadow tracking "absent — which is why counterfactual exits cannot be computed" — built,
+  and it is what `research/counterfactual.py` replays.
+- MFE/MAE "premium terms only … the whole study ruled unusable on synthetic data" — both
+  terms exist.
+- `ExperimentTracker` "absent" — built. The hold-out "not enforced", in **three** places —
+  it raises.
+- Section 6.2 "the document leaves this section empty" — it has eight bullets, and
+  `research/prelaunch.py` implements them.
+- "Only two slots have more than one form" / "four shipped forms" — **12 variants across 4
+  slots**, which I checked against the registry myself: stop loss 4, take profit 2,
+  headwind 2, positioning 4.
+- `core/events.py` "thirteen named types" — 15.
+- `research-questions.md` §10.2 and §10.3: **eleven rows listed as future work, every one
+  built.**
+- `conventions.md`: `SCHEMA` in `data/adapters.py` → `data/options/adapters.py`.
+- **Two of my own files from tonight**: `docs/README.md` said the transcriptions were in
+  `Plan/`, and `docs/decisions/README.md` listed "no event bus" as a recorded deviation.
+
+That last one is worth its own line. **I wrote it from `backtest/core/component.py`'s
+docstring, which is itself stale** — the bus exists (`core/events.py:281`, `EventBus`, with
+the engine emitting at 17 sites). So a wrong statement in a docstring propagated into a new
+document within hours of that document being created, which is the mechanism this whole
+category of guard exists for, observed live.
+
+**It correctly refused to fix the docstring**, because docstrings are code. That goes to the
+report as a code finding for `engine-dev`. Its own definition's "the finding that matters
+most" is the code being wrong and the document right, and it followed it.
+
+**What it would not correct, and was right not to:**
+
+- `research-questions.md` 1.1 prescribes Monte Carlo and marks the question "can do", while
+  **no path simulator exists anywhere in `backtest/`** (the only RNG uses are random entry
+  dates and bootstrap resampling — resampling observed data, not simulating paths). It
+  stopped: "can do (underlying side)" may be a statement about *data* rather than tooling,
+  and changing it implies a `requirements.md` row for a simulator. A person's call.
+- `research-questions.md` 2.1's result stays where it is, and it **corrected my brief**:
+  I had been told it was caveat-free and baseline-free, and it is neither — it carries its
+  unconditional baseline and one caveat. What it lacks is a configuration, a guard record
+  and intervals. Moving it is a person's call.
+
+**One thing it raised that is a candidate for `/new-guard`**: `tools/check_doc_claims.py`
+checks the README's `[absent: …]` brackets and `requirements.md`'s **section** statuses —
+but the Layer tables at `requirements.md:70-155` carry a per-piece status word that
+**nothing checks**, and six of the eight stale claims lived there.
+
+Verified: `tools.check --fast` → 18/18, plus `check_docs.py`, `check_doc_claims.py` and
+`check_language.py` (278 files). I spot-checked its code citations myself — `EventBus` at
+`events.py:281`, `EventType` has 15 members, `SCHEMA` at `data/options/adapters.py:53`, the
+Armed gate at `loop.py:886`, 12 variants from the registry, and `holdout.py` raising.
+
+### 7.1d The CI failure, named — DONE
+
+The run carrying the `--verbose`/`CI` fix completed, and the fix did exactly what it was
+written for:
+
+```
+FAILED tests/test_adapters.py::TestTheFileSourceIsUsableOnRealVolumes::
+       test_construction_is_seconds_and_not_minutes
+E  AssertionError: 208,520 rows took 40.9s to prepare. It was 101s when the greeks were
+   derived one row at a time; at that rate a backtest off a file is unusable rather than slow
+E  assert 40.921020731 < 20.0
+```
+
+**A wall-clock assertion, 40.9s against a 20s budget on a two-core runner.** It passes
+locally every time. That also explains why the branch's CI runs failed non-monotonically —
+runs on later commits passed after earlier ones failed, because the margin depends on the
+runner.
+
+**Not touched.** Loosening a threshold to make CI green is what hard rule 7 forbids, and the
+test is valuable — it records that this operation once took 101s. It goes to the report
+under "Found, not fixed" with the three options and their costs, for a person to decide.
+
+The loop is worth naming: CI caught a failure, could not describe it, the description was
+fixed, and the next run named the test. The guard that found the problem was the one that
+had to be repaired to report it.
+

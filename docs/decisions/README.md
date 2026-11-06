@@ -48,7 +48,7 @@ to be slow" is not.
 
 ## Candidates already in the codebase
 
-Three choices are recorded in `conventions.md` as prose and would each be a decision file.
+Two choices are recorded in `conventions.md` as prose and would each be a decision file.
 Not converted tonight — moving them would duplicate them, and one fact belongs in exactly
 one place:
 
@@ -59,5 +59,9 @@ one place:
 - **Marking to market at step 5 rather than last**, which deviates from the document's
   daily order and has no corporate-action step. Equivalent under a one-day lag; wrong the
   moment an intraday fill lands on its signal's day.
-- **No event bus**; layers call each other directly, so the document's `on_event` protocol
-  has nothing to receive and `decide` is what the engine calls.
+The third such choice — **no event bus** — stopped being one: the bus is built
+(`backtest/core/events.py: EventBus`, with the document's `PHASE` order and the causal
+chain), the engine publishes into it, and `conventions.md` no longer records it as a
+deviation. What is still true is the narrower part: the document's `on_event` protocol has
+nothing to receive while the loop acts inline, so `decide` is what the engine calls. A
+decision file about it would be about that, not about the bus.
