@@ -1,7 +1,7 @@
 # Working conventions
 
-> This file is independent of [docs/architecture.md](docs/architecture.md) (the architecture,
-> transcribed from the PDF in `Plan/`)
+> This file is independent of [architecture.md](architecture.md) (the architecture,
+> transcribed from the PDF in `docs/originals/`)
 > and [requirements.md](requirements.md) (what is built against it). It covers one thing
 > only: **how to make sure what gets built is right, and does not break quietly.**
 
@@ -249,14 +249,14 @@ staged, `git restore --staged <path>` puts it back; leave it for whoever wrote i
 which session wrote which line — nothing can — so the part that rests on a person is
 unchanged: **read the staged list before committing.** What a tool *can* do is refuse the
 two commands that make the mistake possible, and
-[`tools/hooks/refuse_broad_git_add.py`](tools/hooks/refuse_broad_git_add.py) does:
+[`tools/hooks/refuse_broad_git_add.py`](../tools/hooks/refuse_broad_git_add.py) does:
 `git add -A`, `--all`, `-u`, `.`, `:/`, and any pathspec that is a directory. It allows
 explicit file paths, `--dry-run`, `-p`, and a pathspec that does not exist on disk, and it
 fails open on its own bugs — a hook that blocked every command in the repository because
 of a bug in itself would be worse than the mistake it guards.
 
 Each builder working in **its own worktree and branch** removes the shared tree that makes
-this possible at all; see the worktree workflow in [CLAUDE.md](CLAUDE.md). The hook is for
+this possible at all; see the worktree workflow in [CLAUDE.md](../CLAUDE.md). The hook is for
 the case where sessions do share a tree, which is still the ordinary case.
 
 Write **why** in the commit message, not only what changed. What you will want to know in
@@ -272,10 +272,10 @@ verified in reverse.
 
 | Guard | What it catches | The failure it answers to |
 |---|---|---|
-| [`tools/hooks/refuse_broad_git_add.py`](tools/hooks/refuse_broad_git_add.py) · a Claude Code `PreToolUse` hook on Bash, registered in `.claude/settings.json` | a `git add` whose pathspec names more than the caller chose: `-A`, `--all`, `-u`, `.`, `:/`, a directory | `git add -A` swept a half-finished interface rebuild into a commit about component state; `git add tools/` committed another session's 469-line guard under a message about CSS tokens. The history then says things that are not true, and the history is the only account of why anything was done |
-| [`tools/githooks/pre-commit`](tools/githooks/pre-commit) · enabled per clone with `git config core.hooksPath tools/githooks` | a commit made while a guard is red. Runs `tools.check --fast` and refuses on failure | "any failure means no commit" was held by whoever remembered to run the guards. That is the state the first line of this file calls a wish — and this project has the evidence: three guards in `tools/check.py` were written and never registered there, so they ran only when someone thought of them |
-| [`.github/workflows/check.yml`](.github/workflows/check.yml) · the **full** check on every push and pull request | anything that only fails on a clean clone | `backtest/research/` was excluded by a `.gitignore` rule missing its leading slash: six modules unpublished, their tests pushed, every local guard green and `git status` clean. Only a clone on another machine shows that class of failure |
-| [`tools/hooks/restrict_paths.py`](tools/hooks/restrict_paths.py) · a `PreToolUse` hook registered **per agent**, in `.claude/agents/<name>.md` | a builder agent editing outside the paths it owns — the engine reaching into `app/`, or the reverse. **`Write` and `Edit` only: it does not watch `Bash`,** so it removes the easy way across the line and not every way | "I will not edit that directory" is a promise about every future turn. The failure it answers to is the plausible one: an engine change needs one field in the composer, the agent is right there, it reaches across, and nothing raises. The guards would still catch a contract *mismatch*; they cannot catch one agent owning both sides, which is what makes a mismatch likely |
+| [`tools/hooks/refuse_broad_git_add.py`](../tools/hooks/refuse_broad_git_add.py) · a Claude Code `PreToolUse` hook on Bash, registered in `.claude/settings.json` | a `git add` whose pathspec names more than the caller chose: `-A`, `--all`, `-u`, `.`, `:/`, a directory | `git add -A` swept a half-finished interface rebuild into a commit about component state; `git add tools/` committed another session's 469-line guard under a message about CSS tokens. The history then says things that are not true, and the history is the only account of why anything was done |
+| [`tools/githooks/pre-commit`](../tools/githooks/pre-commit) · enabled per clone with `git config core.hooksPath tools/githooks` | a commit made while a guard is red. Runs `tools.check --fast` and refuses on failure | "any failure means no commit" was held by whoever remembered to run the guards. That is the state the first line of this file calls a wish — and this project has the evidence: three guards in `tools/check.py` were written and never registered there, so they ran only when someone thought of them |
+| [`.github/workflows/check.yml`](../.github/workflows/check.yml) · the **full** check on every push and pull request | anything that only fails on a clean clone | `backtest/research/` was excluded by a `.gitignore` rule missing its leading slash: six modules unpublished, their tests pushed, every local guard green and `git status` clean. Only a clone on another machine shows that class of failure |
+| [`tools/hooks/restrict_paths.py`](../tools/hooks/restrict_paths.py) · a `PreToolUse` hook registered **per agent**, in `.claude/agents/<name>.md` | a builder agent editing outside the paths it owns — the engine reaching into `app/`, or the reverse. **`Write` and `Edit` only: it does not watch `Bash`,** so it removes the easy way across the line and not every way | "I will not edit that directory" is a promise about every future turn. The failure it answers to is the plausible one: an engine change needs one field in the composer, the agent is right there, it reaches across, and nothing raises. The guards would still catch a contract *mismatch*; they cannot catch one agent owning both sides, which is what makes a mismatch likely |
 
 Why each is outside `tools.check` rather than in it: the first has to run **before** a
 command, which no checker invoked afterwards can do; the second has to run **at** the
@@ -285,7 +285,7 @@ one and wrong from another. `tools.check` itself cannot do any of the four, and 
 that wrap it call it rather than duplicate it.
 
 All three hooks are verified in reverse, and two keep their verification as tests —
-`tests/test_git_add_hook.py` and `tests/test_restrict_paths_hook.py`, 148 cases between
+`tests/test_git_add_hook.py` and `tests/test_restrict_paths_hook.py`, 153 cases between
 them. The second reads each agent definition's **own** arguments rather than restating
 them, so changing what an agent owns is what changes the behaviour under test. The
 `git add` one —

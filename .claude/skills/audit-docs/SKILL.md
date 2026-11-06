@@ -1,6 +1,6 @@
 ---
 name: audit-docs
-description: Sweep the project's documents for statements the code contradicts, with the code that proves each one, then correct the documents. Runs doc-keeper across README.md, requirements.md, conventions.md, research-questions.md, the CLAUDE.md files and docs/. For a whole-repository sweep it may use a workflow with a second agent verifying each finding. Use after a refactor or a rename, when a document names something that moved, or on a schedule.
+description: Sweep the project's documents for statements the code contradicts, with the code that proves each one, then correct the documents. Runs doc-keeper across README.md, docs/requirements.md, docs/conventions.md, docs/research-questions.md, the CLAUDE.md files and docs/. For a whole-repository sweep it may use a workflow with a second agent verifying each finding. Use after a refactor or a rename, when a document names something that moved, or on a schedule.
 argument-hint: "[a document, or nothing for all of them]"
 disable-model-invocation: true
 user-invocable: true
@@ -18,7 +18,7 @@ code wrong, that is a bug report — see "The finding that matters most" below.
 
 ## Why this is worth running
 
-"A document rotted" is one of the eight silent-failure shapes in `conventions.md`, and its
+"A document rotted" is one of the eight silent-failure shapes in `docs/conventions.md`, and its
 "why it goes unnoticed" column is the whole problem: *nobody runs the code in a document.*
 It was true when written, something moved, and it now reads authoritatively and wrongly —
 which is worse than no document, because a reader believes it and stops looking.
@@ -54,7 +54,7 @@ reads the first two carefully.
 Give each the document and this order of attack, most-likely-rotted first — **a path, a
 symbol, a number, a behavioural statement, a contradiction between two documents**. The
 fourth is the one that rots most completely, because the feature arrives and nobody searches
-the documents for the sentence saying it does not exist. `requirements.md` said "no resume
+the documents for the sentence saying it does not exist. `docs/requirements.md` said "no resume
 from a state snapshot" while resume was built and reachable from `run()`.
 
 **Every correction cites the code that proves it** — file and line, or name and module.
@@ -90,15 +90,15 @@ then go red for a reason nobody could explain.
 ## What is not rot, and must not be "fixed"
 
 - **A disagreement with `docs/architecture.md`** or the other two transcriptions. Those are
-  faithful transcriptions of the PDFs in `Plan/`, which are the originals. A disagreement is
-  either work not yet done — which belongs in `requirements.md` with its reason — or a
-  deliberate deviation, which belongs in `conventions.md`, and three already are. An edit to
+  faithful transcriptions of the PDFs in `docs/originals/`, which are the originals. A disagreement is
+  either work not yet done — which belongs in `docs/requirements.md` with its reason — or a
+  deliberate deviation, which belongs in `docs/conventions.md`, and three already are. An edit to
   a transcription would also be undone by the next `tools/pdf_to_md.py` run, silently.
-- **"Not built yet" recorded with its reason.** That is `requirements.md` doing its job. A
+- **"Not built yet" recorded with its reason.** That is `docs/requirements.md` doing its job. A
   missing feature recorded with its reason is worth more than a document that does not
   mention it.
 - **A claim no code can settle** — "the interface is clear", "the statistics are honest".
-  `requirements.md` already marks such criteria hand-written rather than pretending they
+  `docs/requirements.md` already marks such criteria hand-written rather than pretending they
   were computed. That is the right answer, not a gap.
 - **`docs/feedback/`**, ever. It is a person's account of their own experience.
 - **A decision record.** It records what was known at the time. Superseded, never edited.

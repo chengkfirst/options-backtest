@@ -1,6 +1,6 @@
 ---
 name: new-guard
-description: Add a guard, following the five steps conventions.md requires — write down exactly how the failure happened and why it went unnoticed, write the check, verify it in reverse by planting the error, wire it into tools/check.py, and add a row to the table in conventions.md. Use when a silent failure has actually occurred and should be caught by a tool from now on.
+description: Add a guard, following the five steps docs/conventions.md requires — write down exactly how the failure happened and why it went unnoticed, write the check, verify it in reverse by planting the error, wire it into tools/check.py, and add a row to the table in docs/conventions.md. Use when a silent failure has actually occurred and should be caught by a tool from now on.
 argument-hint: "[the failure the guard would catch]"
 disable-model-invocation: true
 user-invocable: true
@@ -10,9 +10,9 @@ allowed-tools: Read, Grep, Glob, Bash, Write, Edit, TodoWrite
 # /new-guard
 
 Add a guard. Named only: it writes a check, edits `tools/check.py` and edits
-`conventions.md`.
+`docs/conventions.md`.
 
-The five steps are `conventions.md`'s, not this file's. **None may be skipped**, and step 0
+The five steps are `docs/conventions.md`'s, not this file's. **None may be skipped**, and step 0
 is the one most often skipped by being assumed.
 
 ## 0. First: has the failure actually happened?
@@ -98,14 +98,14 @@ Add it to the `GUARDS` tuple with its name and whether it is slow:
 
 **An unregistered guard is the failure this project has already had**: three guards were
 written and never registered, so a convention it holds to was checked only by whoever
-remembered. That is the state the first line of `conventions.md` calls a wish.
+remembered. That is the state the first line of `docs/conventions.md` calls a wish.
 
 Then run `/opt/anaconda3/bin/python -m tools.check` — the **full** run — and confirm the
 new guard appears in the list and passes. If it belongs outside `tools.check` because of
 *when* it must run — before a command, at the commit, on a clean clone — put it in the
-separate table in `conventions.md` and say which of the three it is and why.
+separate table in `docs/conventions.md` and say which of the three it is and why.
 
-## 5. Add the row to `conventions.md`
+## 5. Add the row to `docs/conventions.md`
 
 In "The fixed check", or in "The guards that are not part of `tools.check`" if it is one of
 those. Columns: the guard, what it catches, the time it costs.
@@ -118,4 +118,4 @@ second tells a reader whether it still matters.
 
 The docstring says how the failure happened and why nothing raised; the reverse
 verification is recorded with both runs; it is registered; the full `tools.check` passes
-with it in the list; and `conventions.md` has its row.
+with it in the list; and `docs/conventions.md` has its row.

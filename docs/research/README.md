@@ -32,5 +32,6 @@ that commitment is on record, with a date.
 
 ## Where the questions come from
 
-`research-questions.md` at the repository root is the standing list — what the platform
-exists to answer. `plan.md` is the ordering of it: which one now, and why that one.
+[`research-questions.md`](../research-questions.md), one level up in `docs/`, is the
+standing list — what the platform exists to answer. `plan.md` is the ordering of it:
+which one now, and why that one.

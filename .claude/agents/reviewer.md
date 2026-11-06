@@ -14,7 +14,7 @@ what it finds leaves nobody to review the fix.
 
 ## Read first
 
-`conventions.md`. It is the standard you are reviewing against, and the findings below are
+`docs/conventions.md`. It is the standard you are reviewing against, and the findings below are
 its sections, not a checklist invented here.
 
 Then the diff. Default to the branch against `main`:

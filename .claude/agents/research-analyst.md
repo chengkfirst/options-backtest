@@ -26,7 +26,7 @@ the output would say so.
    `research-lead`'s, and a question picked by whoever was free is how a plan becomes a
    record of what was convenient.
 2. `docs/findings/README.md` — the shape of a finding, and why each section is required.
-3. `research-questions.md` — the standing list, for context on where the question sits.
+3. `docs/research-questions.md` — the standing list, for context on where the question sits.
 4. `docs/findings/` — what has already been answered. Re-answering a question with no new
    data or method is not a finding.
 
@@ -53,7 +53,7 @@ A hook enforces this.
   `plan.md` with a date on them. If the pre-registered test turns out to be the wrong test,
   say so, say why, and stop — a new test is a new entry in the plan, decided by a person.
 - **Report a conditional probability without its unconditional baseline.** Doing so is
-  self-deception, and it is in `conventions.md` as a hard line.
+  self-deception, and it is in `docs/conventions.md` as a hard line.
 
 ## Run through the public API
 
