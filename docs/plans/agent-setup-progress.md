@@ -843,3 +843,44 @@ answers the question the file could not answer locally, whether the test suite r
 on a clean machine. It does. The suite takes 1239s there against 803s locally, which is why
 the timeout is 60 minutes.
 
+---
+
+## Phase 7 — Verifying that the new pieces work
+
+### 7.1 Every reverse test re-run — DONE
+
+| Test | Planted | Result | Restored |
+|---|---|---|---|
+| 1.1 components guard | `target_vol` renamed to `vol_target` in `bench.js:893` | `AssertionError: these interface fields reach neither run() nor the runner … ['target_vol']` | `18 passed` |
+| 1.2 doc-examples loophole | wrong module **and** an inner-line `# skip` — the exact combination the old rule allowed | `failed (1/5 blocks did not run)` · `block 7: ModuleNotFoundError: No module named 'backtest.data.adapters'` | `passed (5 blocks)` |
+| 2.1 broad `git add` hook | 69 cases, both directions | `69 passed` | — |
+| 2.1 live, through the shebang | `git add -A` → exit 2 · `git add tools/` → exit 2 · `git add README.md` → exit 0 | as expected | — |
+| 2.2 pre-commit hook | a non-English line appended to `conventions.md` | exit 1, `pre-commit: refused. A guard did not pass…` | exit 0 |
+| 4 path-restriction hook | 79 cases, arguments read from the agent definitions themselves | `79 passed` | — |
+
+`git config --get core.hooksPath` → **unset**. Still not enabled by this session, as rule 2.2
+requires. `git status` clean after all of it.
+
+### 7.1b The browser check owed from 1.4 — DONE, and it corrects the record
+
+`app/server.py` started, both pages driven in Chrome.
+
+**The variant picker does not need the box that was deleted.** `/` renders the four
+candidate forms of take profit — premium · underlying · a level · not used — as bordered
+cards with the selected one highlighted, all of it from `.rule-opt` in the **linked**
+`app/static/bench.css`. The `.variant` container styling in the deleted `css/bench.css`
+would have added a second nested box around cards that already group correctly.
+
+So 1.4's "Found, not fixed" entry is **narrower than I first recorded it**: the two live
+rules were never applied, and looking at the page shows nothing missing. Deleting was right
+and there is nothing for a person to decide. Recorded as a correction rather than quietly
+amended, because the first entry said a human should decide and that was over-cautious.
+
+`states.html` renders correctly in dark theme (tokens, surfaces, text levels, semantics).
+No console errors on either page. Server stopped afterwards.
+
+**One error found in my own work by reading it in the browser's company**: `app/CLAUDE.md`
+had a table headed "The four guards that live here" listing **five**. Corrected. It is
+exactly the kind of hand-written count `doc-keeper` exists for, in a file written tonight —
+which is the argument for running 7.5 over the new documents and not only the old ones.
+

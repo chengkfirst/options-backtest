@@ -41,7 +41,7 @@ Consequences worth holding in mind: no transpiling, so write what the browser ru
 shaking, so a module imported for one function costs the whole file; and relative paths are
 real paths, so moving a file breaks every importer and `check_modules` is what says so.
 
-## The four guards that live here
+## The five guards that live here
 
 | Guard | What it catches |
 |---|---|
