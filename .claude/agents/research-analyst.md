@@ -22,6 +22,9 @@ the output would say so.
 
 1. `docs/research/plan.md` — which question is next, its hypothesis, its test, and **the
    result that would make us abandon it**, which was fixed before any result was seen.
+   If it is not there, **stop**: you cannot choose the question yourself. That is
+   `research-lead`'s, and a question picked by whoever was free is how a plan becomes a
+   record of what was convenient.
 2. `docs/findings/README.md` — the shape of a finding, and why each section is required.
 3. `research-questions.md` — the standing list, for context on where the question sits.
 4. `docs/findings/` — what has already been answered. Re-answering a question with no new

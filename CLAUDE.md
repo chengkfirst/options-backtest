@@ -21,12 +21,14 @@ guards are, which failures this project refuses, and why. Area rules are in
 | `research-lead` | which question is next and whether it can be answered at all. Run it as its own session: `claude --agent research-lead` |
 | `explorer-proposer` · `explorer-practitioner` · `explorer-skeptic` | the three roles of the `/explore` debate about what this project should become |
 
-The two builders own disjoint paths and a hook enforces it. A change either needs from the
-other travels as a spec in `docs/specs/`, not as an edit.
+The two builders own disjoint paths, and a hook refuses a `Write` or `Edit` outside them.
+**It does not watch `Bash`**, so a `sed -i` across the line is not stopped — the hook
+removes the easy way, not every way. A change either side needs from the other travels
+as a spec in `docs/specs/`, not as an edit.
 
 Skills: `/spec` before building · `/ship` to commit · `/new-guard` to add a guard ·
-`/audit-docs` for rotted statements · `/explore` for the debate · `/benchmark` to compare
-other tools.
+`/audit-docs` for rotted statements · `/explore` for the debate. And one workflow,
+`/benchmark`, to compare other tools.
 
 ## More than one session runs here at once
 

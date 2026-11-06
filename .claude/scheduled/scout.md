@@ -12,10 +12,13 @@
 
 An options backtesting and research platform for US equity option strategies — QQQ and SPY,
 mid-frequency, holding periods of days to months. One person's research tool, not a product.
-It exists for two things: **settling a strategy's details** (how each of seven components
-should be set: regime filter, entry timing, contract selection, take profit, stop loss, the
-daily review of a partly-broken thesis, and position sizing), and then **validating the
-result over the long run** — optimisation under a protocol, falsification, cross-checking.
+It exists for two things: **settling a strategy's details** and then **validating the
+result over the long run** — optimisation under a protocol, falsification,
+cross-checking. The details are seven components, each deciding one thing in a trade:
+(1) setup / regime · (2) entry · (3) take profit · (4) stop loss · (5) headwind, the
+daily review of a partly-broken thesis · (6) positioning · (7) hedge, which is
+portfolio-level limits and hedge positions rather than anything belonging to one trade.
+Contract selection is a sub-step of entry, numbered 2b.
 
 Its character, which is what decides whether an item outside is relevant:
 

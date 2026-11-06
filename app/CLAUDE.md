@@ -35,7 +35,8 @@ did not think about, which is where the interface's failures actually live.
 Modules are loaded as ES modules, straight from disk. So an import of a name nothing
 exports, or a name used without importing it, raises **only when that code path runs** —
 which may be the first time a user hits an error branch. `tools/check_modules.py` is what
-makes it fail before the commit instead; it reads 25 modules and 105 exported names.
+makes it fail before the commit instead; run it to see how many modules and exported
+names it covers.
 
 Consequences worth holding in mind: no transpiling, so write what the browser runs; no tree
 shaking, so a module imported for one function costs the whole file; and relative paths are
@@ -49,7 +50,7 @@ real paths, so moving a file breaks every importer and `check_modules` is what s
 | `check_modules.py` | an import of a name nothing exports, or a name used but not imported |
 | `check_contrast.py` | a colour pair too close to read, **in either theme**. Written against the design plan's own palette, which failed its 4.5:1 rule in twenty text pairs and had one slot colour invisible on the dark ground |
 | `check_words.py` | two words for one concept on screen, a button naming a verb with no object, an exclamation mark, a "please" |
-| `check_selftest.py` | the browser self-test quietly stopping covering a module — 29 cases over 18 modules, at `/selftest.html` |
+| `check_selftest.py` | the browser self-test quietly stopping covering a module. It prints the case and module counts; the suite is at `/selftest.html` |
 
 `check_words` is the one that surprises people. The design plan has a terms table because a
 reader who meets both "component" and "slot" has to work out whether they are the same

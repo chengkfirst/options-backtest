@@ -50,8 +50,9 @@ same version with different code.
 
 ## `engine/loop.py` and `EventDrivenEngine.run`
 
-**The hottest file and the hottest method in this project's history.** `run` is 573 lines
-and holds the daily order, the exit precedence, the review hook, the risk brake, the
+**The hottest file and the hottest method in this project's history.** `run` is over 700
+lines — measure it before quoting a number, because this one has already been wrong in
+two documents — and holds the daily order, the exit precedence, the review hook, the risk brake, the
 checkpoint and the shadow tracking. So: changes there are small, and they come with tests.
 Splitting it is recommended work in its own right, before any parallel-engine work — not
 something to do in passing while fixing something else.

@@ -23,23 +23,10 @@ agent's judgement.
 write, and the radar needs the scheduled scout task, which is in the report under "For the
 human to do".)
 
-The entry shape, so the first one does not have to invent it:
-
-```markdown
-## <the direction, as a claim about what becomes possible>
-
-**Added:** YYYY-MM-DD · **Status:** candidate | testing | killed (<date>, why) | promoted
-  to spec · **Debated:** as an agent team | as sequential subagents
-
-- **Whose problem, with evidence:**
-- **Connects to:**
-- **Data, time, skills:**
-- **Cheapest week-long test:**
-- **What kills it:**
-
-**The sceptic's strongest objection, and the answer to it.** Verbatim rather than
-summarised — the summary is always kinder than the objection was.
-```
+**The entry shape is in [README.md](README.md)**, and only there. It was written out in
+both files for half a day and the two had already drifted — one carried a `Debated:` field
+the other did not — which is the "one fact defined in two places" failure arriving inside
+the file that exists to catch loose thinking. `/explore` is told to use the README's shape.
 
 ---
 

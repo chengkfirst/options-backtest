@@ -81,8 +81,8 @@ Every test carries three markers — `kind`, `layer`, `req`. See `tests/CLAUDE.m
 
 ## `engine/loop.py` is not an ordinary file
 
-`EventDrivenEngine.run` is 573 lines and is the most-changed method in this project's
-history. It holds the daily order, the exit precedence, the review hook, the risk brake,
+`EventDrivenEngine.run` is over 700 lines and is the most-changed method in this
+project's history. It holds the daily order, the exit precedence, the review hook, the risk brake,
 the checkpoint and the shadow tracking. **Changes there are small and come with tests.** If
 the change you are about to make is not small, say so and stop — splitting that method is
 its own piece of work with its own risk, and doing it on the way to something else is how

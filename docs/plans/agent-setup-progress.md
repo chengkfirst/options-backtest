@@ -673,7 +673,7 @@ Three things in it beyond the plan's list, each answering a way the mechanism wo
 **Not created.** The exact steps, including that the task needs this file's *contents* as
 its prompt rather than a pointer to it, are in the file and in the report.
 
-Verified: all 9 agent definitions parse with `name` matching the file stem;
+Verified: all 10 agent definitions parse with `name` matching the file stem;
 `tools/check_language.py` → `OK  270 files, all English`; `tools.check --fast` →
 `OK  all 18 guards passed`.
 
@@ -917,10 +917,70 @@ same guards run. What changes is only how much of a failure's own output survive
 | Run | Output |
 |---|---|
 | default | `FAIL 1 guard(s) did not pass: language` + the hint, as before |
-| `--verbose` | the same, then the guard's full output: `conventions.md:292  计划` under `language -- python tools/check_language.py` |
+| `--verbose` | the same, then the guard's full output — the planted line's file and number, and the offending characters — under `language -- python tools/check_language.py` |
 | `CI=true`, no flag | identical to `--verbose` — which is what GitHub now gets |
 | restored, `CI=true` | `OK  all 18 guards passed` — a green run is unchanged |
 
 The failing test's identity is still unknown at this point; the full suite is running
 locally, and this push makes the next CI run name it either way.
+
+**And the guard caught me doing it.** Recording that run quoted the planted characters into
+this file, so `check_language` went red on the branch tip — the language guard failing on the
+write-up of its own reverse verification. Two things it shows, both worth more than the
+embarrassment:
+
+- **The reverse test of a *language* guard cannot be recorded verbatim.** Every other guard's
+  planted error can be quoted in prose; this one's planted error *is* prose, so the record
+  has to describe it instead. The entry above now does.
+- **The pre-commit hook would have caught it, and is deliberately not enabled.** 2.2 built it
+  and left `core.hooksPath` unset for the human, which is right — but it means four commits
+  were made after building the thing that would have stopped this one. CI would have caught
+  it on the next push; a merge before that would not have.
+
+Found by `reviewer` in 7.2, not by me.
+
+### 7.2 `reviewer` on the branch — DONE, nine findings, all fixed
+
+**How it was run.** The ten agents created tonight are **not registered in this session** —
+Claude Code loads `.claude/agents/` at session start, and these were written mid-session.
+So each was run as a general-purpose agent **told to read and follow its own definition
+file**. That exercises the thing written tonight (the instructions) and not the frontmatter's
+tool restriction, which was verified separately by the 79 hook cases in Phase 4. Recorded
+rather than glossed: a fresh session is what will actually load these, and nothing here
+proves that happens. It is in the report under "For the human to do".
+
+It scoped itself correctly without being told: `main` is a month behind `backend`, so
+`git diff main...HEAD` is 77 commits; it reviewed the night's 20, and read
+`tools/pdf_to_md.py` rather than the 1,822 transcribed lines.
+
+**What it confirmed held** — each checked, not assumed: no `backtest/**.py` touched at all
+(the only file under `backtest/` is the new `CLAUDE.md`); no baseline artefact touched, no
+`skip`/`xfail` added, the `GUARDS` tuple unchanged; `check_docs` **strictly stricter**, now
+running 5 blocks where it ran 4; every commit's file set matching its own message; and the
+reverse verifications real, re-driven by hand. It also sampled the cited line numbers
+(`slots.py:123`, `loop.py:361`, `sdk.py:596`, `runner.py:52`, `bench.js:563/576/893`) and
+found them accurate.
+
+**Nine findings. All nine fixed.**
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | **`check_language` was red on the branch tip.** Recording the language guard's own reverse test had quoted the planted characters into this file | the entry describes the planted line instead of quoting it |
+| 2 | **`CLAUDE.md` overclaimed: "a hook enforces it".** The hook watches `Write`/`Edit`, not `Bash` — a `sed -i` crosses the line untouched, and the gap was disclosed for the read-only agents but not for the builders | `CLAUDE.md` now says the hook "removes the easy way, not every way", and the new `conventions.md` row says it in the "what it catches" column |
+| 3 | **"`run` is 573 lines" — it is 727.** Copied from the plan's section 8, already wrong when the night began | both files now say "over 700 lines", and `backtest/CLAUDE.md` adds *measure it before quoting a number, because this one has already been wrong in two documents* |
+| 4 | **The scout prompt's hand-copied component list dropped `(7) hedge`** and promoted the `2b` sub-step to a component. A second definition of `COMPONENTS`, in a file that by design cannot point back here, filtering relevance — portfolio-level items would have been dropped weekly with no trace | rewritten from `COMPONENTS`, all seven plus 2b named as a sub-step |
+| 5 | **Four pointers to two files that did not exist**, one of them `research-analyst`'s unhedged *read first* | `docs/research/plan.md` now exists (7.4); `research-analyst` is told to **stop** if it is missing, because choosing the question itself is `research-lead`'s job. The report link resolves when Phase 8 writes it |
+| 6 | **`conventions.md` said "Three of them"** — `restrict_paths.py` is a fourth guard outside `tools.check` and had no row. **The one step of the project's own five-step procedure that was skipped** | row added, with its failure, its `Bash` limitation, and why it sits outside (it has to run *as one particular agent*) |
+| 7 | **Hand-written counts in `app/CLAUDE.md`** — "25 modules and 105 exported names", "29 cases over 18 modules". Correct today; and this same file had already needed a count repaired hours earlier | replaced by naming the command that prints them |
+| 8 | **The backlog entry template written out in two files, already drifted** on the day — `backlog.md` carried a `Debated:` field the README did not | the shape lives in `README.md` only; `backlog.md` says so and says why |
+| 9 | Small: "9 agent definitions" (10); `/benchmark` listed under Skills when it is a workflow; a typo in a commit message | first two fixed. The typo is in `a21b971`'s message and stays — history is not rewritten here, and a branch rewritten to fix a typo is worse than the typo |
+
+Two things it raised **for a person, not as findings**, which go to the report:
+`interface-dev` owns `app/` only, so the agent that can break `tests/test_components.py`
+cannot fix it; and `tools/` is owned by no agent, which is fine only while `/new-guard` runs
+from the main session, as it is written to.
+
+Verified after the fixes: `tools.check --fast` → `OK  all 18 guards passed`;
+`check_language` → `OK  278 files, all English`; every markdown link in every document
+resolves except `docs/plans/README.md → agent-setup-report.md`, which Phase 8 writes.
 
