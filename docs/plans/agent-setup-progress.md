@@ -61,7 +61,12 @@ reading the test, not by trusting the green. See 1.1.
 **Note for every later item: the full check costs ~14 minutes**, 803s of it the test suite.
 So `--fast` runs during the work and the full run at the end, as the plan's 0.3 requires.
 
-### 0.3 Plan and progress file committed — PENDING
+### 0.3 Plan and progress file committed — DONE
+
+`115ad6b`, the branch's first commit: `docs/plans/agent-architecture-setup.md` (moved out of `Plan/`, where it would have been read as a fourth architecture
+document) and this file. Pushed with `git push -u origin setup/agent-architecture`,
+which is the off-machine copy rule 2 requires. Every later item was committed and
+pushed the same way, so no push ever failed and none had to be retried.
 
 ---
 
@@ -215,6 +220,67 @@ which reads as a broken project rather than an unsupported interpreter.
 
 Verified: `tomllib` parses the file and reports `>=3.11,<3.13` with the two pins unchanged;
 `tools.check --fast` → `OK  all 18 guards passed`.
+
+**Phase 1 — DONE.** All five items; `tools.check --fast` green throughout.
+
+---
+
+## Phase 2 — Guardrails for what was left to discipline
+
+### 2.1 A hook that refuses a broad `git add` — DONE
+
+**This section was lost once and is reconstructed.** The heredoc carrying it was the command
+the new hook wrongly refused (see below), and when the command was re-run only the addendum
+was re-sent. Noticed at the end, when the phase markers were counted — which is the argument
+for counting them rather than trusting that each append landed.
+
+Format checked against the current Claude Code documentation first (via the
+`claude-code-guide` subagent, which read `code.claude.com/docs/en/hooks.md`): a
+`PreToolUse` entry with `matcher` and a `command` hook; the script receives
+`{session_id, tool_name, tool_input: {command}, cwd, hook_event_name, permission_mode}` on
+stdin; **exit 2 blocks and stderr becomes the reason** shown to the caller;
+`$CLAUDE_PROJECT_DIR` is available.
+
+Files: `tools/hooks/refuse_broad_git_add.py` (new, executable, standard library only),
+`.claude/settings.json` (new), `tests/test_git_add_hook.py` (new).
+
+What it refuses: `-A`, `--all`, `-u`, `--update`, `.`, `./`, `:/` and `:/path`, a pathspec
+that is a directory, and bundled short flags (`-vA`). It splits the line on `&&`, `||`,
+`;`, `|` and newlines, so `python -m tools.check && git add -A && git commit` is caught at
+the middle segment, and it skips the global options between `git` and `add`, so
+`git -C path add -A` is caught too.
+
+What it deliberately allows, and why — **this list is longer than the refused one on
+purpose**: a hook that refuses what it should not gets switched off, and then nothing is
+checked at all.
+
+- `--dry-run` / `-n`, `-p` / `--patch`, `-i` / `--interactive`: nothing is staged, or a
+  human picks each hunk.
+- `--no-all` / `--ignore-removal`, which cancel `-A` / `-u`.
+- a pathspec that does not exist on disk — an unexpanded glob, or a deleted file being
+  staged. Git's own error is clearer than a guess from here.
+- anything that is not a `git add` at all, including `echo 'git add -A'`.
+
+**It fails open on its own bugs, on purpose.** Malformed JSON, a missing `tool_input`, an
+unreadable path, an unexpected exception — all exit 0 with a note on stderr. A hook that
+failed closed on its own bug would block every command in the repository, which is a worse
+failure than the one it guards.
+
+*Verified in reverse*, and the verification is kept rather than written up once: it is
+`tests/test_git_add_hook.py`, driven through the real interface — a JSON payload on stdin,
+an exit code out — because testing the parser function directly would skip the two places
+this has to be right (reading `tool_input.command`, and exiting 2 not 1).
+
+- 17 refused forms → exit 2, each also asserted to carry a reason, the allowed form, and a
+  pointer to `conventions.md`; 15 allowed forms → exit 0; 9 malformed inputs → exit 0.
+- Live, through the shebang as the hook invokes it:
+  `echo '{"tool_name":"Bash","tool_input":{"command":"git add -A"},"cwd":"..."}' | ./tools/hooks/refuse_broad_git_add.py`
+  → exit 2, printing the refusal and the three-line form that is allowed.
+
+**The project's own guards were not exempted, and one of them caught this work.** With the
+three new files written but untracked, `tools.check --fast` went red on `shipped` —
+"these files exist locally and not in git" — which is the guard behaving exactly as its
+docstring says. Fixed by tracking them, not by listing them anywhere.
 
 **A false positive, found by the hook refusing its own first real use.** Worth recording in
 full, because it is the failure the hook's own docstring warns about.
