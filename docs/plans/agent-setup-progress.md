@@ -280,3 +280,26 @@ requires; the human enables it:
 
 `CLAUDE.md` gets the one-line enablement instruction in 2.4.
 
+### 2.3 Continuous integration on a clean clone — DONE, first run checked on GitHub
+
+File: `.github/workflows/check.yml` (new). On `push` and `pull_request`: checkout,
+Python 3.11, `pip install -e ".[dev]"`, `python -m tools.check`, `timeout-minutes: 60`.
+
+**The full check, not `--fast`.** The pre-commit hook runs `--fast` for speed; this is the
+run with no excuse to skip anything, and it is the only thing that answers "does this work
+for anyone but me". Both failures it would have caught are named in the file's header: the
+unpublished `backtest/research/` package, invisible locally by construction, and the moved
+`bench.js`, which failed from the first clean clone rather than at the commit that caused
+it.
+
+Python 3.11 rather than the newest, for two reasons: the pins cap the project at `<3.13`
+(item 1.5), and the floor of a supported range is the more useful end to test.
+
+Verified before committing, since the workflow cannot run from here:
+
+- The YAML parses: `yaml.safe_load` returns the four steps, `runs-on: ubuntu-latest`,
+  `timeout-minutes: 60`, triggers `push` and `pull_request`.
+- `pip install -e ".[dev]" --dry-run` resolves every pin against Python 3.11 →
+  `Would install backtest-0.1.0`. Run as a dry run so it did not touch the environment.
+- `python -m tools.check` already verified in 0.2: all 20 guards OK.
+

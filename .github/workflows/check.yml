@@ -1,0 +1,51 @@
+# The guards, on a clean clone.
+#
+# Why this exists: every guard in this repository runs against the working tree of the
+# machine that writes the code, and two of the failures this project has actually had are
+# invisible there by construction.
+#
+#   - `backtest/research/` was excluded by a .gitignore rule without a leading slash. Six
+#     modules were never published while their tests were. Locally everything passed and
+#     `git status` was clean; only a clone on another machine showed it.
+#   - `app/static/bench.js` moved during the interface rebuild and a test still read it.
+#     That one does fail locally — but it failed from the first clean clone, which is
+#     where it was eventually found, rather than at the commit that caused it.
+#
+# A checkout into an empty directory is the only thing that answers "does this work for
+# anyone but me". So this runs the **full** check, not --fast: the pre-commit hook runs
+# --fast for speed, and this is the run that has no excuse to skip anything.
+#
+# It cannot be run from a developer machine. What was verified before committing it: the
+# YAML parses, and every command in it succeeds locally.
+
+name: guards
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # The full run is about fourteen minutes here, 800 seconds of it the test suite. Sixty
+    # gives room for a slower runner without letting a hung job burn an hour unnoticed.
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # 3.11 rather than the newest: numpy 1.26.4 and pandas 2.1.4 are pinned and publish
+      # no wheels for 3.13, which is why pyproject.toml caps requires-python at <3.13.
+      # Testing the floor of the supported range is also the more useful of the two ends.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the project and its development dependencies
+        run: pip install -e ".[dev]"
+
+      # No --fast. This is the run that would have caught both failures above.
+      - name: Run every guard
+        run: python -m tools.check
