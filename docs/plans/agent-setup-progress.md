@@ -303,3 +303,35 @@ Verified before committing, since the workflow cannot run from here:
   `Would install backtest-0.1.0`. Run as a dry run so it did not touch the environment.
 - `python -m tools.check` already verified in 0.2: all 20 guards OK.
 
+### 2.4 `CLAUDE.md` and `conventions.md` updated — DONE
+
+Files: `conventions.md`, `CLAUDE.md`.
+
+**"No tool checks this" replaced with what now checks it, carefully.** The claim was
+half true and the half that is still true matters: a guard cannot know which session wrote
+which line, and nothing can. So both files now say that the *broad commands* are refused
+and that **reading the staged list is still the rule**. Replacing the whole sentence with
+"a tool checks it now" would have been the more dangerous error — conventions.md's own
+line is that pretending a line is guarded is worse than admitting it is not.
+
+**A new section in `conventions.md`: "The guards that are not part of `tools.check`."** The
+three new ones are not rows in the fixed-check table, because that table is specifically
+what `python -m tools.check` runs, and none of these is. They get their own table with the
+same columns, plus the reason each sits outside: the Claude Code hook has to run **before**
+a command, the pre-commit hook **at** the commit, and CI **somewhere else** — on a checkout
+into an empty directory. `tools.check` can do none of the three, and the two that wrap it
+call it rather than duplicate it.
+
+**The worktree workflow** is in `CLAUDE.md`: `git worktree add ../bench-engine -b
+engine/<topic>` per builder, each running its own guards in its own tree, and the main
+session merging **only after the full check passes on the merge result** — not on either
+branch alone, because the front/back contract is what a merge breaks and neither side can
+see that alone. A shared tree is what makes the broad-`git add` mistake possible at all;
+the hook is for the case where sessions still share one, which is the ordinary case.
+
+**The pre-commit enablement line** is in `CLAUDE.md` as a command for the human to run:
+`git config core.hooksPath tools/githooks`. Not run by this session (2.2).
+
+`CLAUDE.md` is 89 lines, under the 100 the plan asks for; 3.4 adds the agent roster to it
+once the agents exist. Verified: `tools.check --fast` → `OK  all 18 guards passed`.
+

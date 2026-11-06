@@ -22,7 +22,27 @@ git — but the history then says things that are not true, and the history is t
 account of why anything was done. If a file you did not write is staged,
 `git restore --staged <path>` and leave it for whoever wrote it.
 
-No tool can check this. It costs one command to read the staged list.
+**Those two commands are now refused**, by `tools/hooks/refuse_broad_git_add.py` — a
+`PreToolUse` hook on Bash, registered in `.claude/settings.json`. It blocks `-A`, `--all`,
+`-u`, `.`, `:/` and any pathspec that is a directory, and allows explicit paths,
+`--dry-run` and `-p`. What it cannot check is whether the files you named are yours: no
+tool can. **Reading the staged list still costs one command, and is still the rule.**
+
+## Each builder in its own worktree
+
+A shared working tree is what makes the mistake above possible at all. When two agents
+work at once, give each its own worktree and branch, so neither can see the other's
+half-finished files:
+
+```bash
+git worktree add ../bench-engine    -b engine/<topic>     # the engine session
+git worktree add ../bench-interface -b interface/<topic>   # the interface session
+```
+
+Each runs its own guards in its own tree. **The main session merges, and only after the
+full `tools.check` passes** on the merge result — not on either branch separately, because
+the front/back contract is the thing a merge can break and neither side can see alone.
+`git worktree remove ../bench-engine` when it is done.
 
 ## Before committing
 
@@ -32,6 +52,17 @@ python -m tools.status         # the project's state, computed rather than writt
 ```
 
 **Any failure means no commit.** If a guard really could be ignored, change the guard.
+
+Enable the pre-commit hook once, per clone, so that rule is held by the commit rather than
+by memory:
+
+```bash
+git config core.hooksPath tools/githooks
+```
+
+It runs `tools.check --fast` and refuses on failure. The full check still has to be run
+before pushing; `.github/workflows/check.yml` runs it on a clean clone on every push, which
+is the only place a missing-from-git failure can show up at all.
 
 Use a Python with the dependencies — `/opt/anaconda3/bin/python`. The `.venv` has no pandas.
 

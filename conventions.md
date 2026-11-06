@@ -244,8 +244,46 @@ git push
 sneakier of them: `tools/` looks specific and is not. If a file you did not write is already
 staged, `git restore --staged <path>` puts it back; leave it for whoever wrote it.
 
-**No tool checks this.** A guard cannot know which session wrote which line — it rests on
-reading the staged list before committing, which costs one command.
+**The broad forms are now refused rather than remembered.** A guard still cannot know
+which session wrote which line — nothing can — so the part that rests on a person is
+unchanged: **read the staged list before committing.** What a tool *can* do is refuse the
+two commands that make the mistake possible, and
+[`tools/hooks/refuse_broad_git_add.py`](tools/hooks/refuse_broad_git_add.py) does:
+`git add -A`, `--all`, `-u`, `.`, `:/`, and any pathspec that is a directory. It allows
+explicit file paths, `--dry-run`, `-p`, and a pathspec that does not exist on disk, and it
+fails open on its own bugs — a hook that blocked every command in the repository because
+of a bug in itself would be worse than the mistake it guards.
+
+Each builder working in **its own worktree and branch** removes the shared tree that makes
+this possible at all; see the worktree workflow in [CLAUDE.md](CLAUDE.md). The hook is for
+the case where sessions do share a tree, which is still the ordinary case.
 
 Write **why** in the commit message, not only what changed. What you will want to know in
 six months is why it was decided this way, not what the diff already shows.
+
+---
+
+## The guards that are not part of `tools.check`
+
+Three of them, each outside the fixed check because of *when* it has to run rather than
+what it reads. Same bar as any other guard: a concrete failure first, then the check,
+verified in reverse.
+
+| Guard | What it catches | The failure it answers to |
+|---|---|---|
+| [`tools/hooks/refuse_broad_git_add.py`](tools/hooks/refuse_broad_git_add.py) · a Claude Code `PreToolUse` hook on Bash, registered in `.claude/settings.json` | a `git add` whose pathspec names more than the caller chose: `-A`, `--all`, `-u`, `.`, `:/`, a directory | `git add -A` swept a half-finished interface rebuild into a commit about component state; `git add tools/` committed another session's 469-line guard under a message about CSS tokens. The history then says things that are not true, and the history is the only account of why anything was done |
+| [`tools/githooks/pre-commit`](tools/githooks/pre-commit) · enabled per clone with `git config core.hooksPath tools/githooks` | a commit made while a guard is red. Runs `tools.check --fast` and refuses on failure | "any failure means no commit" was held by whoever remembered to run the guards. That is the state the first line of this file calls a wish — and this project has the evidence: three guards in `tools/check.py` were written and never registered there, so they ran only when someone thought of them |
+| [`.github/workflows/check.yml`](.github/workflows/check.yml) · the **full** check on every push and pull request | anything that only fails on a clean clone | `backtest/research/` was excluded by a `.gitignore` rule missing its leading slash: six modules unpublished, their tests pushed, every local guard green and `git status` clean. Only a clone on another machine shows that class of failure |
+
+Why each is outside `tools.check` rather than in it: the first has to run **before** a
+command, which no checker invoked afterwards can do; the second has to run **at** the
+commit; the third has to run **somewhere else**, on a checkout into an empty directory.
+`tools.check` itself cannot do any of the three, and the two that wrap it call it rather
+than duplicate it.
+
+Both hooks are verified in reverse. The `git add` one keeps its verification as a test —
+`tests/test_git_add_hook.py`, 69 cases driven through the real interface, a JSON payload on
+stdin and an exit code out — because the forms it must refuse are a list, and a list
+belongs where it is re-run. It earned that: it refused its own first real use, reading a
+`git add -A` quoted inside a commit message's here-document as a command. A here-document
+body is data, and the documents here quote that form on nearly every page about committing.
