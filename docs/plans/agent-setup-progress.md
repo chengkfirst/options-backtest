@@ -788,3 +788,58 @@ Verified: all five parse, `name` matches the directory, no unknown frontmatter f
 confirms the format from the outside; `tools/check_language.py` → `OK  275 files, all
 English`; `tools.check --fast` → `OK  all 18 guards passed`.
 
+---
+
+## Phase 3.4 — the root `CLAUDE.md` (done after Phase 5, deliberately)
+
+**Why out of order.** 3.4's content is the agent roster, and a roster written before the
+agents exist is a table of pointers to files that are not there — which is the exact thing
+Phase 1.3 spent its time removing. Written once Phases 4 and 5 had produced the ten
+definitions and the six skills.
+
+`CLAUDE.md`, **100 lines** (the plan's cap), rewritten to hold: what the project is in three
+lines · read `conventions.md` first, with the three area files · **the agent roster, one
+line per agent with when to use it**, plus the six skills · the commit rule and the hook
+that now refuses the two broad forms · the worktree workflow · where each kind of document
+goes · the guards and the pre-commit enablement · the two rules that catch the most · how to
+run the interface.
+
+**The roster was checked against the filesystem rather than written from memory**: all 10
+agent definitions on disk are named, none missing; all 6 skills named, none named that does
+not exist, none on disk left out. Every `` `path.ext` `` in the file tested against the
+filesystem — the only unresolved one was `docs/research/plan.md`, created in 7.4.
+
+**`docs/ideas/backlog.md` created** rather than left as a dangling pointer, shaped the same
+way as `docs/radar/seen.md`: its purpose, the entry shape so the first entry does not have
+to invent it, and a line saying why it is empty — `/explore` has not run, and its two
+inputs do not exist yet either (the feedback is the human's to write, the radar needs the
+scheduled task).
+
+Verified: `tools.check --fast` → `OK  all 18 guards passed`.
+
+### 2.3 follow-up: **the CI workflow is green on a clean clone**
+
+`gh run view 42177670988 --log`:
+
+```
+  OK   dependencies    0.1s     OK   self-test       0.0s
+  OK   shipped         0.0s     OK   modules         0.3s
+  OK   language        0.1s     OK   baseline       13.1s
+  OK   defaults        0.7s     OK   test suite   1239.1s
+  OK   plan            0.0s     OK   plan parts      0.9s
+  OK   coverage map    1.2s     OK   plan details    0.9s
+  OK   labels          1.6s     OK   doc claims      0.0s
+  OK   components      0.9s     OK   doc examples   29.1s
+  OK   wiring          3.4s
+  OK   contrast        0.0s
+  OK   words           0.0s
+  OK   evidence        0.0s
+OK  all 20 guards passed
+```
+
+So the workflow is not merely valid YAML: **all 20 guards pass from a checkout into an empty
+directory**, with `pip install -e ".[dev]"` on Python 3.11 and no `.cache/` — which also
+answers the question the file could not answer locally, whether the test suite runs offline
+on a clean machine. It does. The suite takes 1239s there against 803s locally, which is why
+the timeout is 60 minutes.
+
