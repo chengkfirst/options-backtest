@@ -446,3 +446,86 @@ not edit `backtest/` and routes a missing field the same way.
 
 Verified: `tools.check --fast` → `OK  all 18 guards passed`.
 
+**Phase 3 — 3.1, 3.2, 3.3 DONE. 3.4 deferred to after Phase 5**, deliberately: its content
+is the agent roster, and a roster written before the agents exist is a table of pointers to
+files that are not there — which is exactly what Phase 1.3 spent its time removing.
+
+---
+
+## Phase 4 — Builder and checker agents
+
+Frontmatter fields checked against the current documentation first (`sub-agents.md`):
+`name`, `description`, `tools`, `model`, and **`hooks` is supported per agent** and runs
+only while that agent is active. So the plan's conditional applies: the builders' edits are
+restricted by a hook, not only by their instructions.
+
+### A path-restriction hook, first — DONE
+
+`tools/hooks/restrict_paths.py` (new, executable, standard library only) plus
+`tests/test_restrict_paths_hook.py` (new, 79 cases).
+
+Why a hook and not instructions alone: "I will not edit that directory" is a promise about
+every future turn; a hook is a fact about each one. The failure it prevents is an engine
+change that needs one field in the composer, with the agent right there — it reaches across,
+nothing raises, and the two sides then move in one commit by one agent. The guards would
+still catch a contract *mismatch*; they cannot catch the organisational arrangement that
+makes a mismatch likely.
+
+`--allow PREFIX` (repeatable) and `--block PREFIX` (repeatable, takes precedence, for
+carving a subpackage out of an owned one). **Matched by path components, not string
+prefix** — `--allow app` must not allow `application/x.py`, and a `startswith` check would,
+invisibly, until something had been written to the wrong tree. Outside the project
+directory is always refused. With no `--allow` at all it stands aside, since an agent that
+declares no ownership is not one this is meant to constrain. Fails open on its own bugs, as
+in 2.1: a hook that stopped its agent working entirely would be worse than the mistake.
+
+### 4.1–4.6 The six definitions — DONE
+
+| Agent | Tools | Owns (hook-enforced) |
+|---|---|---|
+| `engine-dev` | Read, Grep, Glob, Bash, Write, Edit, NotebookEdit, TodoWrite | `backtest`, `tests`, **not** `backtest/research` |
+| `interface-dev` | same, less NotebookEdit | `app` |
+| `reviewer` | Read, Grep, Glob, Bash | nothing — **no writing tool at all** |
+| `quant-auditor` | Read, Grep, Glob, Bash | nothing — **no writing tool at all** |
+| `doc-keeper` | + Write, Edit | the documents, **not** code, **not** the three generated transcriptions, **not** `docs/feedback` |
+| `research-analyst` | + Write, Edit, NotebookEdit | `docs/findings`, `docs/specs`, `research` |
+
+Each body states, as the plan requires: its purpose, what it may change, what it must not,
+what it reads first and in what order, its output and where it goes, and **when it stops
+and reports instead of continuing**. Each "must not" names the failure behind it rather
+than just forbidding — `engine-dev` is told that reaching into `app/` is how two sides move
+in one commit, not merely that it is out of bounds.
+
+Three choices worth recording:
+
+- **`reviewer` and `quant-auditor` are read-only by having no writing tool**, rather than by
+  being asked not to write. They keep `Bash`, which they need (`git diff`, `git show`,
+  running a backtest to settle a question) — and `Bash` **cannot** be made read-only by the
+  `tools` field, so a determined write through the shell is still possible. Stated here and
+  in the report rather than papered over; their bodies say explicitly not to.
+- **`doc-keeper` is blocked from the three transcriptions.** A disagreement between
+  `docs/architecture.md` and the code is not rot: it is either work not yet done, which
+  belongs in `requirements.md`, or a deliberate deviation, which belongs in
+  `conventions.md`. And an edit there would be undone by the next regeneration with nothing
+  raising.
+- **`doc-keeper` is blocked from `docs/feedback/`.** It records what happened in real use.
+  Nothing here can correct a person's account of their own experience.
+
+*Verified in reverse, from the definitions themselves.* The test class
+`TestTheAgentsDeclareWhatTheyOwn` reads each `.claude/agents/<name>.md`'s own frontmatter,
+extracts the hook's argv, and drives the hook with it — rather than restating the
+allow-lists, which would be "one fact defined in two places" applied to the thing meant to
+guard against it. 25 boundary cases, both directions, plus an assertion that `reviewer` and
+`quant-auditor` have **no** writing tool, so that adding `Write` to one later makes a test
+fail rather than quietly making it an agent that fixes what it finds.
+
+- `pytest tests/test_restrict_paths_hook.py -q` → **79 passed**.
+- Ad-hoc run over all four hooked agents, 45 cases read from their real frontmatter:
+  every one as expected — `engine-dev` refused `app/runner.py` and
+  `backtest/research/metrics.py` but allowed `backtest/research_notes.py`;
+  `interface-dev` refused `backtest/core/slots.py`; `research-analyst` refused every
+  platform path and `docs/research/plan.md`; `doc-keeper` refused all code and all three
+  transcriptions.
+- `tools.check --fast` went red on `shipped` with the files untracked — the guard working,
+  for the second time tonight — and green once they were tracked.
+
