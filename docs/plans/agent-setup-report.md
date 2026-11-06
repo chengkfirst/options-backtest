@@ -53,13 +53,16 @@ language guard once, and the reviewer nine times.
 | evidence | OK | OK |
 | self-test | OK | OK |
 | modules | OK | OK |
-| baseline | OK · 9.4s | OK |
-| test suite | OK · 802.9s · 1410 tests | OK · 1489 tests |
+| baseline | OK · 9.4s | OK · 9.1s |
+| test suite | OK · 802.9s · 1410 tests | OK · 797.9s · **1489 tests** |
 | plan parts | OK | OK |
 | plan details | OK | OK |
 | doc claims | OK | OK |
-| doc examples | OK · 19.1s · 4 blocks | OK · **5 blocks** |
+| doc examples | OK · 19.1s · 4 blocks | OK · 19.6s · **5 blocks** |
 | **total** | **all 20 passed** | **all 20 passed** |
+
+Both runs are the full `/opt/anaconda3/bin/python -m tools.check`, not `--fast`. The final
+one was made after the last commit, on a clean tree.
 
 **The plan's premise about the starting state was wrong, and it mattered.** It expected the
 `components` guard to be red on a clean clone; all 20 were green. That is why every item was

@@ -1163,3 +1163,42 @@ The loop is worth naming: CI caught a failure, could not describe it, the descri
 fixed, and the next run named the test. The guard that found the problem was the one that
 had to be repaired to report it.
 
+### 7.6 The full check, after the last commit — DONE
+
+`/opt/anaconda3/bin/python -m tools.check` on a clean tree:
+
+```
+  OK   dependencies    0.1s        OK   self-test       0.0s
+  OK   shipped         0.0s        OK   modules         0.3s
+  OK   language        0.3s        OK   baseline        9.1s
+  OK   defaults        0.5s        OK   test suite    797.9s
+  OK   plan            0.0s        OK   plan parts      1.2s
+  OK   coverage map    1.3s        OK   plan details    1.9s
+  OK   labels          1.8s        OK   doc claims      0.0s
+  OK   components      1.2s        OK   doc examples   19.6s
+  OK   wiring          2.0s
+  OK   contrast        0.0s
+  OK   words           0.0s
+  OK   evidence        0.0s
+
+OK  all 20 guards passed
+```
+
+**All 20, the same as Phase 0** — with the baseline unchanged, which is the one that says
+no engine behaviour moved. The suite is 1489 tests against 1410 at the start; the 79 are
+the path-restriction hook's reverse verification. `doc examples` runs 5 blocks where it ran
+4, the fifth being the one the loophole had always skipped.
+
+---
+
+## Phase 8 — The report
+
+`docs/plans/agent-setup-report.md`, the eight sections the plan specifies. Written after
+7.5 so that `doc-keeper`'s corrections and the named CI failure were both in it, and
+updated once with the final run's numbers.
+
+**Phases 0 through 8: DONE. Nothing BLOCKED.** Three items were deliberately not performed
+because the plan assigns them to a person — enabling `core.hooksPath`, creating the scout
+scheduled task, and running `/benchmark` — and each is in the report's section 7 with the
+exact command.
+
