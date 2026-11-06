@@ -71,3 +71,58 @@ threaded, the partial-clone flags, the per-repository path, no `Date.now`/`Math.
 filesystem access, only documented runtime hooks, every `agent()` labelled, and the
 never-execute rule still in two prompts.
 
+---
+
+## Phase 2 — The radar digest, by hand — 2.1 DONE, 2.2 taken as the digest's own list
+
+**2.1 — DONE.** `.claude/scheduled/scout.md` run once in this session; no scheduled task
+created, no pull request. `docs/radar/2026-W45.md` (five items, with the `Dropped` section
+and both handoff lists) and five lines appended to `docs/radar/seen.md`. Dropped items were
+deliberately **not** appended, as the prompt requires, so a thing dropped for being early can
+be reported later.
+
+The two focus areas were covered, and the options-data one produced the most useful thing in
+the digest. Summarised here because it changes what Phase 3 should look at and what the
+discussion brief will have to ask:
+
+- **The adapter is already aimed at a format that exists.** HistoricalData.net ships one row
+  per contract per day with 34 columns, and five renames (`quote_date`, `underlying`,
+  `expiration`, `type`, `underlying_close`) line it up with `SCHEMA`; `bid`, `ask`, `volume`,
+  `open_interest`, `iv` and the greeks already match by name. The "three steps to bring your
+  own data" design in `adapters.py` was not hypothetical.
+- **The cheapest option is not the cheapest.** ORATS at $599 is deeper (2007) but puts a call
+  and a put on **one row** with no `right` column, which `column_map` cannot express, and its
+  underlying is reverse-engineered from put-call parity rather than the traded price the
+  schema asks for — so moneyness computed from it is not the quantity a reader of the
+  configuration thinks it is.
+- **Nobody sells a historical `available_at`.** Every real backtest will therefore carry the
+  adapter's "assumed equal to `asof`, and recorded as an assumption" flag. That vindicates the
+  fallback design and means the flag belongs on screen rather than in a log.
+
+**The finding worth the whole digest**, and it is not about cost: **both vendors that publish
+a snapshot time take it before the close** — ORATS at 15:46 ET, 14 minutes early, with the
+stated reason that option quote quality degrades into the close; Cboe ships both 15:45 and
+true-close columns.
+
+That bites directly on *T's close decides, T+1's close fills*, and **not in the conservative
+direction**. The chain carries its own `underlying_price`, the spot at the moment of the
+snapshot. If a regime signal is computed from T's close and the contract is then selected
+from a chain priced fourteen minutes earlier, contract selection (2b) is picking a delta
+against greeks and a spot that predate the information the decision used. Criterion 1.20
+("signal and fill never share a quote") is satisfied; the **reverse** defect — a quote
+strictly *earlier* than its signal — has no guard. On a day that moves in the last quarter
+hour, the backtest selects and prices on a chain that no longer existed at the decision.
+
+Recorded as an input to `/explore` by the digest, and it belongs in the discussion brief as a
+decision: pick one spot as authoritative and check it, or carry both and make the
+configuration say which. Cboe is the only vendor that could turn this into a sensitivity test
+rather than an argument, which is part of what its price buys.
+
+**2.2 — taken as the digest's own "candidates for /benchmark" list**, rather than a separate
+selection. The reading, stated as 0.1 requires: the plan asks for at most four further
+repositories chosen on the criterion "would teach us something on at least two of the eight
+dimensions", and the digest's handoff list is exactly that judgement made by the agent that
+had just read them. Duplicating the choice would have been a second, worse-informed pass.
+
+Verified: `tools/check_language.py` → `OK  286 files, all English`.
+
