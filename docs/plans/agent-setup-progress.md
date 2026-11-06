@@ -202,3 +202,17 @@ to "Recommended next", as the plan directs. Not consolidated tonight.
 Verified: `check_shipped`, `check_contrast`, `check_modules`, `check_selftest` all pass with
 the file gone (contrast still reports its 130 pairs over two themes).
 
+### 1.5 Python version — DONE
+
+`pyproject.toml` declared `requires-python = ">=3.11"` and the README said "Python 3.11+",
+while the pinned `numpy==1.26.4` and `pandas==2.1.4` publish no wheels for 3.13. An
+open-ended declaration lets a 3.13 interpreter satisfy it and then fail at `pip install`,
+which reads as a broken project rather than an unsupported interpreter.
+
+- `pyproject.toml`: `requires-python = ">=3.11,<3.13"`, with the reason in a comment beside
+  it so the cap is not later "tidied" back open. **No pin changed.**
+- `README.md`: "Python 3.11 or 3.12. **Not 3.13**", naming which pins cause it.
+
+Verified: `tomllib` parses the file and reports `>=3.11,<3.13` with the two pins unchanged;
+`tools.check --fast` → `OK  all 18 guards passed`.
+

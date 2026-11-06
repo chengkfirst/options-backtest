@@ -17,7 +17,8 @@ months). Two uses:
 
 ## Install
 
-Python 3.11+.
+Python 3.11 or 3.12. **Not 3.13** — numpy 1.26.4 and pandas 2.1.4, which are pinned,
+publish no wheels for it, so the install fails rather than the project.
 
 ```bash
 pip install -e ".[dev]"
