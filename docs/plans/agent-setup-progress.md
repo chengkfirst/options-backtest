@@ -170,3 +170,35 @@ which is the thing that once excluded the whole code package while `git status` 
 Verified: `tools.check --fast` → `OK  all 18 guards passed`. The `doc claims` guard, which
 reads documents against code, is among them.
 
+### 1.4 Orphaned stylesheet — DONE, with a finding the plan did not expect
+
+Confirmed unreferenced by a repository-wide search: no `<link>` in `index.html`,
+`states.html` or `selftest.html` resolves to it (they link `bench.css` at the static root,
+which is a **different, live** 444-line file), there is no `@import` anywhere in
+`app/static/`, and no module names it. `app/static/css/bench.css` was 42 lines and five
+rules. Deleted.
+
+**But it was not dead code, and that is worth recording.** Its five rules split in two:
+
+- `.variant-lead`, `.variant-pick`, `.variant-why` — genuinely dead. They styled a
+  `<select>`-based picker; `variantPicker()` (`app/static/js/views/bench.js:563`) now emits
+  radio options with the classes `.rule-opt` / `.rule-name` / `.rule-why` / `.rule-tag`,
+  which **are** styled, in the linked `app/static/bench.css`.
+- `.variant` and `.variant .fields` — **live markup, never loaded.** `bench.js:576` emits
+  `<div class="variant" data-slot=…>`, and `variantParams()` puts `<div class="fields">`
+  inside it. No linked stylesheet styles either, here or anywhere.
+
+So deleting is a **strict no-op on what renders**: the file was never served, so the two
+live rules have never applied, and the variant picker has been rendering without its
+container box (the `--surface-2` ground, padding and radius that visually group a slot's
+candidate forms) for as long as the file has existed. Putting them back would be a visual
+change, which tonight's scope excludes and which belongs in a review in `states.html`. It
+goes to the report under "Found, not fixed"; the picker is looked at in the browser in 7.1.
+
+The half-finished migration itself — `app.css` and `bench.css` at the static root beside a
+`css/` directory, which is how a second `bench.css` came to exist and be forgotten — goes
+to "Recommended next", as the plan directs. Not consolidated tonight.
+
+Verified: `check_shipped`, `check_contrast`, `check_modules`, `check_selftest` all pass with
+the file gone (contrast still reports its 130 pairs over two themes).
+
