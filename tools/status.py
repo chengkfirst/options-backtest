@@ -102,7 +102,7 @@ def _thresholds() -> list[str]:
 
 
 def _requirements() -> list[str]:
-    """Count the acceptance criteria in requirements.md.
+    """Count the acceptance criteria in docs/requirements.md.
 
     These statuses are currently **hand-written** — a known inconsistency. Deriving
     them from the code would be better, but criteria like "the interface is clear" or
@@ -122,7 +122,7 @@ def _requirements() -> list[str]:
                 break
     total = sum(counts.values())
     return [
-        f"  {total} acceptance criteria (**hand-written**, requirements.md): "
+        f"  {total} acceptance criteria (**hand-written**, docs/requirements.md): "
         f"{counts['done']} done · {counts['partial']} partial · {counts['missing']} missing",
     ]
 
@@ -155,7 +155,7 @@ def main() -> int:
     print("\n".join(_requirements()))
     print("\n[ guards ]  the constraints a tool can check")
     print("\n".join(_guards()))
-    print("\n[ next ]  see the order of work in requirements.md")
+    print("\n[ next ]  see the order of work in docs/requirements.md")
     print("=" * 62)
     return 0
 

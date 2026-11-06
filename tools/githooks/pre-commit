@@ -6,7 +6,7 @@
 # "Any failure means no commit" is the project's rule and it was held by whoever
 # remembered to run the guards first. Three of the guards in tools/check.py were written
 # and then never registered there, so a convention this project holds to was checked only
-# by whoever thought of it -- which is the state conventions.md calls a wish rather than a
+# by whoever thought of it -- which is the state docs/conventions.md calls a wish rather than a
 # convention. The same is true one level up: a rule about what must happen before a commit
 # belongs in the thing that makes the commit.
 #
@@ -76,7 +76,7 @@ Run the one that failed on its own for its full output, for example:
     /opt/anaconda3/bin/python tools/check_language.py
 
 If a guard really could be ignored, the guard itself should change -- see
-conventions.md, "The fixed check". Weakening it to get a commit through is the one
+docs/conventions.md, "The fixed check". Weakening it to get a commit through is the one
 thing this project refuses.
 
 To commit anyway: git commit --no-verify. The guard stays red, and CI will say so.

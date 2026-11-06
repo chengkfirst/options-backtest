@@ -510,7 +510,7 @@ def convert(pdf: Path, out_md: Path, source: str) -> None:
 #: A heading that carries a section designator, which is how the rest of the project
 #: refers to this document: ``tools/check_plan.py`` holds the list of sections as
 #: ``("0.1", "Events")``, ``("5.1", "Engine")``, ``("1", "Data")``, and criteria in
-#: ``requirements.md`` are numbered to match. Matches ``## Layer 5: ...`` and
+#: ``docs/requirements.md`` are numbered to match. Matches ``## Layer 5: ...`` and
 #: ``### 5.1 ...``; everything else is left alone.
 SECTION_HEADING = re.compile(r"^(#{1,6}) (?:Layer (\d+)\b|(\d+(?:\.\d+)+)(?=[\s.]))")
 
@@ -525,7 +525,7 @@ def with_anchors(text: str) -> str:
     the title as well as the number -- and a citation that has to spell the title is one
     that breaks when the title is reworded, which is the opposite of stable. It also
     cannot be written by anyone who knows only the number, which is the case for every
-    citation from code and from ``requirements.md``.
+    citation from code and from ``docs/requirements.md``.
 
     ``<a id="section-5-1"></a>`` is derivable from the number alone: section ``5.1`` is
     ``docs/architecture.md#section-5-1``, ``Layer 1`` is ``#section-1``. The numbers come
@@ -568,7 +568,8 @@ NAMES = {
 #: Where the conversions go. ``docs/originals/`` holds the PDFs, which are the
 #: originals; the
 #: Markdown is a derived document and belongs with the documents. Defaulting to ``docs``
-#: rather than ``Plan`` is what keeps regeneration landing where the committed files are
+#: rather than the directory the PDFs used to sit in is what keeps regeneration
+#: landing where the committed files are
 #: -- a generator whose default writes somewhere else produces a second copy, and then
 #: two accounts of the plan drift apart, which is what the header of each file warns of.
 DEFAULT_DST = "docs"

@@ -285,7 +285,7 @@ one and wrong from another. `tools.check` itself cannot do any of the four, and 
 that wrap it call it rather than duplicate it.
 
 All three hooks are verified in reverse, and two keep their verification as tests —
-`tests/test_git_add_hook.py` and `tests/test_restrict_paths_hook.py`, 148 cases between
+`tests/test_git_add_hook.py` and `tests/test_restrict_paths_hook.py`, 153 cases between
 them. The second reads each agent definition's **own** arguments rather than restating
 them, so changing what an agent owns is what changes the behaviour under test. The
 `git add` one —

@@ -20,7 +20,7 @@ him by proposing only safe things.
 3. `docs/ideas/backlog.md` — what has already been proposed, and what was killed and why.
    **Do not re-propose a killed direction** unless the thing that killed it has changed;
    if it has, say which and why that reopens it.
-4. `README.md` and `requirements.md` — what the platform is and what it already does. A
+4. `README.md` and `docs/requirements.md` — what the platform is and what it already does. A
    proposal for something that exists is the most common way to waste the debate.
 
 ## What a proposal has to contain

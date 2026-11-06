@@ -168,13 +168,13 @@ class TestStandsAsideRatherThanBlocking:
         """The matcher in the frontmatter names the writing tools, but a matcher widened
         later must not silently start refusing reads."""
         r = _run(ENGINE, {"tool_name": tool,
-                          "tool_input": {"file_path": "conventions.md"},
+                          "tool_input": {"file_path": "docs/conventions.md"},
                           "cwd": str(ROOT)})
         assert r.returncode == 0
 
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
     def test_every_writing_tool_is_checked(self, tool):
-        assert _edit(ENGINE, "conventions.md", tool=tool).returncode == 2
+        assert _edit(ENGINE, "docs/conventions.md", tool=tool).returncode == 2
 
 
 class TestTheAgentsDeclareWhatTheyOwn:

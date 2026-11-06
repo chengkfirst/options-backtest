@@ -18,7 +18,7 @@ that are not true, and the history is the only account of why anything was done.
 commit message that describes a third of its own diff is worse than no message: the
 next reader believes it and stops looking.
 
-`CLAUDE.md` and `conventions.md` both said "no tool can check this". This is the tool.
+`CLAUDE.md` and `docs/conventions.md` both said "no tool can check this". This is the tool.
 It cannot know which session wrote which line, and it does not try. It holds the one
 thing that makes the mistake possible: **a `git add` whose pathspec names something
 other than the files the caller chose.** A directory is the sneakier of the two forms,
@@ -255,7 +255,7 @@ Stage what you changed, by name:
 
 More than one session works in this tree at once. `git add -A` and `git add <dir>` have
 each already swept another session's half-finished work into a commit whose message was
-about something else -- see conventions.md, "More than one session at a time".
+about something else -- see docs/conventions.md, "More than one session at a time".
 
 If a file you did not write is already staged: `git restore --staged <path>`.
 """.strip()

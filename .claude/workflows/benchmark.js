@@ -137,7 +137,7 @@ const us = await agent(`Map this project — the options backtesting platform in
 working directory — as a baseline for comparing other tools against it. Read, do not run
 anything that takes minutes.
 
-Read: README.md, conventions.md, requirements.md, docs/architecture.md (the layer sections
+Read: README.md, docs/conventions.md, docs/requirements.md, docs/architecture.md (the layer sections
 and the register sections), backtest/CLAUDE.md, tools/check.py, and the modules you need to
 answer the questions below.
 
@@ -152,7 +152,7 @@ Report, with a file path for each answer:
 5. Look-ahead protection: the mechanism, not the convention.
 6. The research tools: baselines, ablation, excursion, event studies, validation.
 7. The guards: what each catches, and which failures they were written for.
-8. The known gaps, from requirements.md — what is partial and what is missing, with the
+8. The known gaps, from docs/requirements.md — what is partial and what is missing, with the
    reasons given there. Be complete about this; it is the half the comparison needs most.
 9. The synthetic option chain's limits, and what they make unanswerable.
 

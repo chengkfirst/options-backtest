@@ -98,7 +98,7 @@ def main() -> int:
     if len(problems) > len(shown):
         print(f"  ... and {len(problems) - len(shown)} more")
     print(f"\nFAIL  {len(problems)} non-English lines. "
-          "The project is written in English; see conventions.md.")
+          "The project is written in English; see docs/conventions.md.")
     return 1
 
 

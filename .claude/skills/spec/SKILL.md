@@ -24,11 +24,11 @@ Find and read:
 - the modules the feature would touch. `backtest/core/slots.py` for anything about the
   seven components; `backtest/api/sdk.py` for anything reaching `run()`;
   `app/static/js/contract.js` for anything the interface would read.
-- `requirements.md` — is this already a criterion? Is it marked partial, with a reason? A
+- `docs/requirements.md` — is this already a criterion? Is it marked partial, with a reason? A
   reason given there is usually the answer to the hardest question you were going to ask.
 - `docs/specs/` — has something like this been specified before, or superseded?
 - `docs/decisions/` — was a choice already made that constrains this?
-- `conventions.md` — which hard lines the feature runs into. There is usually one.
+- `docs/conventions.md` — which hard lines the feature runs into. There is usually one.
 
 Then say, in three or four lines, what you found: what exists, what is partial and why, and
 what the feature would actually have to change. **This is the most valuable thing you
@@ -70,7 +70,7 @@ than forgotten), and the risks with what would make us stop.
 Two things to get right:
 
 - **A criterion that cannot be falsified belongs in the goal, not in the criteria.** "The
-  interface is clear" is a goal. `requirements.md` already marks such things hand-written
+  interface is clear" is a goal. `docs/requirements.md` already marks such things hand-written
   rather than pretending they were computed; do the same rather than inventing a metric.
 - **A criterion with no test says so, and says why.** That is honest and useful. A test
   invented to fill the row is neither.

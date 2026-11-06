@@ -1,8 +1,9 @@
 # `docs/`
 
-Every document in this project, except the four files the root keeps for a mechanical
-reason. The division is by **what makes a document wrong**, because that is what decides
-who may change it and when.
+Every document in this project, except `README.md` and the four `CLAUDE.md` files, which
+the root and each area keep for the mechanical reasons given at the end, and the agent
+definitions and skills under `.claude/`. The division is by **what makes a document
+wrong**, because that is what decides who may change it and when.
 
 ## The standing documents
 
@@ -19,7 +20,7 @@ itself, and they are wrong when the code outgrows them.
 
 | Path | What it is | What makes it wrong |
 |---|---|---|
-| [`architecture.md`](architecture.md) | the architecture, transcribed from the PDF. Sections are citable by number: 5.1 is `architecture.md#section-5-1` | **nothing.** It is a transcription; the PDF is the original. A disagreement with the code is unfinished work (`requirements.md`) or a deliberate deviation (`conventions.md`) |
+| [`architecture.md`](architecture.md) | the architecture, transcribed from the PDF. Sections are citable by number: 5.1 is `docs/architecture.md#section-5-1` | **nothing.** It is a transcription; the PDF is the original. A disagreement with the code is unfinished work (`requirements.md`) or a deliberate deviation (`conventions.md`) |
 | [`frontend-web-plan.md`](frontend-web-plan.md) · [`ui-ux-design-plan-addendum.md`](ui-ux-design-plan-addendum.md) | the interface plans, same arrangement | as above |
 | `originals/` | the three source PDFs | nothing. They are the originals |
 
@@ -43,10 +44,12 @@ all four paths by a hook, `originals/` included, since it sits inside the `docs/
 ## Two things that hold across all of them
 
 **A document that contradicts the code is a bug in the document.** `tools/check_docs.py`
-runs the Python in `README.md` and `tools/check_doc_claims.py` checks stated claims against
-`requirements.md`, but neither reads prose. The `doc-keeper` agent covers the rest, and the
-rule it works by is that the document is corrected and never the code — a document is a
-claim about the code, not evidence about it.
+runs the Python in `README.md`, and `tools/check_doc_claims.py` holds two kinds of claim to
+account: `README.md`'s `[absent: ...]` brackets against the filesystem, and
+`requirements.md`'s section statuses against `tests/requirements_map.py`. Neither reads
+prose. The `doc-keeper` agent covers the rest, and the rule it works by is that the
+document is corrected and never the code — a document is a claim about the code, not
+evidence about it.
 
 **Everything here is in English**, like the rest of the project, and
 `tools/check_language.py` fails otherwise. The reason is the same as for code: a section
@@ -70,9 +73,10 @@ An earlier version of this file argued that `conventions.md`, `requirements.md` 
 `research-questions.md` had to stay at the root too, "cited by the guards, and moving them
 would break every pointer in the code for nothing." That was wrong twice over, and it is
 worth leaving the correction visible: only `requirements.md` was ever read by a guard — by
-three of them, now pointed at `docs/requirements.md` — and `conventions.md` and
-`research-questions.md` were read by no code at all. The pointers were counted rather than
-assumed, and the move cost fifteen markdown links and four read paths.
+two of them, `tools/check_plan.py` and `tools/check_doc_claims.py`, plus `tools/status.py`,
+which is not one — and `conventions.md` and `research-questions.md` were read by no code at
+all. The pointers were counted rather than assumed, and the move cost nineteen markdown
+links and four read paths.
 
 ## What is deliberately not here
 

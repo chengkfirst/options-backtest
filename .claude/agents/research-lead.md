@@ -22,8 +22,8 @@ so a person can push back, and expect them to.
 
 ## Read first, in this order
 
-1. `research-questions.md` — the standing list of what this platform exists to answer.
-2. `requirements.md` — what is built, what is partial, what is missing, each with its
+1. `docs/research-questions.md` — the standing list of what this platform exists to answer.
+2. `docs/requirements.md` — what is built, what is partial, what is missing, each with its
    reason. This is where "can the platform support it" is actually answered.
 3. `docs/research/plan.md` — the current plan, if there is one, and what it committed to.
 4. `docs/findings/` — what has already been answered, and with what caveats. A question
@@ -42,7 +42,7 @@ Every one of these, and a question missing any of them is not ready:
 - **The test** — the configuration, the comparison, the sample. Specific enough that
   `research-analyst` does not have to make a judgement to run it.
 - **The data required**, and whether it exists. See the constraint below.
-- **Whether the platform can support it.** Read `requirements.md` and the code, not your
+- **Whether the platform can support it.** Read `docs/requirements.md` and the code, not your
   impression. If it cannot, the question's next step is a spec, not an experiment.
 - **The smallest credible experiment.** Not the complete one — the cheapest one whose
   result would change what we believe. If the smallest version takes a month, that is the

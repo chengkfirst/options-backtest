@@ -6,7 +6,7 @@ nothing could catch before.
 
 ## Why this is a guard and not a reading habit
 
-``README.md`` and ``requirements.md`` are the project's own account of itself: what exists,
+``README.md`` and ``docs/requirements.md`` are the project's own account of itself: what exists,
 what does not, and why. Both are written in prose, and prose does not fail. A document
 claiming machinery the code does not have is the precise failure this project refuses --
 it has happened here, in ``core/component.py``, whose docstring described two methods it
@@ -14,7 +14,7 @@ did not have -- and the mirror of it is worse: a document still saying something
 **absent** after it was built sends the next reader to build it again.
 
 Today's commit landed the event bus. ``README.md`` went on listing ``events.py`` as absent
-and ``requirements.md`` went on calling it "the largest structural gap", because nothing
+and ``docs/requirements.md`` went on calling it "the largest structural gap", because nothing
 anywhere connects the sentence to the file.
 
 ## What is checked
@@ -27,7 +27,7 @@ waived.
    ``[absent: a.py b.py]``. Each name is looked for on disk. One that exists is reported:
    the document is behind the code.
 
-2. **The status words against the requirements map.** ``requirements.md`` gives each
+2. **The status words against the requirements map.** ``docs/requirements.md`` gives each
    document section a status -- built, partial, absent, missing. ``tests/requirements_map.py``
    holds the same judgement per requirement, as data, and the test suite already fails when
    a requirement marked built has no test. So the two can be held against each other: a
@@ -151,7 +151,7 @@ _BOLD = re.compile(r"\*\*(.+?)\*\*")
 
 
 def _status_problems() -> list[str]:
-    """Section status rows in ``requirements.md`` against the requirements map."""
+    """Section status rows in ``docs/requirements.md`` against the requirements map."""
     from tests.requirements_map import REQUIREMENTS
 
     by_section: dict[str, list] = {}
@@ -189,19 +189,19 @@ def _status_problems() -> list[str]:
 
         if says_nothing and len(built) == len(reqs):
             problems.append(
-                f"requirements.md:{number} says section {section} is absent and all "
+                f"docs/requirements.md:{number} says section {section} is absent and all "
                 f"{len(reqs)} of its requirements are built: "
                 f"{[r.id for r in built]}"
             )
         elif says_nothing and built:
             problems.append(
-                f"requirements.md:{number} says section {section} is absent and "
+                f"docs/requirements.md:{number} says section {section} is absent and "
                 f"{len(built)} of its {len(reqs)} requirements are built: "
                 f"{[r.id for r in built]}. Partial is the honest word"
             )
         elif says_built and not built:
             problems.append(
-                f"requirements.md:{number} says section {section} is built and none of "
+                f"docs/requirements.md:{number} says section {section} is built and none of "
                 f"its {len(reqs)} requirements are: {[r.id for r in reqs]}"
             )
     return problems

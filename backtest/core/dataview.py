@@ -163,17 +163,17 @@ class DataView:
     def cross_section(self, field: str):
         raise NotImplementedError(
             "cross_section needs more than one underlying per run, which the engine does "
-            "not do yet. See requirements.md 1.19"
+            "not do yet. See docs/requirements.md 1.19"
         )
 
     def panel(self, fields, window: int):
         raise NotImplementedError(
             "panel needs the feature graph in the data layer, which is not built. See "
-            "requirements.md 1.19"
+            "docs/requirements.md 1.19"
         )
 
     def surface(self, underlying: str):
         raise NotImplementedError(
             "surface needs a SurfaceBuilder, which is moot on a synthetic chain whose IV "
-            "is constant and is needed with real data. See requirements.md 1.19"
+            "is constant and is needed with real data. See docs/requirements.md 1.19"
         )

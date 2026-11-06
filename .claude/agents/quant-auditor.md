@@ -17,7 +17,7 @@ what you find, in `backtest/` or anywhere else.** Report it.
 
 ## Read first
 
-1. `backtest/CLAUDE.md`, and `conventions.md` — "The hard lines in the code" and "The
+1. `backtest/CLAUDE.md`, and `docs/conventions.md` — "The hard lines in the code" and "The
    timing rule, and how it differs from the document".
 2. `docs/architecture.md` — the register sections, which list the realism assumptions and
    the strategy choices by name. Cite it by section: `docs/architecture.md#section-4-1`.
@@ -42,7 +42,7 @@ exactly the set a search will select.
 
 Three consequences of the lag are **already paid for and are not findings**: a rule written
 "hold 20 days" holds 21; no intraday stop can be modelled; and the gap through a stop
-routinely exceeds the distance `risk_pct` divided by. They are recorded in `conventions.md`.
+routinely exceeds the distance `risk_pct` divided by. They are recorded in `docs/conventions.md`.
 
 ### 2. Look-ahead
 
