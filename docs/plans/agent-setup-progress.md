@@ -677,3 +677,114 @@ Verified: all 9 agent definitions parse with `name` matching the file stem;
 `tools/check_language.py` → `OK  270 files, all English`; `tools.check --fast` →
 `OK  all 18 guards passed`.
 
+---
+
+## Phase 6 — Skills
+
+Frontmatter checked against the current documentation (`skills.md`) first.
+`disable-model-invocation: true` is real and does what the plan assumes: Claude cannot
+invoke the skill on its own, and its description is hidden from Claude, so it runs only when
+named. Paired with `user-invocable: true` as the documentation recommends.
+
+| Skill | Named only | Why |
+|---|---|---|
+| `/spec` | no | writes one document after interviewing, and "write down what done means first" is exactly the behaviour worth reaching for unprompted |
+| `/ship` | **yes** | commits and pushes — history is the one thing here that cannot be undone quietly |
+| `/new-guard` | **yes** | writes a check, edits `tools/check.py` and edits `conventions.md` |
+| `/audit-docs` | **yes** | edits documents across the repository, and may spawn a workflow |
+| `/explore` | **yes** | spawns several opus agents and rewrites the backlog |
+
+### 6.1 `/spec` — DONE
+
+Reads the code **before** asking anything, and says what it found first — because a question
+whose answer is in the code spends the human's attention on something findable, and after
+two of those they stop answering carefully. The reading summary is named as the most
+valuable output of the step, since about a third of the time it ends the conversation: the
+thing exists, or the reason it does not is the answer.
+
+At most three questions at a time, aimed at the four that change the shape of the work (edge
+cases, error handling, what the interface shows when a value cannot be computed, and the
+non-goals — asked directly, because nobody volunteers them). Each question carries its own
+proposed answer where there is one, which is easier to answer than an open question and
+exposes the assumption where it can be corrected.
+
+Writes `Approved: not yet` and **stops** — no branch, no sketch, because a sketch is an
+implementation nobody approved and it anchors the review. Says which agent the work belongs
+to, and where it is both, which half goes first.
+
+### 6.2 `/ship` — DONE
+
+Six gated steps: the **full** `tools.check` (named as fourteen minutes, so the wait is
+expected) → `git status`, naming anything modified that is not yours → stage by explicit
+path → **read** `git diff --cached --name-only` → the `reviewer` subagent confirms the
+staged set matches the stated purpose → a message that says why.
+
+The reviewer step is given its reason: a single session is worst at exactly this question,
+because every file looks familiar — you touched it, so it feels like it belongs. The
+reviewer has not touched them.
+
+It names what it will not do: no `baseline update` to clear a red baseline, no commit to
+`main`, no force, no merge without the full check on the **merge result** — which is the
+only run that sees the front/back contract across both branches.
+
+### 6.3 `/new-guard` — DONE
+
+The five steps from `conventions.md`, plus **a step 0 the plan did not ask for and that the
+convention does**: has the failure actually happened? The bar is a concrete failure first,
+and the skill says plainly that **stopping there is a correct outcome a fair share of the
+time** — a guard added without a real failure makes every other guard slightly less likely
+to be read. Two exceptions allowed, both to be labelled as what they are.
+
+Step 3 carries the two things learned tonight the hard way: **plant the real shape of the
+failure, not a convenient one** (the `# skip` plant had to be the wrong module *and* an
+inner-line marker, the exact combination the old rule allowed), and **verify the allowed
+cases, more of them than the refused ones** — with the `git add` hook refusing its own first
+use as the worked example. And: where the forms are a list, keep the list as a test.
+
+### 6.4 `/audit-docs` — DONE
+
+Starts with **three greps before any agent** — every `path.ext` in the documents and in code
+comments tested against the filesystem, plus `tools.status` for hand-written counts. The
+first of those found five stale pointers tonight in one pass, at no cost.
+
+Then `doc-keeper` one agent per document (one agent over six long documents reads the first
+two carefully), in the order most-likely-rotted first, with **a behavioural statement** named
+as the kind that rots most completely — the feature arrives and nobody searches the documents
+for the sentence saying it does not exist.
+
+For a whole-repository sweep, a workflow with a second agent verifying each finding against
+the code it cites, `pipeline()`d. The reason is given: a finding is a claim about a claim,
+and a document "corrected" on a misread now carries a confident wrong statement **with a
+citation attached**, which is worse than the rot.
+
+The section headed "the finding that matters most" is the code being wrong and the document
+right — do not correct the document, because that buries the only evidence anyone noticed.
+And five things that are **not** rot and must not be fixed: a disagreement with a
+transcription, "not built yet" with its reason, a claim no code can settle,
+`docs/feedback/`, and a decision record.
+
+### 6.5 `/explore` — DONE
+
+Reads `docs/feedback/` and the latest `docs/radar/` digest first and summarises both before
+starting, because a debate that has not read the feedback is three agents reasoning from the
+same priors.
+
+**Agent teams**: documented, not enabled (rule 11). The human enables them for one session
+with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude`, and the skill says why the project
+does not enable them in a settings file — it changes how ordinary subagents launch, which
+affects every other agent here.
+
+**The sequential fallback** is specified step by step: proposer → practitioner and sceptic in
+parallel, each given the full proposal text → proposer responds once to concede what lands →
+synthesis. With the fallback's actual cost named: the practitioner's "I would not use this"
+and the sceptic's "it already exists" never meet, and those two together usually decide. The
+backlog entry records which mode produced it.
+
+The scoring on the five filters is **the skill's own job, not any role's** — each role would
+score to its own position. And the sceptic's strongest objection goes in verbatim.
+
+Verified: all five parse, `name` matches the directory, no unknown frontmatter field;
+`/spec` and `/benchmark` were picked up by the skill registry during the session, which
+confirms the format from the outside; `tools/check_language.py` → `OK  275 files, all
+English`; `tools.check --fast` → `OK  all 18 guards passed`.
+
