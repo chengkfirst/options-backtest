@@ -271,3 +271,39 @@ Verified: every checkable claim in the brief spot-checked against the code
 (`attribution.py:47` has the residual; `plan.md:725` says `NOT FIXED`; `docs/findings/` holds
 two audits); seven sections; 390 lines; `check_language` → `OK  291 files, all English`.
 
+### 6.1 — the reviewer pass on the brief — DONE, and it found the failure it was asked to look for
+
+`reviewer` checked every citable claim against its file. It confirmed the load-bearing ones
+exactly — `attribution.py:47`, `plan.md:725`, `docs/findings/` holding two audits and zero
+results, `config.py:177` `execution_lag_days: int = 1`, `costs.py:169-171`,
+`adapters.py:510-516`, and all five lesson grades matching the benchmark — and found **eight
+wrong claims and seven overstatements**. The important ones, all fixed:
+
+- **The single-reader promotion was in the first line.** "The platform is more trustworthy
+  than any of the six repositories benchmarked" sat *outside* the brief's own grade warning,
+  drawn from four claims of which three are `[one reader]` or `[record]`. Rewritten to say
+  what the evidence supports and to carry its own grade.
+- **"Two phases did not run" — three did not.** Phase 5 was omitted, which is the quietest of
+  the three: a reader would assume `plan.md` had been updated with the benchmark's
+  conclusions. It has not, so section 6 is the only place the benchmark reaches the plan.
+- **Criterion 1.20 was called "satisfied"**; `requirements.md:382` marks it `partial`. And
+  the **direction** of the snapshot bias was stated as fact when it is the radar's own
+  inference — no vendor says it, and decision 7's framing turns on the sign.
+- **"RD-Agent counts and corrects nothing"** contradicted the brief's own citation nine lines
+  earlier. It counts (`loop.py:133-134`) and deflates nothing by the count.
+- **Goal A said "four findings" and listed five**, and its failure clause then made its own
+  fifth entry a failure. Also: entry 16 needs three years, which the $199 one-year window
+  cannot supply — so Goal A presumed a second purchase without saying so.
+- **The licence paragraph said "two of the six" and named three**, omitted nautilus_trader's
+  LGPL-3.0, and said ArcticDB "cannot be borrowed from at all" when every tag to 5.0 has
+  converted to Apache-2.0.
+- **D5 asked for three workflow faults to be fixed first.** They were fixed eleven minutes
+  before the brief was written, and the one still outstanding was the one it did not name.
+- Two price claims misread the digest: a single source's two scopes presented as a
+  disagreement between sources, and a $696 figure inconsistent with the brief's own
+  comparison.
+
+Fixed in place; the brief is back under the 400-line cap. Worth recording that **the reviewer
+pass changed the brief's first sentence** — the document was otherwise careful about grades
+throughout and still promoted a claim in its headline, which is where a reader starts.
+

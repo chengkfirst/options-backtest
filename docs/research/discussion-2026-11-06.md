@@ -11,13 +11,20 @@
 > `docs/ideas/backlog.md` is empty and section 5's directions have **not been argued against
 > by a sceptic**. They are derived from `docs/research/benchmark-2026-11-06.md`,
 > `docs/radar/2026-W45.md` and `docs/research/plan.md` by one agent.
+>
+> **A third did not run, and it is the quietest: phase 5, the revision of
+> `docs/research/plan.md`.** That file still orders its entries by pre-benchmark reasoning,
+> so **section 6 is the only place the benchmark reaches the plan**. Where the two
+> disagree, this is the newer document.
 
 ---
 
 ## 1 · The answer in five lines
 
-1. **The platform is more trustworthy than any of the six repositories benchmarked, and has
-   answered nothing.** `docs/findings/` holds two audits (`audit-adf0495.md`,
+1. **This platform looks more careful than any of the six compared — on evidence that is
+   mostly one reader deep — and it has answered nothing.** The first half rests on four
+   claims, three graded `[one reader]` or `[record]`, and the benchmark's own verdict is
+   that **no dimension in it is twice-verified**. The second half needs no grading: `docs/findings/` holds two audits (`audit-adf0495.md`,
    `baseline-change-2026-11-06.md`) and **zero research results**; all 20 plan entries are
    unrun.
 2. **The option side is unanswerable, and that stopped being a data problem this week.**
@@ -73,9 +80,14 @@ reason that option quotes deteriorate at the close). The chain carries its own
 "spot at that moment (**the traded price, not the adjusted one**)"). So a signal computed from
 T's equity close selects a contract against greeks and a spot that **predate the information
 the decision used**. `docs/requirements.md:382` (criterion 1.20, "signal and fill never share a
-quote") is satisfied — but the **reverse** defect, a quote strictly *earlier* than its signal,
-has **no guard anywhere**. The bias is concentrated in exactly the sessions that move in the
-last quarter hour, which are the sessions a regime signal fires on. Cboe is the only vendor
+quote") is marked **partial** there — held at daily resolution, with the intraday form still
+needing intraday quotes — and the narrow thing it does hold, that a fill never shares its
+signal's quote, is not what is at issue here. The **reverse** defect, a quote strictly
+*earlier* than its signal, has **no guard anywhere**.
+
+**The direction of the resulting bias is an inference, not a measurement** — the radar's
+own reading against `adapters.py`, which no vendor states. A 14-minute-stale spot could bias
+either way, and decision 7's framing turns on the sign. Cboe is the only vendor
 that sells both snapshots (`Bid 1545` / `Bid EOD`), which is the only way to turn this from an
 argument into a sensitivity test. See decision 7.
 
@@ -104,8 +116,8 @@ once; see direction 3 and decision 6.
    sit baselines, walk-forward, purged k-fold with embargo, hold-out, two bootstraps and a
    pre-launch gate where `unknown` is not a soft pass. **No repository read here has any of
    it.** optopsy reports an uncomputable Sharpe as `0.00` (`metrics.py:43-51`) [re-opened];
-   gs-quant has no module for any of it [record]; RD-Agent counts and corrects nothing [one
-   reader].
+   gs-quant has no module for any of it [record]; RD-Agent **counts its loops and
+   corrects nothing by the count** (`utils/workflow/loop.py:133-134`) [one reader].
 3. **`available_at` as a column, with the two questions kept apart.**
    `snapshot(day, *, known_by=...)` (`backtest/data/options/chain.py:46`) separates "what could
    be traded now" from "what is known now about then". ArcticDB's `as_of` is write time and
@@ -174,7 +186,7 @@ has not started.
 
 | Scope | Three-month goal | The result that says it failed |
 |---|---|---|
-| **A** | **Four findings in `docs/findings/`, one of them option-side on real quotes.** Entries 1–4 written up with intervals and effective sample size, plus entry 16 (the VRP term structure) on a purchased chain that passed `check_file()`. | No option-side finding by 2027-02-06 — either because the data was never bought, or because `check_file()` failed on the $199 sample and no second vendor was tried. A fifth entry run before the first four are written up is also a failure: it means the plan is being spent rather than followed. |
+| **A** | **Five findings in `docs/findings/`, one of them option-side on real quotes.** Entries 1–4 written up with intervals and effective sample size, plus entry 16 (the VRP term structure) on a purchased chain that passed `check_file()`. **Entry 16 needs more than the $199 window**: `plan.md:594` sets its smallest experiment at three years, so Goal A presumes the larger archive — a second purchase decision, not a consequence of the first. | No option-side finding by 2027-02-06 — either because the data was never bought, or because `check_file()` failed on the $199 sample and no second vendor was tried. A **sixth** entry run before the first five are written up is also a failure: it means the plan is being spent rather than followed. |
 | **B** | **A hold-out that code opens once.** A declared hold-out cannot be read twice without a recorded unlock, and `tracker.py` reports a trial count that spans sessions rather than one run. Demonstrated by a test that fails when the second read is attempted. | The receipt exists and the trial count still resets per session — i.e. we built the ceremony and not the denominator. Equally a failure: the ledger exists and no question was asked against it, which makes it an empty audit trail. |
 | **C** | **A second person, or an agent in a fresh clone, reproduces one recorded result from the documents alone**, with no question asked of the author. | They cannot, or they can only after being told something not written down. Watch for the cheap version of success: a reproduction that works because the author was in the room. |
 | **D** | **The five lessons landed, `tools.check` green, and the baseline diff for each printed and approved.** | Any lesson lands without its baseline diff; or lesson 5 lands and no second fill rule is ever written, which means we built an interface for one implementation. |
@@ -237,7 +249,9 @@ implemented both, and it is the only project found this week that ran options st
 **real traded option bars**. *Connects to:* the three places we are weakest — synthetic chain,
 unrecorded trial count, hold-out protected by intention. *Data/time:* a reading exercise,
 three to five days. *Cheapest week test:* read its hold-out receipt, its ledger and its
-acceptance gates, and its option-bar loader. *Kills it:* the mechanisms turn out to be
+acceptance gates, and its option-bar loader. **Three of this run's four workflow faults are already fixed**
+(`23cf39c`); the one outstanding is claims arriving mislabelled by dimension
+(`benchmark-2026-11-06.md:105-108`). *Kills it:* the mechanisms turn out to be
 conventions in prose rather than code — which is exactly what our own hold-out currently is,
 and would be worth knowing. **Run `/benchmark` on it with the three workflow faults fixed
 first** (`could_not_determine` dropped between stages; the 60,000-character truncation with
@@ -283,9 +297,14 @@ per day, maps to `SCHEMA` by rename alone (`quote_date`→`asof`, `underlying`�
 for 2007-to-present — cheaper per year and deeper, but puts a call **and** a put on one row
 with **no `right` column**, so it needs a melt before `FileChainSource` sees it, and its
 underlying is **reverse-engineered from put-call parity**, not a traded close; (c) DeltaNeutral
-$1,150 (Level 1) / $1,495 (Level 2) — states an OPRA licence and names an operator; (d) Cboe —
+$1,150 (Level 1) / $1,495 (Level 2) — **states** it is an OPRA-licensed vendor, which
+HistoricalData.net does not (that it *names an operator* is an inference, not established).
+**Level 1 ships no greeks and no IV** — those begin at Level 2; `SCHEMA` copes
+(`adapters.py:72-77`) but every greek would carry `greeks_model_derived`; (d) Cboe —
 the only vendor shipping **two snapshots per contract per day**, price unreadable behind a
-calculator, third-party figures disagreeing between $2,100 and $8,500.
+calculator, third-party figures that are **two scopes from one source** ($2,100 for one year,
+$8,500 since 2012) rather than a disagreement — a second summary quoted $1,500 a year and
+$7,200 for the archive, and those are the actual disagreements.
 *Consequence:* (a) is a **$199 test of the whole adapter path** — column names, right aliases,
 IV units, theta's sign and convention — before committing $799; (b) buys new code, not
 configuration, and a `underlying_price` that is not what the schema asks for; (c) buys a named
@@ -347,9 +366,12 @@ catches a fill sharing its signal's quote, and nothing catches a quote strictly 
 signal.
 
 **8 · A LICENSE file.** This repository has none. Not a research decision, and not mine — but
-two of the six benchmarked repositories (qlib, RD-Agent, both MIT; gs-quant, Apache-2.0) would
-require one before any of their code could be used in a distributed artifact, and optopsy
-(AGPL-3.0) and ArcticDB (BSL-1.1, converting per release) cannot be borrowed from at all.
+**three** of the six are permissive and would require one before any of their code could be
+used in a distributed artifact (qlib and RD-Agent, MIT; gs-quant, Apache-2.0). Of the rest:
+optopsy is **AGPL-3.0** (borrowing is a licensing decision); nautilus_trader is
+**LGPL-3.0** (link, do not copy); ArcticDB is **BSL-1.1**, which converts per release —
+every tag up to 5.0 has converted, so the restriction is on the current tree, not the
+project. Borrow only from a converted tag.
 **Recommendation:** decide it when scope C is decided; it is a consequence of that, not an
 independent choice.
 
