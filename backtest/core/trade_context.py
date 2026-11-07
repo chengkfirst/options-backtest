@@ -77,6 +77,14 @@ class SlotWriter:
 
     slot: str
     _into: dict[str, Any]
+    #: The shared write log, and the session each write is stamped with. The document:
+    #: "Every write is timestamped and logged, so research can trace which information
+    #: reached which decision." Without the stamp the context answers *what* a slot
+    #: recorded and never *when*, so a value written on the entry day and one written on
+    #: the exit day are the same row -- which is exactly the question a slot-ordering or
+    #: a headwind study asks.
+    _log: list[dict[str, Any]] | None = None
+    _when: Any = None
 
     def write(self, key: str, value: Any) -> None:
         """Record one fact this slot decided or used.
@@ -90,6 +98,13 @@ class SlotWriter:
                 f"a person grouping results, so it has a name"
             )
         self._into[key] = value
+        if self._log is not None:
+            # **Append, never replace.** A slot writing `level` twice in one run is two
+            # facts in sequence; collapsing them would lose the one the earlier decision
+            # actually saw.
+            self._log.append({"when": self._when, "slot": self.slot,
+                              "key": key, "value": value,
+                              "seq": len(self._log)})
 
     def update(self, values: Mapping[str, Any]) -> None:
         for key, value in values.items():
@@ -100,7 +115,7 @@ class SlotWriter:
         return MappingProxyType(dict(self._into))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class TradeContext:
     """The market state the decisions saw, plus what each slot recorded.
 
@@ -116,6 +131,21 @@ class TradeContext:
     #: What the candidate had recorded when this trade opened. Empty until a trade opens
     #: from a candidate -- see the module docstring on why it is a copy.
     candidate: Mapping[str, Any] = field(default_factory=dict)
+    #: **Read-only book state**: equity, cash, positions, premium at risk, the book's
+    #: greeks, this trade's own fill status, and what the portfolio layer decided about
+    #: it. The architecture document's slot diagram says the trade context "also holds
+    #: read-only book state, positions, P&L, Greeks and fill status", and it held none of
+    #: it -- the engine built every context with an empty mapping, so a slot could read
+    #: what another slot wrote and nothing about the account it was trading.
+    #:
+    #: Separate from ``market`` rather than merged into it, because the two answer
+    #: different questions and the document draws the line itself: ``market`` is what the
+    #: market was doing, ``book`` is what this account was doing.
+    book: Mapping[str, Any] = field(default_factory=dict)
+    #: Every write, in order, with the session it happened on.
+    _writes: list[dict[str, Any]] = field(default_factory=list)
+    #: The session writes are stamped with. Set by the engine as the run steps.
+    _when: Any = None
 
     # ── writing ───────────────────────────────────────────
     def writer(self, slot: str) -> SlotWriter:
@@ -132,7 +162,8 @@ class TradeContext:
                 f"{slot!r} is not a slot, so it has no namespace in the trade context. "
                 f"One of: {known}"
             )
-        return SlotWriter(slot=slot, _into=self._slots.setdefault(slot, {}))
+        return SlotWriter(slot=slot, _into=self._slots.setdefault(slot, {}),
+                          _log=self._writes, _when=self._when)
 
     # ── reading ───────────────────────────────────────────
     def of(self, slot: str) -> Mapping[str, Any]:
@@ -157,6 +188,38 @@ class TradeContext:
         the ambiguity the namespaces removed.
         """
         return tuple(s for s in self.slots() if key in self._slots[s])
+
+    def on(self, when: Any) -> "TradeContext":
+        """The same context, stamping later writes with ``when``.
+
+        Mutating rather than copying: the context **is** the trade's accumulating record,
+        and a copy per session would split one trade's writes across several objects.
+        """
+        self._when = when
+        return self
+
+    def with_book(self, **state: Any) -> "TradeContext":
+        """Replace the read-only book state. Called by the engine each session.
+
+        Replaced rather than merged: the book state is a snapshot of *now*, and a merge
+        would leave a stale key from an earlier session looking current.
+        """
+        self.book = dict(state)
+        return self
+
+    def writes(self) -> tuple[Mapping[str, Any], ...]:
+        """Every write this trade saw, in order, each with its session and slot.
+
+        The record the document asks for: "research can trace which information reached
+        which decision". ``of()`` answers what a slot ended up holding; this answers what
+        it knew at each point.
+        """
+        return tuple(MappingProxyType(dict(w)) for w in self._writes)
+
+    def book_get(self, key: str, default: Any = None) -> Any:
+        """Read-only book state by key. Never falls through to ``market`` or to a slot
+        namespace, for the reason ``get`` gives."""
+        return self.book.get(key, default)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Market state by key, which is what every existing reader wants.

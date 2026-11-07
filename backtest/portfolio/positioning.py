@@ -35,11 +35,15 @@ from backtest.core.types import require
 #: valid instance of every method the interface offers. Two copies of this mapping would
 #: drift, and the drift would show up as a method the interface can select and the backend
 #: refuses -- a feature that fails only when someone picks that one option.
-REQUIRES: dict[str, str] = {
-    "fixed": "contracts",
-    "risk_pct": "risk_pct",
-    "fixed_notional": "notional",
-    "scale_by_vol": "target_vol",
+REQUIRES: dict[str, tuple[str, ...]] = {
+    "fixed": ("contracts",),
+    "risk_pct": ("risk_pct",),
+    "fixed_notional": ("notional",),
+    # **Two, not one.** It scales the risk-based budget by the volatility ratio, so it
+    # needs the budget's parameter as well as its own. Listed as one, the validation
+    # accepted a spec without `risk_pct` and the arithmetic then multiplied by None --
+    # which is how two of the four methods came to be offered and never run.
+    "scale_by_vol": ("target_vol", "risk_pct"),
 }
 
 
@@ -91,12 +95,14 @@ class Sizing:
         # otherwise. Required rather than defaulted: it decides the size of every position
         # in the book, and a value the platform supplied does not appear in the
         # configuration a person reads back when asking what this run actually did.
-        needs = REQUIRES.get(self.method)
-        if needs is not None and getattr(self, needs) is None:
+        absent = [name for name in REQUIRES.get(self.method, ())
+                  if getattr(self, name) is None]
+        if absent:
             raise StartupError(
-                f"sizing method {self.method!r} needs {needs}. It is a strategy choice "
-                f"and the platform does not pick it -- it would size every position in "
-                f"the book and never show up in the configuration you read back"
+                f"sizing method {self.method!r} needs {', '.join(absent)}. "
+                f"{'They are' if len(absent) > 1 else 'It is'} a strategy choice and the "
+                f"platform does not pick it -- it would size every position in the book "
+                f"and never show up in the configuration you read back"
             )
         if self.risk_pct is not None:
             require(0 < self.risk_pct <= 1, "risk_pct must lie between 0 and 1")
@@ -149,20 +155,145 @@ def contracts_for(
     if premium <= 0:
         return 0
 
-    budget_at_risk = equity * sizing.risk_pct / loss_fraction(stop_loss)
+    def budget_at_risk() -> float:
+        """Equity at risk per trade, given the stop.
+
+        **Computed inside the branches that need it, not above them**, and that was a
+        real bug rather than a tidiness point: it ran unconditionally, and `risk_pct` is
+        None for `fixed_notional`, so two of the four advertised methods raised
+        `TypeError: unsupported operand type(s) for *: 'float' and 'NoneType'` the moment
+        anyone selected them. The methods were offered by the interface, listed in
+        `REQUIRES`, and had never run.
+
+        The absent parameter is now named rather than multiplied -- "a feature that fails
+        only when someone picks that one option" is the failure `REQUIRES` exists to
+        prevent, and it had it.
+        """
+        if sizing.risk_pct is None:
+            raise StartupError(
+                f"the {sizing.method} sizing method needs risk_pct, and none was given. "
+                f"It sizes against the equity a trade may lose, which is risk_pct of "
+                f"the account divided by what the stop gives up"
+            )
+        return equity * sizing.risk_pct / loss_fraction(stop_loss)
 
     if sizing.method == "risk_pct":
-        budget = budget_at_risk
+        budget = budget_at_risk()
     elif sizing.method == "fixed_notional":
+        if sizing.notional is None:
+            raise StartupError(
+                "the fixed_notional sizing method needs notional -- the cash to commit "
+                "per trade"
+            )
         budget = sizing.notional
     elif sizing.method == "scale_by_vol":
+        if sizing.target_vol is None:
+            raise StartupError(
+                "the scale_by_vol sizing method needs target_vol -- the volatility the "
+                "size is scaled against"
+            )
         if volatility is None:
             return 0
         # Buy less when the underlying is more volatile. **This is not a portfolio
         # volatility target** — that would need a forecast of portfolio volatility, which
         # for options has to come from the greeks. The name says what it actually does.
-        budget = budget_at_risk * (sizing.target_vol / max(volatility, 1e-6))
+        budget = budget_at_risk() * (sizing.target_vol / max(volatility, 1e-6))
     else:
         raise StartupError(f"unimplemented sizing method {sizing.method}")
 
     return min(int(budget // premium), sizing.max_contracts)
+
+
+# ══════════════════════════════════════════════════════════════
+#  the four methods, as registered variants
+# ══════════════════════════════════════════════════════════════
+#
+# **The slot protocol did not reach sizing.** The four methods existed and were
+# selectable through ``sizing={"method": ...}``, and none of them was a registered
+# variant -- so slot 6 read as "0 forms" and the tools built for slots did not apply to
+# it: no variant swap, no slot sweep, no ablation, nothing in the composer that offers a
+# slot's forms with their parameters.
+#
+# Registering them changes no arithmetic. Each variant is a thin call into
+# :func:`contracts_for`, which stays the one implementation -- two copies of a sizing
+# rule would be a drift nobody notices until the two disagree on one trade.
+
+def _size_with(method: str, ctx: Mapping[str, Any], **params: Any) -> int:
+    """One variant's body: build the ``Sizing`` it describes and ask for the count.
+
+    ``ctx`` is the sizing context the engine supplies: equity, the premium of one
+    contract, the stop, and the volatility where the method needs it. A missing input is
+    **0 contracts, not a guess** -- the same rule ``contracts_for`` already applies.
+    """
+    spec = Sizing(method=method, **params)
+    premium = ctx.get("premium")
+    equity = ctx.get("equity")
+    if method != "fixed" and (premium is None or equity is None):
+        return 0
+    return contracts_for(
+        spec,
+        equity=float(equity or 0.0),
+        premium=float(premium or 0.0),
+        stop_loss=ctx.get("stop_loss"),
+        volatility=ctx.get("volatility"),
+    )
+
+
+def _register_sizing_variants() -> None:
+    """Register one variant per method, with that method's own parameter.
+
+    Called at import. The parameter each one needs is read from :data:`REQUIRES`, which
+    is already the single place that mapping lives -- so a method added there and not
+    here fails the wiring check rather than appearing as a form with no parameters.
+    """
+    from backtest.core.component import Param, Variant, register
+
+    described = {
+        "fixed": ("a fixed number of contracts every time. The only method that ignores "
+                  "equity and premium, so it is the one to use when the question is "
+                  "about the rule rather than about compounding",
+                  (Param("contracts", "int", "how many contracts", lo=1, hi=1000),)),
+        "risk_pct": ("risk a fixed share of equity per trade, sized so that the stop "
+                     "loses that much. Needs a stop: without one the whole premium is "
+                     "at risk and the share is the position",
+                     (Param("risk_pct", "float", "share of equity at risk per trade",
+                            lo=0.0, hi=1.0),)),
+        "fixed_notional": ("spend a fixed cash amount per trade, whatever the equity "
+                           "has done. Position count falls as premiums rise",
+                           (Param("notional", "float", "cash spent per trade",
+                                  lo=0.0, hi=1e9),)),
+        "scale_by_vol": ("buy less when the underlying is more volatile. **Not a "
+                         "portfolio volatility target** -- that needs a forecast of "
+                         "portfolio volatility, which for options comes from the "
+                         "greeks. The name says what it does",
+                         (Param("target_vol", "float", "the volatility the size is "
+                                "scaled against", lo=0.0, hi=5.0),
+                          Param("risk_pct", "float", "share of equity at risk per "
+                                "trade, which the volatility ratio then scales",
+                                lo=0.0, hi=1.0))),
+    }
+    missing = sorted(set(REQUIRES) - set(described))
+    if missing:
+        raise StartupError(
+            f"these sizing methods have no registered variant: {missing}. REQUIRES is "
+            f"the one list of methods, and a method that is selectable and has no form "
+            f"is a slot the research tools cannot reach"
+        )
+    for method, (describes, params) in described.items():
+        declared = {p.name for p in params}
+        needed = set(REQUIRES[method])
+        if declared != needed:
+            raise StartupError(
+                f"the {method} form declares {sorted(declared)} and the method needs "
+                f"{sorted(needed)}. A form offering fewer parameters than its method "
+                f"requires is a form that raises the first time anyone picks it"
+            )
+        register(Variant(
+            slot="position", name=method, version=1,
+            describes=describes,
+            params=params,
+            decide=(lambda ctx, _m=method, **kw: _size_with(_m, ctx, **kw)),
+        ))
+
+
+_register_sizing_variants()

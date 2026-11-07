@@ -54,11 +54,15 @@ export const API = {
   meta: "/api/meta",
   run: "/api/run",
   runs: "/api/runs",
+  ideas: "/api/ideas",
   validate: "/api/validate",
   tradeoff: "/api/tradeoff",
   note: "/api/note",
   notes: "/api/notes",
   strategies: "/api/strategies",
+  runArchive: "/api/run/archive",
+  runDeletion: "/api/run/deletion",
+  runDelete: "/api/run/delete",
 };
 
 /** A GET returning JSON.

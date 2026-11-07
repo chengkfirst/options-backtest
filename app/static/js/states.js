@@ -16,9 +16,14 @@ import {notice, paintIssues} from "./net.js";
 import {blankChart} from "./charts/svg.js";
 import {startTips} from "./ui/tip.js";
 import {renderEquity, renderEquityStrip} from "./charts/equity.js";
-import {renderHist, renderScatter, renderYears} from "./charts/distribution.js";
+import {renderHist, renderPeriods, renderScatter} from "./charts/distribution.js";
 import {renderDetail, renderRobust, renderStrip} from "./charts/tables.js";
 import {renderAttribution} from "./charts/attribution.js";
+import {chartStack, seriesLayer} from "./charts/axis.js";
+import {closeDrawer, openDrawer, toggleFull} from "./ui/drawer.js";
+import * as palette from "./ui/palette.js";
+import {bind} from "./ui/keys.js";
+import {actions as cardActions, card as tradeCard} from "./views/trade.js";
 
 /* ── fabricated data, shaped like the real thing ── */
 const TRADES = Array.from({length: 48}, (_, i) => {
@@ -27,7 +32,10 @@ const TRADES = Array.from({length: 48}, (_, i) => {
     trade_id: i + 1,
     entry_date: `202${3 + (i % 2)}-${String(1 + (i % 12)).padStart(2, "0")}-05`,
     exit_date: `202${3 + (i % 2)}-${String(1 + (i % 12)).padStart(2, "0")}-19`,
-    contract: `QQQ 2024-03-15 C ${380 + i}`,
+    // The engine's own contract id, which is what the card parses: underlying, expiry,
+    // right, and the strike in thousandths. A readable string here would have hidden the
+    // parse rather than shown it.
+    contract: `QQQ_20240315_C_${String((380 + i) * 1000).padStart(8, "0")}`,
     quantity: 1 + (i % 3),
     entry_price: 4.2 + (i % 11) * 0.3,
     exit_price: 4.2 + swing * 2.4,
@@ -41,8 +49,26 @@ const TRADES = Array.from({length: 48}, (_, i) => {
     entry_moneyness: -0.04 + (i % 8) * 0.012,
     entry_dte_calendar: 21 + (i % 25),
     entry_underlying_price: 380 + i * 0.7,
+    // The trade card reads these, so the fabricated row carries them: a sample that left a
+    // column out would make the card look finished here and blank on a real run. The names
+    // are the ones `CONTRACT` declares.
+    exit_underlying_price: 380 + i * 0.7 + swing * 6,
+    exit_iv: 0.15 + (i % 7) * 0.013,
+    exit_delta: 0.3 + (i % 5) * 0.06,
+    mfe: 0.18 + (i % 6) * 0.22,
+    mae: -0.05 - (i % 5) * 0.06,
+    entry_sig_rsi_14: 38 + (i % 40),
+    entry_sig_rv_20: 0.09 + (i % 6) * 0.01,
+    entry_sig_mom_20: -0.03 + (i % 9) * 0.011,
   };
 });
+
+/* The configuration a card reads its closing levels out of — the level a stop was held to is
+   in the config, not in the trade row, and the card says which. */
+const SAMPLE_CONFIG = {
+  symbol: "QQQ", start: "2023-01-01", end: "2024-12-31", engine: "event_driven",
+  exit: {take_profit: 0.8, stop_loss: 0.4, hold_days: 20, dte_floor: 5},
+};
 
 const EQUITY = Array.from({length: 260}, (_, i) => {
   const drift = i * 42;
@@ -206,12 +232,15 @@ section("telling the reader something", "The three kinds of text, each in a fixe
         paintIssues();
         box.id = "issuesDemo";
       }),
+    // The example has to be a surface that is **actually** not built. It was the experiment
+    // log, which now is — and a gallery showing a built surface as pending teaches the
+    // reader the wrong thing about both.
     one("a surface that is not built yet",
       `<div class="g-frame"><div class="pending" style="padding:0">
-        <h2>experiment log</h2>
-        <p class="lead">every run grouped by idea, with its trial count and verdict</p>
-        <p class="hint"><b>Not built yet.</b> the stored runs, notes and verdicts exist in
-          the backend; this surface is phase 4 of the frontend plan</p>
+        <h2>variants</h2>
+        <p class="lead">every registered variant by slot, with its parameter schema</p>
+        <p class="hint"><b>Not built yet.</b> the registry exists; no endpoint serves it
+          yet</p>
       </div></div>`),
   ]);
 
@@ -268,7 +297,7 @@ section("results", "The renderers that ship, on fabricated data shaped like a re
       <div class="chart"><svg id="hist" viewBox="0 0 520 250"></svg></div>
       <div class="chart"><svg id="years" viewBox="0 0 520 220"></svg></div>
       </div></div>`,
-      () => { renderHist(TRADES); renderYears(TRADES); }),
+      () => { renderHist(TRADES); renderPeriods(TRADES); }),
     one("a dimension against P&L", `<div class="g-frame">
       <div class="chart"><svg id="scatter" viewBox="0 0 520 250"></svg></div>
       <p class="hint" id="scatNote"></p></div>`,
@@ -285,6 +314,108 @@ section("results", "The renderers that ship, on fabricated data shaped like a re
       so it never stays blank.</p></div>`,
       () => blankChart($("blankDemo"),
         "the trade-table engine has no equity curve")),
+  ]);
+
+section("the trade card", "The design plan's section 7, which opens in the drawer beside "
+  + "the run it came from. Every figure in it is a stored column of the trade log; the four "
+  + "blocks the record cannot fill yet are named in the card rather than left out, so a card "
+  + "with no action log reads as a record without one and not as a trade that did nothing.",
+  [
+    one("the card, on a fabricated trade", () => `<div class="g-frame g-card-frame">${
+      tradeCard(TRADES[3], {config: SAMPLE_CONFIG, position: 4, total: TRADES.length})
+    }</div>`),
+    one("a losing trade, and the same card", () => `<div class="g-frame g-card-frame">${
+      tradeCard(TRADES.find(t => t.net_pnl < 0) || TRADES[0],
+                {config: SAMPLE_CONFIG, position: 9, total: TRADES.length})
+    }</div>`),
+    one("in the real drawer, where it ships", `<div class="g-frame">
+      <p class="hint">The drawer is 400 px by the token, draggable to 560 by its left edge,
+        and expands to the full window. Closing it returns focus and scroll to where the
+        reader was.</p>
+      <button class="btn" type="button" id="openCardDemo">open the trade card</button>
+      <button class="chip" type="button" id="fullCardDemo">expand it</button>
+      <button class="chip" type="button" id="closeCardDemo">close it</button></div>`,
+      () => {
+        const open = () => openDrawer({
+          title: `trade ${TRADES[3].trade_id}`,
+          subtitle: "QQQ · fabricated, shaped like a real row",
+          actions: cardActions(TRADES[3]),
+          body: tradeCard(TRADES[3], {config: SAMPLE_CONFIG, position: 4,
+                                      total: TRADES.length}),
+        }, () => {});
+        $("openCardDemo").addEventListener("click", open);
+        $("fullCardDemo").addEventListener("click", () => { open(); toggleFull(); });
+        $("closeCardDemo").addEventListener("click", closeDrawer);
+      }),
+  ]);
+
+section("comparing runs", "Two to four runs on one axis. Colour is never the only carrier: "
+  + "each series takes its column's colour **and** its dash pattern, because a line has no "
+  + "number printed on it and two of the four proposed colours collapse into one another "
+  + "under deuteranopia.",
+  [
+    one("three runs overlaid", `<div class="g-frame"><div id="overlayDemo"></div></div>`,
+      () => {
+        const dates = EQUITY.map(r => r.date);
+        const series = [1, 2, 3].map(column => ({
+          name: `run ${100 + column}`,
+          column,
+          values: EQUITY.map((r, i) =>
+            // A different shape per series, and the third stops early, so the gap rule is
+            // visible: a line that ends does not get drawn across the rest of the period.
+            column === 3 && i > EQUITY.length * 0.7 ? null
+              : r.equity_mid * (1 + column * 0.04 * Math.sin(i / 40))),
+        }));
+        chartStack($("overlayDemo"), {
+          dates,
+          layers: [seriesLayer({key: "equity", title: "equity, marked at the mid",
+                                height: 200, series, format: money})],
+          onBrush: () => {},
+        });
+      }),
+    one("the column headers, and a difference that is not separated", `<div class="g-frame">
+      <table class="cmp-columns"><tbody><tr>
+        ${[1, 2, 3].map(i => `<td class="cmp-col series-${i}${i === 1 ? " base" : ""}">
+          <span class="cmp-swatch"></span>
+          <span class="run-link">run ${100 + i}</span>
+          <span class="cmp-idea">a fabricated idea</span>
+          <span class="cmp-when">2026-10-07</span>
+          ${i === 1 ? `<span class="cmp-badge">baseline</span>` : ""}
+        </td>`).join("")}
+      </tr></tbody></table>
+      <table class="plain cmp-table"><tbody>
+        <tr><th class="left">net P&amp;L</th>
+          <td class="n base"><span class="cmp-value">+$12,480</span>
+            <span class="cmp-iv">−3.1k … +28.4k</span></td>
+          <td class="n"><span class="cmp-value">+$15,900</span>
+            <span class="cmp-iv">−1.2k … +31.0k</span>
+            <span class="cmp-delta pos">+$3,420 vs baseline</span>
+            <span class="cmp-tie">not separated</span></td>
+        </tr>
+      </tbody></table>
+      <p class="hint">The second run looks better and its interval overlaps the baseline's,
+        so the page says so in words rather than leaving two ranges to be compared by
+        eye.</p></div>`),
+  ]);
+
+section("the command palette", "⌘K. It lists runs, trades, pages and every action that has "
+  + "a shortcut, from the live keyboard registry — so a binding cannot exist without being "
+  + "discoverable, and there is no second list to keep in step.",
+  [
+    one("the real palette, with a fabricated source", `<div class="g-frame">
+      <button class="btn" type="button" id="openPaletteDemo">open the palette</button>
+      <p class="hint">Type "fabricated" to see a source's entries, or anything else to see
+        the commands. Esc closes it.</p></div>`,
+      () => {
+        bind("gallery", [{keys: ["mod+shift+g"], does: "a command from the gallery",
+                          run: () => notice("the gallery's own command ran")}]);
+        palette.provide("gallery", query =>
+          "fabricated".includes(String(query).toLowerCase()) && query
+            ? [{kind: "sample", label: "a fabricated run", hint: "+$12,480",
+                run: () => notice("the fabricated row was chosen")}]
+            : []);
+        $("openPaletteDemo").addEventListener("click", palette.open);
+      }),
   ]);
 
 section("formatting", "One place decides how a number reads, so two screens cannot "

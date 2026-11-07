@@ -39,6 +39,33 @@ ROOT = Path(__file__).resolve().parent.parent
 JS = ROOT / "app" / "static" / "js"
 
 
+
+#: What may sit immediately before a `/` that opens a regex rather than dividing. After a
+#: value — a name, a number, a closing bracket — a slash is division; after an operator, a
+#: comma, or the start of a statement, it opens a pattern. This is the standard heuristic
+#: and it is enough here, because the file is read for identifiers rather than evaluated.
+_BEFORE_REGEX = set("(,=:[!&|?{};+-*%~^<>") | {"\n"}
+
+
+def _is_regex_here(src: str, i: int) -> bool:
+    """Whether the `/` at ``i`` opens a regex literal."""
+    j = i - 1
+    while j >= 0 and src[j] in " \t":
+        j -= 1
+    if j < 0:
+        return True
+    if src[j] in _BEFORE_REGEX:
+        return True
+    # `return /x/` and `typeof /x/` — a keyword, not a value.
+    word = ""
+    k = j
+    while k >= 0 and (src[k].isalnum() or src[k] == "_"):
+        word = src[k] + word
+        k -= 1
+    return word in {"return", "typeof", "case", "in", "of", "new", "delete", "void",
+                    "instanceof", "do", "else", "yield", "await"}
+
+
 def strip_noise(src: str) -> str:
     """Source with comments and string literals blanked out, **keeping the code inside a
     template literal's** ``${...}``.
@@ -70,6 +97,33 @@ def strip_noise(src: str) -> str:
         elif src[i] == "`":
             text, i = _template(src, i)
             out.append(text)
+        elif src[i] == "/" and _is_regex_here(src, i):
+            # A regex literal. Without this the scanner reads `/'/` as a division followed
+            # by an opening quote, and the runaway string swallows the rest of the file —
+            # which is how `esc`'s own `.replace(/'/g, …)` made this guard report six live
+            # exports as missing. The slashes and the body are blanked; a regex contains no
+            # identifier the import check cares about.
+            j = i + 1
+            in_class = False
+            while j < len(src):
+                c = src[j]
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == "[":
+                    in_class = True
+                elif c == "]":
+                    in_class = False
+                elif c == "/" and not in_class:
+                    j += 1
+                    break
+                elif c == "\n":
+                    break          # an unterminated regex: not one after all
+                j += 1
+            while j < len(src) and src[j].isalpha():
+                j += 1             # the flags
+            out.append(re.sub(r"[^\n]", " ", src[i:j]))
+            i = j
         elif src[i] in "\"'":
             quote = src[i]
             j = i + 1
@@ -109,13 +163,69 @@ def _template(src: str, start: int) -> tuple[str, int]:
         if src[i:i + 2] == "${":
             depth, j = 1, i + 2
             while j < n and depth:
+                # **Comments first.** A hole holds real code, and real code holds comments,
+                # and a comment holds prose — prose with apostrophes in it. Skipping
+                # strings but not comments meant that `// the parameter's kind` opened a
+                # quote that ran to the next apostrophe in the file, swallowing 21,000
+                # characters of code and reporting three imports as unused.
+                if src[j:j + 2] == "//":
+                    k = src.find("\n", j)
+                    j = n if k < 0 else k
+                    continue
+                if src[j:j + 2] == "/*":
+                    k = src.find("*/", j + 2)
+                    j = n if k < 0 else k + 2
+                    continue
+                # **A regex literal, before the quote check below.** A hole holds real code
+                # and real code holds patterns, and a pattern holds quotes:
+                # `` `"${s.replace(/"/g, '""')}"` `` has a double quote inside a regex
+                # inside a hole. Read as a string, it ran to the next quote in the file and
+                # swallowed the end of the template, so every export after it was blanked
+                # and reported as missing from a module that plainly had it.
+                if src[j] == "/" and _is_regex_here(src, j):
+                    k = j + 1
+                    in_class = False
+                    while k < n:
+                        if src[k] == "\\":
+                            k += 2
+                            continue
+                        if src[k] == "[":
+                            in_class = True
+                        elif src[k] == "]":
+                            in_class = False
+                        elif src[k] == "/" and not in_class:
+                            k += 1
+                            break
+                        elif src[k] == "\n":
+                            break      # an unterminated regex: not one after all
+                        k += 1
+                    while k < n and src[k].isalpha():
+                        k += 1         # the flags
+                    j = k
+                    continue
                 if src[j] == "{":
                     depth += 1
                 elif src[j] == "}":
                     depth -= 1
                     if not depth:
                         break
-                elif src[j] in "\"'`":
+                elif src[j] == "`":
+                    # **A nested template: skipped as a template, not as a string.**
+                    #
+                    # Treating it as a quoted run from backtick to backtick works only until
+                    # the nested template has a hole of its own with a *third* template in
+                    # it, which is the ordinary shape of a table: a row template inside a
+                    # cell template inside the table's. The scan then stopped at the third
+                    # backtick, carried on counting braces in what it thought was code, and
+                    # closed the outer hole at the first `}` of some markup — after which
+                    # real code was read as template text and blanked. Every import used only
+                    # below that point was reported as unused, with the file plainly using
+                    # them.
+                    #
+                    # Recursing gets the end of the nested template however deep it goes.
+                    _, j = _template(src, j)
+                    continue
+                elif src[j] in "\"'":
                     # A string inside the hole: skipped here and blanked by the recursive
                     # call below, so its contents cannot close the hole early.
                     quote, j = src[j], j + 1
@@ -148,8 +258,15 @@ def exports(src: str) -> set[str]:
     return found
 
 
-def imports(src: str) -> list[tuple[set[str], str]]:
-    """Each import's names and the path it came from."""
+def imports(src: str) -> list[tuple[set[str], set[str], str]]:
+    """Each import's names and the path it came from.
+
+    Two sets, because ``import {isOpen as cardOpen}`` means two different names and the
+    check needs both: **the exported name** is what the target module has to offer, and
+    **the local name** is what this file then uses. Taking the alias for both reported
+    `drawer.js` as not exporting `cardOpen`, which it never claimed to -- a finding about
+    the code that was really a bug in the reader.
+    """
     clean = strip_noise(src)
     out = []
     # The path survives in the stripped source only as blanks, so the paths are read from
@@ -157,8 +274,14 @@ def imports(src: str) -> list[tuple[set[str], str]]:
     paths = re.findall(r"import\s*\{[^}]*\}\s*from\s*[\"']([^\"']+)[\"']", src)
     names = re.findall(r"import\s*\{([^}]*)\}\s*from", clean)
     for block, path in zip(names, paths):
-        got = {p.strip().split(" as ")[-1].strip() for p in block.split(",") if p.strip()}
-        out.append((got, path))
+        wanted, local = set(), set()
+        for part in block.split(","):
+            if not part.strip():
+                continue
+            halves = [h.strip() for h in part.split(" as ")]
+            wanted.add(halves[0])
+            local.add(halves[-1])
+        out.append((wanted, local, path))
     return out
 
 
@@ -197,7 +320,79 @@ def defined(src: str) -> set[str]:
     return names
 
 
+#: Shapes that have each broken the scanner once, with what must survive them.
+#:
+#: The scanner is the whole guard: if it loses its place, everything after the construct
+#: that lost it is blanked, and the check then reports imports as unused and calls as
+#: missing with complete confidence. That has happened three times — `\b` never matching
+#: before `$`, template holes blanked along with their text, and an apostrophe in a comment
+#: **inside** a hole opening a string that ran for 21,000 characters. Each one looked like
+#: a finding about the code rather than a bug in the reader.
+#:
+#: So the reader is checked before it is believed.
+PARSER_CASES: tuple[tuple[str, str, bool], ...] = (
+    # The real shape: an apostrophe in a comment inside a hole, and **another apostrophe
+    # further down the file**. The first opens a bogus string, the second closes it, and
+    # everything between — including the end of the template — is swallowed, so the code
+    # after the template is read as template text and blanked. A case with only one
+    # apostrophe does not reproduce it: the runaway string reaches the end of the input and
+    # the recursive pass over the hole still sees the code.
+    ("an apostrophe in a comment inside a hole",
+     "const a = `x${ fn(() => {\n  // the parameter's kind\n  return 1;\n}) }`;\n"
+     "// it's later\nconst b = SURVIVES(1);",
+     True),
+    ("a block comment inside a hole",
+     "const a = `x${ fn(() => { /* it's fine */ return SURVIVES(2); }) }`;", True),
+    ("code inside a hole is kept", "const a = `x${ SURVIVES(3) }y`;", True),
+    ("a nested template inside a hole",
+     "const a = `x${ c ? `y${ SURVIVES(4) }z` : '' }w`;", True),
+    ("text inside a template is dropped", "const a = `SURVIVES is only text here`;", False),
+    ("a line comment is dropped", "// SURVIVES\nconst a = 1;", False),
+    ("a plain string is dropped", 'const a = "SURVIVES";', False),
+    # A quote inside a regex literal. `.replace(/'/g, "&#39;")` in dom.js read as a
+    # division and an opening string, and the runaway swallowed every export after it —
+    # the guard then reported six names as not exported while they sat in the file.
+    ("a quote inside a regex",
+     'const a = s.replace(/\'/g, "x");\nconst b = SURVIVES(5);', True),
+    ("a slash inside a character class",
+     'const a = s.split(/[/]/);\nconst b = SURVIVES(6);', True),
+    ("division is not a regex", "const a = (x) / y; const b = SURVIVES(7);", True),
+    # A regex containing a quote, **inside a template hole**. The top-level case above does
+    # not reproduce it: the hole has its own scanner, and that one skipped comments and
+    # strings but not patterns.
+    # Three templates deep, which is what a table is: the table's, a cell's, and a span's
+    # inside that. The hole scanner skipped a nested template as if it were a quoted string,
+    # so it stopped at the third backtick and closed the hole at the next `}` in the markup.
+    ("a template nested two deep inside a hole",
+     'const a = `<t>${ xs.map(c => `<td${ c.on ? `<b>${c.n}</b>` : "" }</td>`).join("") }'
+     '</t>`;\nconst b = SURVIVES(9);', True),
+    ("a quote inside a regex inside a hole",
+     'const a = `x${ s.replace(/"/g, \'""\') }y`;\nconst b = SURVIVES(8);', True),
+)
+
+
+def check_parser() -> list[str]:
+    """Verify the scanner on the shapes that have broken it, before trusting its output."""
+    wrong = []
+    for name, source, should_survive in PARSER_CASES:
+        survived = "SURVIVES" in strip_noise(source)
+        if survived is not should_survive:
+            wrong.append(
+                f"the source reader is broken: with {name}, code that should "
+                f"{'survive' if should_survive else 'be blanked'} was "
+                f"{'blanked' if should_survive else 'kept'}. Every finding below would be "
+                f"unreliable, so none is reported"
+            )
+    return wrong
+
+
 def main() -> int:
+    broken = check_parser()
+    if broken:
+        print("the module check could not run:")
+        for line in broken:
+            print(f"  - {line}")
+        return 1
     if not JS.exists():
         print(f"there is no module directory at {JS.relative_to(ROOT)}")
         return 1
@@ -220,18 +415,19 @@ def main() -> int:
         here = str(f.relative_to(JS))
         own = defined(src)
         got: set[str] = set()
-        for names, path in imports(src):
+        for wanted, local, path in imports(src):
             target = (f.parent / path).resolve()
             if not target.exists():
                 problems.append(f"{here} imports from {path}, and there is no such file")
                 continue
-            missing = names - exported.get(target, set())
+            missing = wanted - exported.get(target, set())
             if missing:
                 problems.append(
                     f"{here} imports {', '.join(sorted(missing))} from {path}, which "
                     f"does not export {'it' if len(missing) == 1 else 'them'}"
                 )
-            got |= names
+            # The **local** names, because that is what the rest of the file can mention.
+            got |= local
         for local, path in namespace_imports(src):
             if not (f.parent / path).resolve().exists():
                 problems.append(f"{here} imports * as {local} from {path}, and there is "

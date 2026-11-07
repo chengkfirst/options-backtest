@@ -2,7 +2,11 @@
 name = "backtest"
 version = "0.1.0"
 description = "A research platform for backtesting US equity option strategies"
-requires-python = ">=3.11"
+# Capped, not open-ended: numpy 1.26.4 and pandas 2.1.4 publish no wheels for
+# 3.13, and the pins are not changing. ">=3.11" let a 3.13 interpreter satisfy
+# the declaration and then fail at install, which reads as a broken project
+# rather than an unsupported interpreter.
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "numpy==1.26.4",
     "pandas==2.1.4",
@@ -17,6 +21,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==7.4.0"]
+# Only tools/pdf_to_md.py needs this, and only when a plan PDF has changed. Pinned
+# like the rest: the conversion reads font sizes and glyph positions, so a different
+# extractor version could silently read the same PDF differently.
+docs = ["pypdf==6.16.2"]
 
 [build-system]
 requires = ["setuptools>=68"]

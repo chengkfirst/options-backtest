@@ -21,8 +21,10 @@ declaration at runtime and reports anything missing at once.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -80,6 +82,12 @@ def resolve(obj: object, path: str) -> tuple[str, str]:
 
 
 def main() -> int:
+    # This guard runs a real backtest, and a real backtest is saved. Send it somewhere
+    # temporary: for a while every invocation wrote a run into the researcher's own
+    # store under the default name, so their run history filled up with this guard's
+    # take-profit and delta band next to their own work under the same name. Two
+    # records of different things in one list reads as one strategy behaving randomly.
+    os.environ["BENCH_STORE"] = tempfile.mkdtemp(prefix="check_wiring-")
     sys.path.insert(0, str(ROOT))
     from app.server import _meta_payload, run_backtest
 
@@ -145,6 +153,42 @@ def main() -> int:
         elif state is EMPTY:
             unchecked.append(f"run.{path}")
 
+    # ── the list endpoints the experiment log and the comparison read ──────────────────
+    #
+    # A different shape from the run record, and checked against a real response for the same
+    # reason: the list carries what a row needs to be *read*, and a renamed column there fails
+    # in a place nothing else looks. The sample run above was saved into the temporary store,
+    # so both of these come back with exactly one real row in them.
+    from app.runner import STORE, ideas
+    rows = STORE.runs(limit=5, include_archived=True)
+    if not rows:
+        problems.append(
+            "the temporary store holds no run after the sample backtest, so no /api/runs "
+            "field could be checked -- a guard that checks nothing passes for the wrong reason"
+        )
+    for path in spec.get("runs", []) + spec.get("runs_when_set", []):
+        if not rows:
+            break
+        state, where = resolve(rows[0], path)
+        if state is MISSING:
+            problems.append(f"the experiment log needs runs.{path}, which /api/runs does "
+                            f"not supply (it stops at {where})")
+        elif state is EMPTY:
+            unchecked.append(f"runs.{path}")
+
+    groups = ideas()
+    if not groups:
+        problems.append("ideas() returned nothing for a store with a run in it")
+    for path in spec.get("ideas", []):
+        if not groups:
+            break
+        state, where = resolve(groups[0], path)
+        if state is MISSING:
+            problems.append(f"an idea's header needs ideas.{path}, which /api/ideas does "
+                            f"not supply (it stops at {where})")
+        elif state is EMPTY:
+            unchecked.append(f"ideas.{path}")
+
     meta = _meta_payload()
     for path in spec.get("meta", []):
         state, where = resolve(meta, path)
@@ -174,8 +218,18 @@ def main() -> int:
             problems.append(f"the interface offers the sizing method {method!r} and the "
                             f"backend has no such method")
             continue
+        # **A method may need more than one parameter.** It was read as a single name,
+        # and `scale_by_vol` needs two -- `target_vol` and the `risk_pct` its budget is
+        # computed from. Listed as one, the interface offered a form with one field and
+        # the backend raised on the second.
+        unknown = [name for name in needs if name not in sample]
+        if unknown:
+            problems.append(f"the sizing method {method!r} needs {unknown}, which this "
+                            f"check has no sample value for -- add one, or the method "
+                            f"is being checked less than it looks")
+            continue
         try:
-            Sizing(method=method, **{needs: sample[needs]})
+            Sizing(method=method, **{name: sample[name] for name in needs})
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the interface sends the sizing method {method!r} and the "
                             f"backend refuses it: {exc}")
@@ -190,6 +244,8 @@ def main() -> int:
     print(f"the front/back contract check passed "
           f"({len(spec.get('run', []))} run fields · "
           f"{len(spec.get('run_optional', []))} event-driven fields · "
+          f"{len(spec.get('runs', [])) + len(spec.get('runs_when_set', []))} list fields · "
+          f"{len(spec.get('ideas', []))} idea fields · "
           f"{len(spec.get('meta', []))} meta fields · "
           f"{len(spec.get('sizing_methods', []))} sizing methods)")
     if unchecked:

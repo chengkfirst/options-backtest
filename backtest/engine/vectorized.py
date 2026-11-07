@@ -266,7 +266,8 @@ class TradeTableEngine:
         contract = selection.contract.unwrap()
         entry_quote = selection.quote
         assert entry_quote is not None
-        tradable = check_tradable(entry_quote["bid"], entry_quote["ask"], self.config.costs)
+        tradable = check_tradable(entry_quote["bid"], entry_quote["ask"], self.config.costs,
+                                  flags=str(entry_quote.get("quality_flags", "")))
         if not tradable.ok:
             self.events.record(
                 EventKind.NOT_TRADABLE, entry_day,
@@ -280,6 +281,13 @@ class TradeTableEngine:
             side=Side.BUY,
             quantity=strategy.quantity,
             multiplier=self.config.contract.multiplier,
+            # The same two inputs as the event-driven engine. Missed here, the two would
+            # diverge on any run that configures the widening -- and the divergence
+            # would look like a slippage effect rather than a missing argument.
+            days_to_expiry=self.market.calendar.sessions_between(
+                entry_quote["asof"], entry_quote["expiry"]),
+            delta=float(entry_quote["delta"]) if "delta" in entry_quote
+                  and entry_quote["delta"] == entry_quote["delta"] else None,
             costs=self.config.costs,
         )
 
@@ -333,7 +341,12 @@ class TradeTableEngine:
 
     def _exit_price_of(self, row: pd.Series) -> Maybe[float]:
         """The exit price: selling, so the adverse side (the bid)."""
-        tradable = check_tradable(row["bid"], row["ask"], self.config.costs)
+        tradable = check_tradable(
+            row["bid"], row["ask"], self.config.costs,
+            # The same read as the event-driven engine. Missed here, the two
+            # would diverge on any cleaned dataset -- which is the one
+            # cross-check this project rests on.
+            flags=str(row.get("quality_flags", "")))
         if not tradable.ok:
             return Maybe.missing(tradable.reason or "untradable")
         from backtest.execution.costs import fill_price
@@ -474,6 +487,10 @@ class TradeTableEngine:
             side=Side.SELL,
             quantity=qty,
             multiplier=multiplier,
+            days_to_expiry=self.market.calendar.sessions_between(
+                exit_row["asof"], exit_row["expiry"]),
+            delta=float(exit_row["delta"]) if "delta" in exit_row
+                  and exit_row["delta"] == exit_row["delta"] else None,
             costs=self.config.costs,
         )
         return self._record(

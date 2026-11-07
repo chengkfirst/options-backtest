@@ -61,8 +61,7 @@ BUILT: Mapping[Action, str] = {
     Action.HEDGE_REMOVE: "there is nothing to remove until HEDGE_ADD exists, and "
                         "removing one leg of a trade needs the per-leg main/hedge role "
                         "that TradeRecord does not carry",
-    Action.SET_STOP: "the stop is currently a constant on the ExitRule, with nowhere "
-                     "to record a stop that moves during the trade",
+    Action.SET_STOP: "",
 }
 
 

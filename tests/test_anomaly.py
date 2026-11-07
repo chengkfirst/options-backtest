@@ -112,11 +112,25 @@ class TestRulesFire:
         assert "dead_exit" in self.kinds(t)
 
     def test_costs_eat_edge(self):
-        found = self.kinds(trades(), costs={"fees_pct_of_gross": 0.55, "total": 9000})
+        """The ratio is now against gross rebuilt at the **mid** -- the edge before
+        costs. `fees_pct_of_gross` could never carry the spread, which for an option
+        buyer is the larger half of the cost; see `tests/test_cost_truth.py`."""
+        found = self.kinds(trades(), costs={"cost_pct_of_gross_at_mid": 0.55,
+                                            "gross_pnl_at_mid": 16_400.0,
+                                            "spread": 7_000.0, "total": 9_000.0})
         assert "costs" in found
 
     def test_costs_quiet_when_reasonable(self):
-        assert "costs" not in self.kinds(trades(), costs={"fees_pct_of_gross": 0.12})
+        assert "costs" not in self.kinds(
+            trades(), costs={"cost_pct_of_gross_at_mid": 0.12,
+                             "gross_pnl_at_mid": 75_000.0, "total": 9_000.0})
+
+    def test_no_edge_at_all_is_reported_rather_than_skipped(self):
+        """With no positive gross there is no ratio, and the old rule returned nothing --
+        the quietest outcome for the worst case."""
+        found = self.kinds(trades(), costs={"gross_pnl_at_mid": -4_000.0,
+                                            "total": 9_000.0})
+        assert "costs" in found
 
     def test_overlap(self):
         t = trades(n=60, seed=6)

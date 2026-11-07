@@ -137,6 +137,14 @@ class Context:
     positions: int
     #: The current drawdown (negative, e.g. -0.08). Brakes and reductions read this.
     drawdown: float
+    #: This slot's write handle into the trade context, or ``None``.
+    #:
+    #: A :class:`~backtest.core.trade_context.SlotWriter` **bound to one slot**, so a
+    #: component can record what it decided and on what, and cannot record it anywhere
+    #: but under its own name. ``None`` where the caller is not a slot -- a plan is not
+    #: one slot, it is the coupling of several, and giving it a namespace would invite a
+    #: record that cannot be attributed.
+    write: Any = None
     _view: Any = None
     #: The data view, cut at the decision day. ``ctx.data`` is how a plan reads anything
     #: the other fields do not already hold — and a read past the decision day **raises**

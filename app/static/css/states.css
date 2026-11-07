@@ -173,3 +173,10 @@ body {
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-sm);
 }
+
+/* A card is read at the drawer's width, so the gallery shows it at that width: reviewing a
+   400 px component across 1,400 px of page tells you nothing about how it reads. */
+.g-card-frame {
+  max-width: var(--drawer-width);
+  background: var(--surface-1);
+}

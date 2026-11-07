@@ -58,23 +58,35 @@ def put_run():
 class TestTheFlagScreensAndTheTreeDecides:
     @pytest.mark.req("4.2.early_exercise")
     def test_the_tree_is_consulted_only_where_the_flag_fires(self, put_run):
-        """The screen, measured.
+        """The screen, asserted as the **mechanism** and not as a rate.
 
-        A tree per position per session would be minutes; this run consults it a handful
-        of times. Asserted as a share of the sessions rather than as a count, because the
-        count is a property of this data and the share is a property of the design.
+        The first version of this required the tree to be consulted on fewer than one
+        session in twenty. That looked like a design property and was not: how often the
+        flag fires is a property of **this data** -- a synthetic chain with one IV per
+        session and no skew -- and on real option data with a smile it would fire at some
+        other rate entirely. A threshold measured on a fixture and asserted as a design
+        claim is the same mistake as pinning a trade count.
+
+        What is mechanical and worth asserting: the tree is consulted **at most** as
+        often as the flag fires, and not on every held position every session. The second
+        half is checked by counting positions rather than by choosing a ratio.
         """
         from backtest.core.run_log import EventKind
 
         consulted = len(put_run.raw.events.of_kind(EventKind.EARLY_EXERCISE_RISK))
-        sessions = len(put_run.raw.snapshots)
         assert consulted > 0, (
             "the tree was never consulted in a put strategy over three years, so this "
-            "path is not reachable and the test below proves nothing"
+            "path is not reachable and the tests below prove nothing"
         )
-        assert consulted < sessions / 20, (
-            f"the tree was consulted on {consulted} of {sessions} sessions. The flag is "
-            f"supposed to be the screen; at that rate it is not screening"
+
+        # Position-days held: the number of times a tree would run without the screen.
+        position_days = sum(s.n_positions for s in put_run.raw.snapshots
+                            if hasattr(s, "n_positions")) or sum(
+            len(getattr(s, "contracts", ()) or ()) for s in put_run.raw.snapshots)
+        assert position_days > consulted, (
+            f"the tree was consulted {consulted} times against {position_days} "
+            f"position-days. Without the screen it would run once per position per "
+            f"session, so these being equal means there is no screen"
         )
 
     @pytest.mark.req("4.2.early_exercise")

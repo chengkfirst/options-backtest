@@ -5,21 +5,92 @@
  * panel on the left, the run history, and the code editor.
  */
 
-/* ── the two-column skeleton ── */
+/* ── the composer, as the addendum's wireframe draws it ──────────────────────────
+   A slot board in three lifecycle columns with the settings beside it, and a panel along the
+   foot. It was a 520 px form in the left third with the other two thirds empty: a rule's own
+   description wrapped to five lines, and the seventh slot sat four screens below the first.
+   The results moved to their own surface, so the width was there to take. */
 body{background:var(--ground)}
-/* The plan editor is the main surface, and writing Python at 340px clips the right of
-   every line. Wide enough for about 60 characters; wider starts squeezing the
-   results. */
-.bench{display:grid;grid-template-columns:clamp(400px,32vw,520px) 1fr;min-height:100vh;align-items:start}
-@media(max-width:980px){.bench{grid-template-columns:1fr}}
+.bench{display:block;min-height:100vh}
 
-/* ── left: the parameter panel ── */
-.panel{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;
-  background:var(--panel);border-right:1px solid var(--line)}
-@media(max-width:980px){.panel{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line)}}
-.panel-head{padding:18px 20px 14px;border-bottom:1px solid var(--line-soft)}
-.panel-head h1{font-family:var(--display);font-size:18px;font-weight:700;letter-spacing:-.015em;margin:0}
-.mode{margin:4px 0 0;font-size:11.5px;color:var(--ink-3)}
+.composer{display:flex;flex-direction:column;min-height:calc(100vh - var(--topbar-height))}
+
+/* The context bar: where you are, what differs, and the one primary action. */
+.composer-bar{
+  display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;
+  padding:var(--space-3) var(--space-5);
+  border-bottom:1px solid var(--line);background:var(--panel);
+  position:sticky;top:0;z-index:3;
+}
+.composer-where{font-family:var(--display);font-size:var(--font-md);
+  font-weight:var(--weight-medium)}
+.composer-actions{margin-left:auto;display:flex;align-items:center;gap:var(--space-3)}
+.composer-actions .hint{margin:0;max-width:52ch;text-align:right}
+
+/* 60 / 25 by the plan's ratio, with the slot board taking the larger share. */
+.board{
+  display:grid;
+  grid-template-columns:minmax(0,3fr) minmax(260px,1fr);
+  gap:var(--space-5);
+  padding:var(--space-4) var(--space-5);
+  align-items:start;flex:1;
+}
+.slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-4)}
+@media(max-width:1200px){
+  .board{grid-template-columns:1fr}
+  .slots{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:820px){.slots{grid-template-columns:1fr}}
+
+.col{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
+.col-head{
+  margin:0;font-size:var(--font-xs);font-weight:var(--weight-medium);
+  letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);
+  padding-bottom:var(--space-1);border-bottom:1px solid var(--line);
+}
+.col-empty{margin:0}
+
+/* The open-state order, which is the order the engine asks these in every day. */
+.comp-order{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:17px;height:17px;margin-right:6px;
+  border:1px solid var(--line);border-radius:var(--radius-sm);
+  font-family:var(--mono);font-size:var(--font-xs);color:var(--ink-3);
+}
+.comp-tag{
+  margin-left:6px;padding:0 5px;border-radius:var(--radius-sm);
+  background:var(--sunk);color:var(--ink-3);
+  font-family:var(--sans);font-size:var(--font-xs);font-weight:var(--weight-regular);
+}
+.comp.is-off{opacity:.82}
+
+/* ── the settings column ── */
+.settings-col{display:flex;flex-direction:column;gap:var(--space-2);position:sticky;
+  top:calc(var(--topbar-height) + 56px)}
+.setting{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--panel)}
+.setting summary{
+  display:flex;align-items:baseline;gap:var(--space-2);
+  padding:var(--space-2) var(--space-3);cursor:pointer;
+  font-size:var(--font-sm);font-weight:var(--weight-medium);
+}
+.setting-sum{margin-left:auto;font-weight:var(--weight-regular);font-size:var(--font-xs);
+  color:var(--ink-3);text-align:right}
+.setting-body{padding:0 var(--space-3) var(--space-3);display:flex;flex-wrap:wrap;
+  gap:var(--space-3)}
+.setting-body .hint{margin:0}
+
+/* ── the foot panel ── */
+.composer-foot{border-top:1px solid var(--line);background:var(--panel)}
+.foot-tabs{margin:0;padding:0 var(--space-5);background:none;border-radius:0;width:auto;
+  border-bottom:1px solid var(--line-soft)}
+.foot-body{padding:var(--space-3) var(--space-5) var(--space-4);max-height:38vh;overflow:auto}
+.validation{margin:0;font-size:var(--font-sm);line-height:1.55}
+.validation.ok{color:var(--ink-2)}
+.validation.bad{color:var(--warn)}
+.payload{margin:var(--space-2) 0 0;max-height:30vh;overflow:auto;white-space:pre;
+  font-size:var(--font-xs);line-height:1.5}
+
+.mode{margin:4px 0 0;font-size:var(--font-sm);color:var(--ink-3)}
 .mode.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
   background:var(--gain);margin-right:6px;vertical-align:middle}
 .mode.offline::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
@@ -27,60 +98,44 @@ body{background:var(--ground)}
 
 .panel-body{flex:1;overflow-y:auto;padding:4px 20px 16px;display:flex;flex-direction:column;gap:2px}
 
-.grp{border:none;border-bottom:1px solid var(--line-soft);margin:0;padding:14px 0}
-.grp:last-child{border-bottom:none}
-.grp legend{font-family:var(--display);font-size:11px;font-weight:600;letter-spacing:.05em;
-  text-transform:uppercase;color:var(--ink-2);padding:0;margin-bottom:9px;display:flex;
-  align-items:center;gap:7px;width:100%}
-.grp legend b{font-size:11.5px;color:var(--accent);font-weight:700}
-.grp legend .opt{margin-left:auto;font-size:10px;font-weight:400;color:var(--ink-3);
-  text-transform:none;letter-spacing:0}
-
 /* Component status: what does not stand up has to be visible at a glance */
 .comp[data-state="partial"] legend b,.comp[data-state="missing"] legend b{color:var(--ink-3)}
 .comp[data-state="partial"] legend,.comp[data-state="missing"] legend{color:var(--ink-3)}
-.gap{margin:0;font-size:11.5px;line-height:1.6;color:var(--ink-3);
+.gap{margin:0;font-size:var(--font-sm);line-height:1.6;color:var(--ink-3);
   padding-left:11px;border-left:2px solid var(--line)}
 .comp[data-state="missing"] .gap{border-left-color:var(--loss);color:var(--ink-2)}
 
 .row{display:flex;gap:10px;margin-bottom:9px}
 .row:last-child{margin-bottom:0}
-.grp label{flex:1;display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--ink-2);min-width:0}
-.grp label.full{width:100%}
-.grp input,.grp select,.grp textarea{background:var(--ground);border:1px solid var(--line);
-  border-radius:2px;padding:6px 8px;font-size:13px;width:100%;min-width:0}
-.grp input:focus,.grp select:focus,.grp textarea:focus{border-color:var(--accent);outline:none}
-.grp input.mono{font-family:var(--mono);font-size:12px}
+
 .unit{position:absolute;opacity:0}          /* the unit goes in the label text instead */
-.hint{margin:7px 0 0;font-size:11px;line-height:1.55;color:var(--ink-3)}
-.hint code{font-family:var(--mono);font-size:10.5px;background:var(--sunk);padding:1px 4px;border-radius:2px}
-.hint b{color:var(--ink-2);font-weight:600}
+.hint{margin:7px 0 0;font-size:var(--font-xs);line-height:1.55;color:var(--ink-3)}
+.hint code{font-family:var(--mono);font-size:var(--font-xs);background:var(--sunk);padding:1px 4px;border-radius:2px}
+.hint b{color:var(--ink-2);font-weight:var(--weight-medium)}
 
 /* Preset conditions */
 .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
-.chip{background:var(--sunk);border:1px solid var(--line-soft);border-radius:11px;padding:3px 9px;
-  font-size:10.5px;font-family:var(--mono);color:var(--ink-2);cursor:pointer}
+.chip{background:var(--sunk);border:1px solid var(--line-soft);border-radius:var(--radius-sm);padding:3px 9px;
+  font-size:var(--font-xs);font-family:var(--mono);color:var(--ink-2);cursor:pointer}
 .chip:hover{border-color:var(--accent);color:var(--accent)}
 
 /* The expression / code switch */
-.tabs{display:flex;gap:2px;margin-bottom:9px;background:var(--sunk);padding:2px;border-radius:2px;width:fit-content}
-.tab{background:none;border:none;padding:4px 12px;font-size:11.5px;color:var(--ink-3);cursor:pointer;border-radius:2px}
-.tab.on{background:var(--panel);color:var(--ink);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.tabs{display:flex;gap:2px;margin-bottom:9px;background:var(--sunk);padding:2px;border-radius:var(--radius-sm);width:fit-content}
+.tab{background:none;border:none;padding:4px 12px;font-size:var(--font-sm);color:var(--ink-3);cursor:pointer;border-radius:var(--radius-sm)}
+.tab.on{background:var(--panel);color:var(--ink);font-weight:var(--weight-medium);}
 
-textarea.code{font-family:var(--mono);font-size:11.5px;line-height:1.6;resize:vertical;
+textarea.code{font-family:var(--mono);font-size:var(--font-sm);line-height:1.6;resize:vertical;
   tab-size:4;white-space:pre;overflow-wrap:normal;overflow-x:auto}
-.link{background:none;border:none;color:var(--accent);font-size:11px;cursor:pointer;padding:0;
+.link{background:none;border:none;color:var(--accent);font-size:var(--font-xs);cursor:pointer;padding:0;
   text-decoration:underline;text-underline-offset:2px}
-pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2px;
-  font-family:var(--mono);font-size:10.5px;line-height:1.6;color:var(--ink-2);
+pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:var(--radius-sm);
+  font-family:var(--mono);font-size:var(--font-xs);line-height:1.6;color:var(--ink-2);
   white-space:pre-wrap;border-left:2px solid var(--line)}
-.grp details summary{font-size:11.5px;color:var(--ink-2);cursor:pointer;margin-bottom:8px}
-.grp details summary:hover{color:var(--accent)}
 
 /* The run button */
 .panel-foot{padding:14px 20px 18px;border-top:1px solid var(--line-soft);background:var(--panel)}
-.run{width:100%;background:var(--accent);color:var(--on-accent);border:none;border-radius:2px;padding:11px;
-  font-family:var(--display);font-size:14px;font-weight:600;cursor:pointer;letter-spacing:.01em}
+.run{width:100%;background:var(--accent);color:var(--on-accent);border:none;border-radius:var(--radius-sm);padding:11px;
+  font-family:var(--display);font-size:var(--font-md);font-weight:var(--weight-medium);cursor:pointer;letter-spacing:.01em}
 .run:hover{filter:brightness(1.08)}
 .run:disabled{opacity:.55;cursor:default}
 .run.busy{background:var(--ink-3)}
@@ -89,60 +144,301 @@ pre.help{margin:8px 0 0;padding:10px 12px;background:var(--sunk);border-radius:2
 .stage{padding:24px 26px 64px;display:flex;flex-direction:column;gap:20px;min-width:0}
 
 .placeholder{padding:52px 32px;text-align:center;border:1px dashed var(--line);border-radius:var(--radius)}
-.placeholder h2{font-size:17px;font-weight:600;margin-bottom:10px}
-.placeholder p{margin:0 auto;max-width:56ch;font-size:13px;color:var(--ink-2);line-height:1.7}
-.placeholder b{color:var(--ink);font-weight:600}
-.gap-list{margin-top:18px!important;font-size:11.5px!important;color:var(--ink-3)!important;
-  text-align:left;display:inline-block;white-space:pre-line;border-left:2px solid var(--line);padding-left:12px}
+.placeholder h2{font-size:var(--font-lg);font-weight:var(--weight-medium);margin-bottom:10px}
+.placeholder p{margin:0 auto;max-width:56ch;font-size:var(--font-base);color:var(--ink-2);line-height:1.7}
+.placeholder b{color:var(--ink);font-weight:var(--weight-medium)}
 
 /* Run history: comparison is the substance of research, so it sits at the top and
    stands out */
 .runs-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px}
-.runs-head h2{font-size:15px;font-weight:600}
-.runs-head p{margin:0;font-size:12.5px;color:var(--ink-2)}
+.runs-head h2{font-size:var(--font-md);font-weight:var(--weight-medium)}
+.runs-head p{margin:0;font-size:var(--font-sm);color:var(--ink-2)}
 #runs tbody tr{cursor:pointer}
 #runs tbody tr.on td{background:var(--accent-soft)}
-#runs tbody tr.on td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
-.pin{background:none;border:1px solid var(--line);border-radius:2px;padding:1px 7px;font-size:10.5px;
+#runs tbody tr.on td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
+.pin{background:none;border:1px solid var(--line);border-radius:var(--radius-sm);padding:1px 7px;font-size:var(--font-xs);
   color:var(--ink-3);cursor:pointer}
 .pin.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
-.delta{font-size:11px;color:var(--ink-3);display:block;font-variant-numeric:tabular-nums}
-.cfg{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);max-width:280px;overflow:hidden;
+.delta{font-size:var(--font-xs);color:var(--ink-3);display:block;font-variant-numeric:tabular-nums}
+.cfg{font-family:var(--mono);font-size:var(--font-xs);color:var(--ink-2);max-width:280px;overflow:hidden;
   text-overflow:ellipsis;display:block}
 
 .more{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
-.more summary{padding:11px 16px;font-family:var(--display);font-size:13px;font-weight:600;cursor:pointer}
+.more summary{padding:11px 16px;font-family:var(--display);font-size:var(--font-base);font-weight:var(--weight-medium);cursor:pointer}
 .more summary:hover{color:var(--accent)}
 .more[open] summary{border-bottom:1px solid var(--line-soft)}
-.more-body{padding:16px;display:flex;flex-direction:column;gap:18px}
 
 /* An overlay while it runs, so it does not look frozen */
 .busy-note{display:flex;align-items:center;gap:10px;padding:13px 16px;background:var(--accent-soft);
-  border-left:3px solid var(--accent);font-size:12.5px;border-radius:0 2px 2px 0}
+  border-left:3px solid var(--accent);font-size:var(--font-sm);border-radius:0 2px 2px 0}
 .spin{width:12px;height:12px;border:2px solid var(--accent);border-right-color:transparent;
   border-radius:50%;animation:sp .7s linear infinite;flex:0 0 auto}
 @keyframes sp{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.spin{animation:none}}
 
-/* ── validate this run ──────────────────────────────────── */
-.valid-tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(216px,1fr));
-  gap:10px;margin:4px 0 14px}
-.valid-tool{display:flex;flex-direction:column;border:1px solid var(--line);
-  border-radius:var(--radius);padding:11px 13px;background:var(--panel)}
-.valid-tool h4{margin:0 0 5px;font:600 12.5px/1.3 var(--sans)}
-.valid-tool p{margin:0 0 10px;font-size:11.5px;line-height:1.55;color:var(--ink-2);flex:1}
-.valid-tool .vrow{display:grid;grid-template-columns:auto 1fr;gap:5px 7px;
-  align-items:center}
-.valid-tool .vrow button{grid-column:1/-1;justify-self:start;margin-top:4px}
-/* Wide enough for a list of levels ("0.5, 1.0, 1.5"); a truncated list reads as a
-   shorter one, and the user then wonders why a level is missing from the grid. */
-.valid-tool input{width:100%;min-width:0;font:11.5px/1 var(--mono);padding:4px 6px;
-  border:1px solid var(--line);border-radius:var(--radius);background:var(--ground);
-  color:var(--ink)}
-.valid-tool label{font-size:10.5px;color:var(--ink-3);letter-spacing:.02em}
-.valid-tool .unavail{font-size:11px;color:var(--ink-3);font-style:italic}
 .valid-out{margin:0;padding:15px 17px;border:1px solid var(--line);
   border-radius:var(--radius);background:var(--panel);color:var(--ink);
   font:11.5px/1.65 var(--mono);white-space:pre-wrap;overflow-x:auto;
   max-height:640px;overflow-y:auto}
 .valid-out b{color:var(--warn)}
+
+.gap {
+  padding: var(--space-2) 0 var(--space-2) var(--space-3);
+  border-left: 2px solid var(--border-strong);
+}
+.gap + .gap { margin-top: var(--space-2); }
+.gap b { display: block; font-size: var(--font-sm); color: var(--text-primary); }
+.gap p {
+  margin: 3px 0 0; font-size: var(--font-xs); line-height: 1.5;
+  color: var(--text-secondary);
+}
+/* Blocking means the engine will refuse the run, not that the rule is approximate. */
+.gap.blocking { border-left-color: var(--danger); }
+.gap.blocking b { color: var(--danger); }
+
+/* ── the seven components, as reference ─────────────────────────────────────────
+ *
+ * Not a form. Every control here writes into the rule document rather than holding a value
+ * of its own, so the rule lives in one place — the text — and there is no second copy in
+ * the DOM to drift from it. */
+.slots > summary {
+  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-sm);
+  font-weight:var(--weight-medium);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.slots > summary::-webkit-details-marker { display: none; }
+.slots > summary::before { content: "▸"; color: var(--text-muted); font-size:var(--font-xs); }
+.slots[open] > summary::before { content: "▾"; }
+
+.layer + .layer { margin-top: var(--space-5); }
+.layer > h4 {
+  margin: 0 0 var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-xs);
+  font-weight:var(--weight-medium);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.slot { padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
+.slot:last-child { border-bottom: 0; }
+.slot > h5 {
+  margin: 0 0 3px;
+  font-size: var(--font-sm);
+  font-weight:var(--weight-medium);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.key {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.key:hover { text-decoration: underline; }
+
+
+/* ── which rule decides a slot ──────────────────────────────────────────────────
+ *
+ * A list, not a dropdown. These are two or three options that each need a line to be
+ * understood, and the sentence that explains one used to appear only once it had been
+ * chosen — so finding out what `premium` meant required picking it. */
+.rule-opts { display: grid; gap: 4px; margin: 6px 0 8px; }
+
+.rule-opt {
+  display: grid;
+  grid-template-columns: 14px auto 1fr;
+  align-items: baseline;
+  gap: 2px 7px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.rule-opt:hover { border-color: var(--accent); }
+.rule-opt.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.rule-opt input { margin: 0; }
+
+.rule-name { font-family: var(--mono); font-size:var(--font-sm); color: var(--ink); white-space: nowrap; }
+.rule-opt.on .rule-name { color: var(--accent); font-weight:var(--weight-medium); }
+.rule-why { font-size:var(--font-xs); line-height: 1.45; color: var(--ink-2); }
+/* A stateful rule carries something from one day to the next, which is the difference
+   between a trailing stop and a fixed one and worth saying beside the name. */
+.rule-tag {
+  font-family: var(--sans);
+  font-size:var(--font-xs);
+  padding: 0 4px;
+  margin-left: 4px;
+  border-radius: 2px;
+  background: var(--sunk);
+  color: var(--ink-3);
+}
+
+/* ── what has been changed from the starting configuration ──────────────────────
+ *
+ * A dot on the field, and a count at the top. After ten minutes of editing, "what in here
+ * is mine" is a question the form could not answer at all. */
+.changed-line {
+  margin: 6px 0 0;
+  font-size:var(--font-xs);
+  color: var(--accent);
+}
+.field { position: relative; }
+.baseline-dot {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+.baseline-dot:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.field.changed > label { color: var(--accent); }
+
+/* The rest of a slot's gap sentence, which used to be cut mid-word with no way to finish it. */
+.gap-more {
+  background: none;
+  border: 0;
+  border-bottom: 1px dotted var(--border-strong);
+  color: var(--ink-3);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+.gap-more:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.gap-rest { display: block; margin-top: 3px; }
+
+/* A slot switched off. Stated, not left blank: "no stop loss" is a research choice and has to
+   read as one — the card says what the engine is not being given. */
+.comp-note.off {
+  color: var(--warn);
+  border-left: 2px solid var(--warn);
+  padding-left: 9px;
+}
+
+/* ── what a slot is, beside what it is set to ────────────────────────────────────
+   The architecture gives every slot a level, a moment it is asked and an action vocabulary.
+   A card that showed only its control read as though the control were the slot — so a take
+   profit looked like "a number at which to close" when the architecture lets it reduce, move
+   the stop, or ask for a hedge. The line carries the contract; the last part carries how much
+   of it the engine performs, which is the gap a researcher has to know before trusting a
+   result from this slot. */
+.comp-contract{
+  margin:0 0 var(--space-2);
+  display:flex;flex-direction:column;gap:2px;
+  font-size:var(--font-xs);line-height:1.45;
+}
+.comp-level{color:var(--ink-3)}
+.comp-emits{display:flex;flex-wrap:wrap;gap:4px}
+.comp-emits code{
+  background:var(--sunk);color:var(--ink-2);
+  padding:0 4px;border-radius:var(--radius-sm);
+  font-family:var(--mono);font-size:var(--font-xs);
+}
+.comp-wired{color:var(--warn)}
+.comp-wired b{color:var(--warn)}
+
+/* An action the architecture gives this slot and the engine cannot execute. Shown, struck
+   through, with the engine's own reason on hover — removing it would make the slot look
+   smaller than the design says it is, which is the misreading the line exists to prevent. */
+.comp-emits code.not-built{
+  text-decoration:line-through;
+  text-decoration-color:var(--warn);
+  color:var(--ink-3);
+}
+
+/* The daily review: not a slot, so not a card. It sits under the column whose four slots it
+   is the dynamic form of, because that is where it acts. */
+.review{
+  grid-column:1 / -1;
+  border:1px dashed var(--border-strong);
+  border-radius:var(--radius-md);
+  padding:var(--space-4);
+  background:var(--sunk);
+  /* The editor and its reference side by side: the reference is read **while** writing, and
+     a disclosure above the box pushes what you are writing off the screen to read it. */
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  grid-template-areas:
+    "head  link"
+    "wired wired"
+    "mode  mode"
+    "note  note"
+    "box   ref";
+  gap:var(--space-2) var(--space-4);
+  align-content:start;
+}
+.review > .comp-h{grid-area:head;margin:0}
+.review > .comp-contract{grid-area:wired;margin:0}
+/* On a card the whole reach line is amber, because all of it is a limit. Here most of it is
+   simply what the review is; only the two limits are. */
+.review .comp-wired{color:var(--ink-2)}
+.review > .review-mode{grid-area:mode}
+.review > .comp-note{grid-area:note;margin:0}
+.review > .field{grid-area:box;margin:0}
+/* Beside the heading, not under the box: in the "link" row below it the button stretched
+   to the height of whatever the reference left over. */
+.review > .hint{grid-area:link;margin:0;justify-self:end;align-self:center}
+/* Both capped at the same height and both scroll, so the block has a size a screen can
+   hold and the editor and its reference stay level. */
+.review > .help{grid-area:ref;margin:0;max-height:440px;overflow:auto}
+.review textarea{min-height:440px;max-height:440px}
+
+/* With the reference put away the editor takes the whole width — a half-empty row beside a
+   code box is worse than either. */
+.review.ref-off > .help{display:none}
+.review.ref-off{
+  grid-template-columns:minmax(0,1fr) auto;
+  grid-template-areas:
+    "head  link"
+    "wired wired"
+    "mode  mode"
+    "note  note"
+    "box   box";
+}
+@media(max-width:1200px){
+  .review{
+    grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:
+      "head  link"
+      "wired wired"
+      "mode  mode"
+      "note  note"
+      "box   box"
+      "ref   ref";
+  }
+}
+
+.comp-review{
+  margin:var(--space-2) 0 0;
+  font-size:var(--font-xs);
+  color:var(--ink-3);
+  line-height:1.45;
+}
+.comp-review .link{font-size:var(--font-xs)}
+.review-mode{margin:0 0 var(--space-2)}
+.review-mode .field{margin:0}
+.comp-review span{display:block}
+/* Code, not prose: a wrapped line of Python reads as a different line of Python. Both
+   panes scroll in their own right rather than reflowing. */
+.review textarea{white-space:pre;overflow:auto}
+.review > .help{white-space:pre;overflow:auto}

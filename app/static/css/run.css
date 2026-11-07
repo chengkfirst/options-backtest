@@ -64,48 +64,217 @@
   line-height: 1.7;
 }
 
-/* ── the three blocks ──
-   Assumptions, Limitations and What stands out. One shape, so the eye learns it once, and
-   the heading carries what the block is for. */
-.block { margin: var(--space-4) 0 0; }
-
-.block-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  margin: 0 0 var(--space-2);
-  font-family: var(--display);
-  font-size: var(--font-md);
-  font-weight: var(--weight-medium);
+/* ── the verdict ──
+   The answer, before the evidence for it. It is the one thing on the page set large
+   enough to be read from across a desk: a reader opening a finished run asks whether it
+   worked, and that sentence used to be the fifth of eight equal cards. */
+.verdict {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--text-muted);
+  background: var(--surface-1);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
 }
 
-.block-count {
-  font-family: var(--mono);
+.verdict.good { border-left-color: var(--success); }
+.verdict.bad { border-left-color: var(--danger); }
+
+.verdict-line {
+  margin: 0;
+  font-family: var(--display);
+  font-size: var(--font-xl);
+  font-weight: var(--weight-medium);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.verdict-caveat {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-base);
+  color: var(--text-secondary);
+}
+
+/* ── what every run stands on ───────────────────────────────────────────────────
+ *
+ * One line per subject, closed. The flat table that preceded it answered "what was
+ * checked" — the question a reader asks least — in 737px between the answer and the
+ * charts, and left "can I trust this" and "what is the worst thing" to be worked out by
+ * reading fourteen rows.
+ *
+ * Each line carries the subject's shape as dots and **the worst thing in it as a
+ * sentence**, because a count says there is a problem and only the sentence says which.
+ * Opening one shows its rows. */
+.evidence {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.ev-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+/* The whole block folds. It carried six lines on every visit whatever the run said, and a
+   section that is always open is one the eye learns to step over — which is the opposite
+   of what this is for. Closed it is its own summary line. */
+.ev-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.ev-toggle h3 { margin: 0; font-size: var(--font-sm); font-weight:var(--weight-medium); }
+.ev-toggle:hover h3 { color: var(--accent); }
+.evidence.open .ev-toggle .subj-caret { transform: rotate(90deg) translateX(1px); }
+.ev-head h3 { margin: 0; font-size: var(--font-sm); font-weight:var(--weight-medium); }
+.evidence:not(.open) .ev-head { border-bottom: 0; }
+.ev-why { font-size: var(--font-xs); color: var(--text-muted); }
+.ev-all {
+  margin-left: auto;
+  font: inherit;
+  font-size: var(--font-xs);
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ev-all:hover { color: var(--text-primary); border-color: var(--border-strong); }
+
+.subj { border-top: 1px solid var(--border); }
+
+.subj-head {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 10px 9.5rem auto 1fr;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+button.subj-head:hover { background: var(--surface-2); }
+.subj-head.static { cursor: default; }
+
+.subj-caret {
+  width: 0; height: 0;
+  border-left: 4px solid var(--text-muted);
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform .12s ease;
+}
+.subj.open .subj-caret { transform: rotate(90deg) translateX(1px); }
+
+.subj-name { font-size: var(--font-sm); font-weight:var(--weight-medium); color: var(--text-primary); }
+.subj.ok .subj-name { font-weight:var(--weight-regular); color: var(--text-secondary); }
+
+/* The subject's rows as dots, worst first. A shape the eye reads before any word: it says
+   how many and how bad at once, which two separate counts do not. */
+.dots { display: flex; gap: 4px; align-items: center; }
+/* Severity by **shape** first, colour second. At 6px the danger and warning hues are a
+   pair a reader has to compare side by side to separate, and under either common form of
+   colour blindness they are nearly the same — which the project's own colour check holds
+   charts to and this had quietly escaped. Filled, ring, faint: three shapes, legible
+   without any colour at all. */
+.dot { width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; }
+.dot.bad { background: var(--danger); }
+.dot.warn { background: none; border: 1.5px solid var(--warning); }
+.dot.ok { width: 5px; height: 5px; background: var(--border-strong); }
+
+/* The worst thing in the subject, named. One line, clipped — the full sentence is one
+   click away in the rows, and a preview that wraps is not a preview. */
+.subj-worst {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.subj.bad .subj-worst { color: var(--danger); }
+.subj.ok .subj-worst { color: var(--text-muted); }
+
+/* ── a subject's rows, once opened ── */
+.sheet { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.col-what { width: 12rem; }
+.col-is { width: 14rem; }
+.col-so { width: auto; }
+
+/* `app.css` sets `th, td { white-space: nowrap }` for every table on the page, which is
+   right for a grid of numbers and fatal for a column of prose: the sentence stayed on one
+   line, ran past its cell and printed over whatever was beside it. `overflow-wrap` cannot
+   help while nowrap holds, so it is turned off here rather than worked around. */
+.sheet td, .sheet th {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  font-weight:var(--weight-regular);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border-bottom: 0;
+}
+.sheet tbody tr + tr td, .sheet tbody tr + tr th {
+  border-top: 1px solid var(--border);
+}
+.sheet th {
+  padding-left: calc(var(--space-4) + 22px);
   font-size: var(--font-xs);
   color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0 var(--space-2);
+  /* `app.css` styles every `th` as a sticky, uppercase, sunk-background table header.
+     That is right for a header row and wrong for a label column. */
+  background: none;
+  position: static;
+  font-family: inherit;
+  letter-spacing: normal;
+  text-transform: none;
 }
-
-.block-why {
-  font-family: var(--sans);
-  font-size: var(--font-sm);
-  font-weight: var(--weight-regular);
+.always {
+  margin-left: 5px;
+  font-size:var(--font-xs);
+  padding: 0 4px;
+  border-radius: 2px;
+  background: var(--surface-2);
   color: var(--text-muted);
-  flex: 1 1 24ch;
+}
+.sheet-is {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--text-primary);
+}
+.sheet-so { font-size: var(--font-xs); line-height: 1.5; color: var(--text-secondary); }
+.sheet-so b { color: var(--text-primary); font-weight:var(--weight-medium); }
+
+/* Colour on the serious rows only. Colouring every one made the column a single shade of
+   red, and a page where everything is emphasised emphasises nothing. */
+.sheet tr.ok .sheet-so { color: var(--text-muted); }
+.sheet tr.bad .sheet-so { color: var(--danger); }
+.sheet tr.bad th { color: var(--danger); }
+
+@media (max-width: 900px) {
+  .subj-head { grid-template-columns: 10px 1fr auto; }
+  .subj-worst { grid-column: 2 / -1; white-space: normal; }
 }
 
-.block-empty { margin: 0; font-size: var(--font-sm); color: var(--text-muted); }
-
-/* ── assumptions: label over value, in a grid ──
-   It was a wrapping line of monospace that ran to two rows and could only be read by
-   starting at the left each time. Pairs in a grid can be scanned down a column. */
+/* The assumptions: a spec sheet, not findings. Label above value, several to a row, and
+   the value says what it is rather than leaning on a tooltip — so a column has to be wide
+   enough for "the whole spread paid (λ 1.00)" without cutting it. */
 .assume {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  gap: var(--space-1) var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--space-3) var(--space-4);
   margin: 0;
 }
 
@@ -117,120 +286,19 @@
   white-space: nowrap;
 }
 
-/* Only the label explains itself, so only the label takes the help cursor. The whole
-   block carrying it made the pointer a question mark across half the page. */
-.assume dt[data-tip] { border-bottom: 1px dotted var(--border-strong); }
-
 .assume dd {
   margin: 0;
   font-family: var(--mono);
   font-size: var(--font-sm);
+  line-height: 1.4;
   color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* ── limitations and findings: rows that open ── */
-.rows {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: 0 var(--space-5);
-  border-top: 1px solid var(--border);
-}
-
-.row-item { border-bottom: 1px solid var(--border); }
-
-.row-item > summary {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  cursor: pointer;
-  list-style: none;
-  padding: var(--space-2) 0;
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
-.row-item > summary::-webkit-details-marker { display: none; }
-.row-item > summary:hover,
-.row-item[open] > summary { color: var(--text-primary); }
-
-.row-dot {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  transform: translateY(-1px);
-}
-
-.row-item.ok .row-dot { background: var(--success); }
-.row-item.warn .row-dot { background: var(--warning); }
-.row-item.bad .row-dot { background: var(--danger); width: 8px; height: 8px; }
-
-.row-item p {
-  margin: 0;
-  padding: 0 0 var(--space-3) calc(var(--space-2) + 6px);
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-  max-width: 68ch;
-}
-
-/* ── what was set ── */
-.settings {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: var(--space-5);
-  margin: var(--space-4) 0 0;
-}
-
-.setting-group h4 {
-  font-family: var(--display);
-  font-size: var(--font-base);
-  font-weight: var(--weight-medium);
-  margin: 0 0 var(--space-2);
-  padding-bottom: var(--space-1);
-  border-bottom: 1px solid var(--border);
-}
-
-.setting-group dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: var(--space-1) var(--space-3);
-  margin: 0;
-  font-size: var(--font-sm);
-}
-
-.setting-group dt { color: var(--text-muted); }
-.setting-group dd {
-  margin: 0;
-  font-family: var(--mono);
-  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
-.setting-none { margin: 0; font-size: var(--font-sm); color: var(--text-muted); }
-
-.code-head {
-  font-family: var(--display);
-  font-size: var(--font-md);
-  font-weight: var(--weight-medium);
-  margin: var(--space-6) 0 var(--space-2);
-}
-
-.code-block { border: 1px solid var(--border); border-radius: var(--radius-sm);
-              margin-bottom: var(--space-2); }
-.code-block > summary { cursor: pointer; padding: var(--space-2) var(--space-3);
-                        font-size: var(--font-sm); color: var(--text-secondary); }
-.code-block pre {
-  margin: 0;
-  padding: var(--space-3);
-  background: var(--surface-sunk);
-  font-family: var(--mono);
+.assume-note {
+  margin: var(--space-3) 0 0;
   font-size: var(--font-xs);
-  line-height: 1.6;
-  overflow-x: auto;
+  color: var(--text-muted);
 }
 
 /* ── the metric cards ──
@@ -238,9 +306,14 @@
    equal cells rather than eight boxes of different heights. The earlier version let each
    card size to its own content: two rows, the second orphaned, and a column of dead space
    under every card without an interval. */
+/* **Four across, or eight.** `auto-fit` fitted as many as the width allowed, which at most
+   window sizes is seven — leaving the eighth alone on a second row beside a hand's width of
+   nothing. Eight divides by four and by eight and by nothing else useful, so the band is one
+   of those two: four and four at ordinary widths, which also gives the four that lead a row
+   of their own, and all eight across when there is genuinely room for them. */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
   margin: var(--space-4) 0 0;
   border: 1px solid var(--border);
@@ -274,7 +347,7 @@
 .card dd {
   margin: 0;
   font-family: var(--mono);
-  font-size: var(--font-xl);
+  font-size: var(--font-lg);
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
@@ -298,42 +371,75 @@
   overflow: hidden;
 }
 
+/* The four that lead are set larger, and sit on the panel rather than the page, so the
+   eye lands on them before the rest. Eight cells of one weight give it nowhere to land. */
+.card.lead dd { font-size: var(--font-display); }
+.card.lead dt { color: var(--text-secondary); }
+.card.lead { background: var(--surface-2); }
+
 .card.thin dd { color: var(--text-secondary); }
 .card.empty dd { color: var(--text-muted); }
 
-/* The interval, drawn as a bar beneath the point estimate. */
-.interval { margin-top: auto; padding-top: var(--space-2); }
+/* ── the interval bar under a card ───────────────────────────────────────────────
+   A thin bar at 20% opacity behind the estimate, which is the design plan's rule for an
+   interval, plus a tick at zero: the one thing a reader needs from an interval at a glance
+   is whether it is on one side of zero. Drawn with elements rather than an svg because it
+   is three rectangles and an svg here would need a viewBox per card. */
+.card-iv { margin-top: 3px; }
 
-.interval-bar {
-  display: block;
+.card-iv-track {
   position: relative;
-  height: 3px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
-.interval.crosses .interval-bar {
-  background: color-mix(in srgb, var(--warning) 55%, transparent);
-}
-
-.interval-zero {
-  position: absolute;
-  top: -3px;
-  width: 1px;
-  height: 9px;
-  background: var(--text-primary);
-}
-
-.interval-text {
   display: block;
-  margin-top: 3px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--border-strong) 60%, transparent);
+}
+
+.card-iv-span {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.45;
+}
+
+.card-iv.crosses .card-iv-span { background: var(--warning); }
+
+.card-iv-zero {
+  position: absolute;
+  top: -2px;
+  width: 1px;
+  height: 8px;
+  background: var(--text-muted);
+}
+
+.card-iv-ends {
+  display: block;
+  margin-top: 2px;
   font-family: var(--mono);
   font-size: var(--font-xs);
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* The spread on the headline figure. A full-width line directly under the verdict,
+   because it qualifies that number and a 165px card could not hold the sentence.
+   Warning-coloured when the range spans zero: then the headline's sign is not
+   established, which is the strongest thing this page can say about a result. */
+.verdict-spread {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.verdict-spread b { color: var(--text-primary); font-weight:var(--weight-medium); }
+.verdict-spread.crosses { color: var(--warning); }
+.verdict-spread.crosses b { color: var(--warning); }
+
 
 /* ── the tabs ──
    `.run-tabs`, not `.tabs`: the bench already has a `.tabs` for choosing how a strategy is
@@ -422,7 +528,29 @@
 .layer-svg .limit { stroke: var(--warning); stroke-dasharray: 4 3; opacity: 0.8; }
 .layer-svg .cross { stroke: var(--text-muted); stroke-width: 1; }
 .layer-svg .brushed { fill: var(--accent); opacity: 0.12; }
-.layer-svg .holdout { fill: var(--text-muted); opacity: 0.1; }
+
+/* The hold-out and any span with no data are **hatched**, which is the design plan's rule
+   for both: the period is not merely shaded, it is empty, and a flat tint would read as a
+   value. The fill comes from the pattern the stack defines; only its stroke is styled here,
+   so a theme change carries. */
+.layer-svg .hatch-line { stroke: var(--text-muted); stroke-width: 1.4; opacity: 0.38; }
+.layer-svg .holdout, .layer-svg .gap { stroke: none; }
+
+/* Taking a layer away: shown on hover of its bar, so eight layers do not carry eight
+   permanent buttons competing with the values. */
+.layer-csv {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  padding: 0 var(--space-1);
+  opacity: 0;
+}
+.layer-bar:hover .layer-csv, .layer-csv:focus-visible { opacity: 1; }
+.layer-csv:hover { color: var(--text-primary); border-color: var(--border-strong); }
 
 .layer-svg .y-label, .stack-axis .tick {
   fill: var(--text-muted);
@@ -573,7 +701,10 @@ td.bar span {
 .checks li em { display: block; color: var(--text-muted); font-style: normal;
                 margin-top: var(--space-1); }
 
-.stack-lead { margin: 0 0 var(--space-3); max-width: 78ch; }
+/* Prose is set at reading size. A paragraph in label type is a paragraph that gets
+   skipped, which is how the page ended up explaining itself to nobody. */
+.stack-lead { margin: 0 0 var(--space-3); max-width: 78ch; font-size: var(--font-base); }
+.pad > .hint, .tier-head .hint { font-size: var(--font-base); }
 .tier-count { margin-left: auto; }
 
 /* ── the exploratory tabs ──
@@ -661,4 +792,316 @@ td.bar span {
   color: var(--text-secondary);
   white-space: pre-wrap;
   overflow-x: auto;
+}
+
+/* An input's constraint, beside the field rather than behind it. It is what the field
+   will accept, which is not an explanation and does not belong in a tooltip. */
+.vhint { font-weight:var(--weight-regular); color: var(--text-muted); }
+
+/* ── archiving and deleting ─────────────────────────────────────────────────────
+ *
+ * The confirmation is in the page, not a `confirm()`. A browser dialog holds one line and
+ * asks "did you mean it", which the reader answered by pressing the button; the question
+ * they have is what else goes with the run, and that is a list. Here it can be read twice,
+ * and the alternative sits beside it rather than behind a dismissed modal. */
+.chip.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.chip.danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+
+.del {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface-1));
+}
+.del h4 { margin: 0 0 var(--space-2); font-size: var(--font-sm); color: var(--danger); }
+.del ul { margin: 0; padding-left: var(--space-4); }
+.del li {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.del-cost, .del-alt {
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.del-cost { color: var(--warning); }
+.del-row { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+
+/* ── selection, as the state table defines it ───────────────────────────────────
+ *
+ * §11: selected is a light accent fill and a 2px accent bar on the left; focus is a 1px
+ * outline **during keyboard navigation only**, which `:focus-visible` is exactly. The rows
+ * already carried `tabindex` and nothing listened to them, so a reader could tab onto a
+ * trade and have nothing happen. */
+.trades tbody tr { cursor: pointer; }
+.trades tbody tr:hover { background: var(--surface-2); }
+.trades tbody tr.picked { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.trades tbody tr.picked > td:first-child,
+.trades tbody tr.picked > th:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.trades tbody tr:focus { outline: none; }
+.trades tbody tr:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+/* One trade's holding period, shaded across every layer of the stack. Under the lines, so
+   it reads as a region of the chart rather than as another series. */
+.held { fill: color-mix(in srgb, var(--accent) 13%, transparent); }
+
+/* A sortable column header. A button, not a styled cell, so the keyboard reaches it and a
+   screen reader announces it as the control it is. */
+.sortby {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 3px;
+  align-items: baseline;
+}
+.sortby:hover { color: var(--text-primary); }
+.sortby.on { color: var(--accent); }
+
+/* The brushed range, with a way out of it. Clearing was a click on a chart that the page
+   had to explain in a sentence, and a control a reader must be told about in prose is one
+   they will not find. */
+.range-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.chip-range { font-family: var(--mono); font-size: var(--font-xs); color: var(--text-primary); }
+.chip-n { font-size: var(--font-xs); color: var(--text-secondary); }
+.range-chip button {
+  margin-left: auto;
+  font: inherit;
+  font-size: var(--font-xs);
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.range-chip button:hover { color: var(--text-primary); border-color: var(--border-strong); }
+
+/* Tabular figures everywhere a number sits in a column. Proportional digits are different
+   widths, so a value jitters sideways as it changes and a column of them does not line up
+   — the addendum asks for "no layout shift: numbers use tabular figures". */
+.sheet-is, .trades td, .trades th, .cards dd, .card-note, .interval,
+.plain td, .plain th, .grid-tab td, .grid-tab th {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A layer that could not be drawn. It says which part failed and offers the one action
+   that helps — the rest of the page is computed and correct and goes on rendering. */
+.layer-error {
+  margin: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface-1));
+}
+.layer-error h4 { margin: 0 0 var(--space-2); font-size: var(--font-sm); color: var(--danger); }
+.layer-error p {
+  margin: 0 0 var(--space-3);
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+.layer-error button {
+  font: inherit;
+  font-size: var(--font-xs);
+  padding: 3px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* A table whose rows are a filter. The selected row takes the same treatment as a selected
+   trade — a light accent fill and a 2px bar — because it is the same idea in a different
+   place, and the state table defines it once. */
+.plain.pickable tbody tr { cursor: pointer; }
+.plain.pickable tbody tr:hover { background: var(--surface-2); }
+.plain.pickable tbody tr.picked { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.plain.pickable tbody tr.picked > td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* ══ the trade card ══════════════════════════════════════════════════════════════
+   The design plan's section 7, in the drawer. Its hero is the trade's P&L, so that is the
+   only large number in the card and everything under it is a two-column list — a card read
+   beside a chart has to be scannable in one pass, and a page of equal-weight blocks is not.
+*/
+.tc-conclusion {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.tc-conclusion.good { border-left-color: var(--success); }
+.tc-conclusion.bad { border-left-color: var(--danger); }
+
+.tc-pnl {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--font-display);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.tc-conclusion.good .tc-pnl { color: var(--success); }
+.tc-conclusion.bad .tc-pnl { color: var(--danger); }
+
+.tc-split, .tc-closed {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.tc-closed b { color: var(--text-primary); font-weight: var(--weight-medium); }
+
+.tc-block { margin-top: var(--space-5); break-inside: avoid; }
+
+.tc-block h4 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Two columns, the value in monospace and right of the label, so a column of figures lines
+   up and can be compared down the card. */
+.tc-facts, .tc-context {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-3);
+  margin: 0;
+  font-size: var(--font-sm);
+}
+
+.tc-facts dt, .tc-context dt { color: var(--text-muted); min-width: 0; }
+
+.tc-facts dd, .tc-context dd {
+  margin: 0;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tc-facts dd.pos, .tc-context dd.pos { color: var(--success); }
+.tc-facts dd.neg, .tc-context dd.neg { color: var(--danger); }
+
+/* ── the lifecycle strip ──
+   Four states, and a marker per recorded action in its slot's colour **with its number in
+   it**: section 12 requires that colour never be the only thing telling two slots apart,
+   and a marker is exactly where that rule bites. Idle and armed are drawn as not reached,
+   because this engine does not record them per trade — a strip that showed all four as
+   facts would be inventing two of them. */
+.tc-states {
+  display: flex;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-xs);
+}
+
+.tc-state {
+  flex: 1;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  letter-spacing: 0.03em;
+}
+
+.tc-state.reached { background: var(--accent-soft); color: var(--text-primary); }
+.tc-state.assumed {
+  background: var(--surface-sunk);
+  color: var(--text-muted);
+  border: 1px dashed var(--border-strong);
+}
+
+.tc-actions { margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+
+.tc-action {
+  display: grid;
+  grid-template-columns: 18px 10ch 7ch 1fr;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-1) 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--font-sm);
+}
+
+.tc-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--on-accent);
+}
+
+.tc-when { color: var(--text-secondary); font-family: var(--mono); font-size: var(--font-xs); }
+.tc-what { font-family: var(--mono); font-size: var(--font-xs); color: var(--text-primary); }
+.tc-why { color: var(--text-muted); font-size: var(--font-xs); line-height: 1.4; }
+
+.tc-legs { width: 100%; }
+
+/* ══ waiting ══════════════════════════════════════════════════════════════════════
+   Shaped like the content that is coming and shown only after 300 ms, so a cached run is
+   never preceded by a flash of grey. Never a spinner, never a blank page.
+*/
+.skeleton {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg,
+    var(--surface-1) 0%, var(--surface-2) 50%, var(--surface-1) 100%);
+  background-size: 200% 100%;
+  animation: skeleton 1.2s ease-in-out infinite;
+}
+
+@keyframes skeleton {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+.sk-head { height: 28px; width: 42%; margin-bottom: var(--space-3); }
+.sk-verdict { height: 54px; width: 100%; margin-bottom: var(--space-4); }
+.sk-dt { height: 9px; width: 60%; }
+.sk-dd { height: 20px; width: 80%; margin-top: 6px; }
+.sk-chart { height: 230px; margin-top: var(--space-4); }
+
+/* The legs table is wider than 400 px and the drawer is 400 px by the token: it scrolls
+   inside the card rather than being cut off at the edge, where the fees column simply
+   disappeared with nothing to say it had. */
+.tc-scroll { overflow-x: auto; border: 0; border-radius: 0; background: none; }
+
+
+/* Eight across only where the window can hold eight without crushing a label; below that the
+   band is four and four, which is where it reads best anyway. */
+@media (min-width: 1500px) {
+  .cards { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 }

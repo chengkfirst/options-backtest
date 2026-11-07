@@ -36,6 +36,28 @@ It does not replace the chain's prices. The chain is the market's own quotes, an
 price is not a quote -- substituting one would be marking the book to a model, which is
 the failure the whole data layer is built against. This answers one question: *is holding
 worth more than exercising*, for a position already held.
+
+## **What its answer is worth depends entirely on the volatility it is given**
+
+The tree takes ``vol`` and does not question it, which makes the input the whole of the
+boundary:
+
+- **on real option data** the contract's own implied volatility is a market observation,
+  and so is the answer.
+- **on this system's synthetic chain** there is **one volatility per session, shared by
+  every strike and every expiry** (``market.volatility(day)``). There is no skew and no
+  term structure. So an exercise decision taken there is a decision about
+  Black-Scholes, not about the market -- and the cases early exercise turns on are exactly
+  the ones a smile would move: a deep in-the-money put's IV and a dividend-paying call's
+  are the two points furthest from an at-the-money number.
+
+Stated here rather than left to the caller because the tree's output looks like a price,
+and a price carries no mark saying what went into it. ``Boundary`` is how the research
+layer says this about a figure it reports; this module is below that layer and cannot
+reach it, so it says it in words.
+
+The practical consequence: **do not read an early-exercise count off a synthetic run as a
+statement about how often early exercise matters.** Read it as whether the mechanism runs.
 """
 
 from __future__ import annotations
@@ -191,3 +213,123 @@ def value(
 
 def _intrinsic(spot: float, strike: float, right: Right) -> float:
     return max(spot - strike, 0.0) if right is Right.CALL else max(strike - spot, 0.0)
+
+
+def implied_vol_american(
+    *,
+    price: float,
+    spot: float,
+    strike: float,
+    years: float,
+    rate: float,
+    dividend_yield: float,
+    right: Right,
+    steps: int = 200,
+    tolerance: float = 1e-4,
+    max_iterations: int = 40,
+):
+    """Solve for the volatility that makes the **American** price match ``price``.
+
+    The document asks for "a European or American model matching the contract style (US
+    equity and ETF options are American)", and the IV solve used a European model for
+    everything. The error is one-sided and has a name: an American option is worth at
+    least its European counterpart, so a European solve returns an IV that is **too low**
+    wherever the early-exercise premium is real -- and that premium is largest on exactly
+    the contracts a researcher looks at hardest, a deep in-the-money put or a call before
+    a dividend.
+
+    Bisection rather than Newton. A tree's price is not differentiable in σ in any form a
+    derivative can be read off, and bisection on a monotone function needs no derivative:
+    an option's price rises with volatility everywhere, which is what makes the bracket
+    safe.
+
+    **Fewer steps than the pricer's default**, and deliberately: the solve calls the tree
+    forty times. 200 steps is within about a cent on a $29 option, the figures are in
+    ``DEFAULT_STEPS``, and the alternative is a solve that takes a second per contract.
+
+    Returns a ``Maybe``: a price outside what any volatility can produce has no IV, and
+    returning 0 or a bound would be a number the data does not support.
+    """
+    from backtest.core.maybe import Maybe
+
+    if years <= 0:
+        return Maybe.missing("the contract has expired, so there is no volatility in it")
+    if price <= 0:
+        return Maybe.missing(f"a price of {price} has no implied volatility")
+
+    intrinsic = _intrinsic(spot, strike, right)
+    if price < intrinsic - 0.005:
+        return Maybe.missing(
+            f"the price {price:.4f} is below the intrinsic value {intrinsic:.4f}, which "
+            f"no volatility produces -- an American option can be exercised now"
+        )
+
+    def priced(vol: float) -> float:
+        return value(spot=spot, strike=strike, years=years, rate=rate, vol=vol,
+                     dividend_yield=dividend_yield, right=right,
+                     steps=steps).american
+
+    # **The lower bracket is what the tree can price, not an arbitrary epsilon.**
+    #
+    # A CRR tree refuses a volatility far below the rate: the drift per step then falls
+    # outside the up/down move and the risk-neutral probability leaves [0, 1], which is
+    # an arbitrage in the model rather than a numerical wobble. The refusal is right and
+    # it is also a fact about where the bracket can start -- so the bound is derived from
+    # the same condition rather than guessed, and a guess of 1e-4 is exactly what raised
+    # it the first time.
+    #
+    # The condition is ``exp(-vol*sqrt(dt)) < exp((r-q)*dt) < exp(vol*sqrt(dt))``, i.e.
+    # ``vol > |r-q| * sqrt(dt)``. A factor of two of headroom, so a step at the boundary
+    # does not sit on it.
+    dt = years / steps
+    floor = max(2.0 * abs(rate - dividend_yield) * math.sqrt(dt), 1e-4)
+    lo, hi = floor, 5.0
+    if price > priced(hi):
+        return Maybe.missing(
+            f"the price {price:.4f} is above the American value at 500% volatility, so "
+            f"no volatility in a usable range produces it"
+        )
+    if price < priced(lo):
+        return Maybe.missing(
+            f"the price {price:.4f} is below the American value at 0.01% volatility, "
+            f"which is the intrinsic plus the carry -- there is no volatility in it"
+        )
+
+    # **A price at the intrinsic has no implied volatility, and the solve must say so.**
+    #
+    # When exercising now is optimal the American value *is* the intrinsic, for every
+    # volatility -- the tree's root takes the max of holding and exercising and exercising
+    # wins throughout. So the price carries no information about σ, and bisection on a
+    # flat function returns wherever it happened to stop: on a 300/400 put at 5% it
+    # returned 0.1631 for a contract priced at a true 0.25, which is a plausible number
+    # with nothing behind it.
+    #
+    # That is the whole failure this project is about, in a function whose job is to
+    # refuse: a number the data does not support, returned because the arithmetic had to
+    # return something.
+    if abs(price - intrinsic) < max(tolerance, intrinsic * 1e-6):
+        return Maybe.missing(
+            f"the price {price:.4f} is the intrinsic value, so exercising now is optimal "
+            f"and the American value is the intrinsic at **every** volatility. There is "
+            f"no implied volatility in this price -- a solve here returns wherever "
+            f"bisection stopped"
+        )
+
+    for _ in range(max_iterations):
+        mid = (lo + hi) / 2
+        got = priced(mid)
+        if abs(got - price) < tolerance:
+            return Maybe.some(mid)
+        if got < price:
+            lo = mid
+        else:
+            hi = mid
+    # The bracket is still valid and the tolerance was not met: return the midpoint
+    # rather than nothing, because a bracket of this width is a real answer.
+    settled = (lo + hi) / 2
+    if hi - lo < 1e-3:
+        return Maybe.some(settled)
+    return Maybe.missing(
+        f"the solve did not converge: after {max_iterations} iterations the bracket is "
+        f"still [{lo:.4f}, {hi:.4f}]"
+    )

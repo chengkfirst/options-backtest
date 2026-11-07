@@ -112,7 +112,8 @@ class TestTheChainDistinguishesWhatMustBeDistinguished:
         and opposite causes.
         """
         bus = result.raw.bus
-        rejects = bus.of_type(EventType.REJECT)
+        rejects = [e for e in bus.of_type(EventType.ORDER_STATUS)
+                   if e.data.get("status") == "reject"]
         orders = bus.of_type(EventType.ORDER)
         fills = bus.of_type(EventType.FILL)
         assert rejects, "this run used to reject two intents; if it no longer does, " \
@@ -130,7 +131,7 @@ class TestTheChainDistinguishesWhatMustBeDistinguished:
     def test_a_rejection_still_names_the_slot_that_asked(self, result):
         """Which slot is being refused is the question a researcher asks of a rejection
         count, and it is lost if the rejection carries only the contract."""
-        for event in result.raw.bus.of_type(EventType.REJECT):
+        for event in result.raw.bus.of_type(EventType.ORDER_STATUS):
             assert event.component_id, f"{event.describe()} does not name a slot"
             assert event.trade_id is not None
 
@@ -323,6 +324,13 @@ class TestEachSlotsRecordIsItsOwn:
         assert record.slot_record, "no slot recorded anything"
         for key in record.slot_record:
             slot = key.split(".")[0]
-            assert slot in ("take_profit", "stop_loss", "time_exit", "candidate"), (
-                f"{key!r} is not attributable to a slot"
+            # The slot list comes from the registry rather than being written out here:
+            # it was a literal, and it went stale the day `setup` and `entry` got their
+            # namespaces -- the test then failed for a slot that had correctly started
+            # recording.
+            from backtest.core.component import SLOTS
+
+            assert slot in set(SLOTS) | {"candidate"}, (
+                f"{key!r} is not attributable to a slot. Known: "
+                f"{sorted(set(SLOTS) | {'candidate'})}"
             )

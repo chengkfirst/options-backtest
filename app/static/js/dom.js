@@ -8,10 +8,23 @@
 
 export const $ = id => document.getElementById(id);
 
-/** Escape for insertion as text. Every backend string goes through this before reaching
- *  innerHTML: a reason or a note comes from a config a person wrote, and `<` in one of
- *  them must not become markup. */
-export const esc = t => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+/** Escape for insertion as text **or into an attribute**.
+ *
+ * Every backend string goes through this before reaching innerHTML: a reason or a note
+ * comes from a config a person wrote, and `<` in one of them must not become markup.
+ *
+ * It escaped `&` and `<` only, which is enough for text content and **not** for an
+ * attribute — and this interface writes fifteen of them, `title="${esc(…)}"` and the rest.
+ * A value containing a double quote closed the attribute and everything after it was read
+ * as more attributes, so a strategy named `" onload="…` produced a live handler. Quotes
+ * and `>` are escaped too now, which costs nothing in text position and removes the need
+ * for a caller to know which of the two it is writing. */
+export const esc = t => String(t ?? "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#39;");
 
 /** Escape, then honour the `**bold**` the backend's own reports use, and newlines. The
  *  boundary lines and verdicts are written with it, and they are the sentences that

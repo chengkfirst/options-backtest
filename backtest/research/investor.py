@@ -47,6 +47,10 @@ def summary(
     benchmark: "pd.Series | None" = None,
     *,
     synthetic: bool | None = None,
+    #: The period's risk-free rate. Required for Sortino to mean what it says; 0.0 keeps
+    #: the old reading for a caller that has no rate, and the result reports which was
+    #: used rather than leaving it to be guessed.
+    risk_free: float = 0.0,
 ) -> dict[str, Any]:
     """The investor's set of metrics.
 
@@ -60,7 +64,18 @@ def summary(
     """
     curve = equity["equity_mid"].astype(float)
     out: dict[str, Any] = {}
-    out.update(_risk_adjusted(curve))
+    out.update(_risk_adjusted(curve, risk_free=risk_free))
+    # The strategy's own curve, interest removed. Reported beside the account's rather
+    # than instead of it: a reader deciding about a component wants the first and a
+    # reader deciding about the account wants the second.
+    if "strategy_equity" in equity.columns:
+        strategy = equity["strategy_equity"].astype(float)
+        years = max(len(strategy) / YEAR, 1e-9)
+        out["strategy_total_return"] = float(strategy.iloc[-1] / strategy.iloc[0] - 1.0)
+        out["strategy_annualised"] = (
+            (1.0 + out["strategy_total_return"]) ** (1 / years) - 1.0
+            if out["strategy_total_return"] > -1 else np.nan)
+        out["interest_earned"] = float(equity["interest"].iloc[-1])
     out.update(_underwater(curve))
     out.update(_concentration(trades))
     out.update(_vs_benchmark(curve, benchmark))
@@ -70,7 +85,18 @@ def summary(
     return out
 
 
-def _risk_adjusted(curve: pd.Series) -> dict[str, Any]:
+def _risk_adjusted(curve: pd.Series, risk_free: float = 0.0) -> dict[str, Any]:
+    """Sortino and Calmar.
+
+    **Sortino is on the excess return**, like Sharpe and for the same reason: the account's
+    cash earns the risk-free rate, so a ratio on the raw return adds that rate once and
+    subtracts it never -- flattering in both directions at once. On a long-options book
+    most of the capital sits in cash, which makes the term large relative to the trading
+    result rather than a rounding difference.
+
+    Calmar stays on the **raw** return, which is its definition: it is return over the
+    worst drawdown, and the drawdown is a drawdown of the account.
+    """
     ret = curve.pct_change().dropna()
     if len(ret) < 2:
         return {"Sortino": np.nan, "Calmar": np.nan}
@@ -82,11 +108,15 @@ def _risk_adjusted(curve: pd.Series) -> dict[str, Any]:
     dd_vol = float(downside.std() * np.sqrt(YEAR)) if len(downside) > 1 else np.nan
     drawdown = curve / curve.cummax() - 1.0
     worst = float(drawdown.min())
+    excess = annual - float(risk_free)
 
     return {
-        "Sortino": annual / dd_vol if dd_vol and np.isfinite(dd_vol) and dd_vol > 0 else np.nan,
+        "Sortino": excess / dd_vol if dd_vol and np.isfinite(dd_vol) and dd_vol > 0 else np.nan,
         "Calmar": annual / abs(worst) if worst < 0 else np.nan,
         "downside_vol": dd_vol,
+        "risk_free_rate": float(risk_free),
+        "annualised": annual,
+        "excess_annualised": excess,
     }
 
 

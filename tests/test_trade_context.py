@@ -186,3 +186,104 @@ class TestWhatTheTradeTableGets:
 
     def test_a_context_with_no_slot_records_is_just_the_market(self):
         assert set(_context().flat()) == {"iv", "delta"}
+
+
+@kind("guard")
+class TestTheCandidateAndEntrySlots:
+    """Requirement S.namespaces_candidate — the half that was not built.
+
+    `setup` and `entry` were bare callables with nothing to hand a writer to, so their
+    namespaces existed and stayed empty. The document asks for more than that: "Setup /
+    Regime writes to a candidate context per underlying, **which is copied into the trade
+    context when the trade opens**."
+
+    So there are two things to check and they are different: that each slot writes under
+    its own name, and that what the candidate saw **on the session the trade opened** is
+    what the trade carries -- not what the candidate saw later.
+    """
+
+    RUN = dict(
+        symbol="QQQ", start="2023-01-01", end="2023-06-30",
+        entry="close < sma_20 * 0.98",
+        select={"right": "call", "dte_lo": 21, "dte_hi": 45,
+                "delta_lo": 0.25, "delta_hi": 0.45},
+        exit={"hold_days": 20, "dte_floor": 7},
+        engine="event_driven", sizing={"method": "fixed"}, quantity=1,
+    )
+
+    @staticmethod
+    def _setup(ctx):
+        """A setup slot that records the regime it armed on."""
+        if ctx.write is not None:
+            ctx.write.write("regime", "calm" if ctx.drawdown > -0.05 else "stressed")
+        return True
+
+    @pytest.fixture(scope="class")
+    def result(self):
+        from backtest.api.sdk import run
+
+        return run(**(self.RUN | {"setup": self._setup}))
+
+    @pytest.mark.req("S.namespaces_candidate")
+    def test_the_setup_slots_record_reaches_the_trade(self, result):
+        """Under `candidate.`, because that is what it is: the candidate's record copied
+        in, not the trade's own."""
+        for record in result.raw.records:
+            assert record.slot_record["candidate.regime"] in ("calm", "stressed")
+            assert record.slot_record["candidate.armed"] is True
+
+    @pytest.mark.req("S.namespaces_candidate")
+    def test_it_is_the_session_the_trade_opened_on(self, result):
+        """**The copy, not a reference.**
+
+        A candidate arms again later with different values. The session stamped on the
+        record has to be the one the entry was decided on -- if it were a live reference
+        the trade would show whatever the candidate last saw, which for a trade closed in
+        February would be a regime from June.
+        """
+        from datetime import date
+
+        for record in result.raw.records:
+            armed_on = date.fromisoformat(record.slot_record["candidate.session"])
+            decided = date.fromisoformat(record.slot_record["entry.decided_on"])
+            assert armed_on == decided, (
+                f"trade {record.trade_id} was decided on {decided} and carries a "
+                f"candidate record from {armed_on}. A later arming has overwritten it, "
+                f"so this is a reference rather than a copy"
+            )
+            assert record.entry_date >= decided, "the fill cannot precede the decision"
+
+    def test_the_entry_slot_records_the_gap_between_decision_and_fill(self, result):
+        """Which is the one fact about an entry that the trade table cannot show: the
+        entry date is the **fill**, and the execution lag means the decision was
+        earlier."""
+        from datetime import date
+
+        for record in result.raw.records:
+            decided = date.fromisoformat(record.slot_record["entry.decided_on"])
+            filled = date.fromisoformat(record.slot_record["entry.filled_on"])
+            assert filled > decided, (
+                "the entry was decided and filled on the same session, which is the "
+                "look-ahead the execution lag exists to prevent"
+            )
+            assert filled == record.entry_date
+
+    def test_all_six_slots_that_run_have_a_namespace(self, result):
+        """The document names six: setup, entry, take_profit, stop_loss, headwind,
+        hedge. Four run here -- there is no headwind rule in this run and no hedge slot
+        at all -- plus `time_exit`, which is this system's own and is named as such in
+        `core/component.py`.
+        """
+        present = {k.split(".")[0] for k in result.raw.records[0].slot_record}
+        assert {"candidate", "entry", "take_profit", "stop_loss", "time_exit"} <= present
+
+    def test_a_setup_slot_that_writes_nothing_leaves_an_empty_namespace(self):
+        """An empty namespace is not a claim. A slot that recorded nothing and a slot
+        that did not run look the same, and both are legitimate -- what must not happen
+        is a namespace invented for a slot that is not there."""
+        from backtest.api.sdk import run
+
+        result = run(**(self.RUN | {"setup": lambda ctx: True}))
+        record = result.raw.records[0]
+        assert record.slot_record["candidate.armed"] is True
+        assert not any(k.startswith("hedge.") for k in record.slot_record)

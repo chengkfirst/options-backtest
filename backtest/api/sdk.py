@@ -254,6 +254,93 @@ def _scenario_limit_from(given):
                                          for pair in given["scenarios"]))
 
 
+def _premium_budget_from(given):
+    """The premium budget from a mapping, with the unknown key refused.
+
+    Same reason as the scenario limit beside it: a misspelled ``max_premium`` accepted
+    silently is a researcher who believes the book is budgeted and is reading the
+    unbudgeted result. **There is no default**, and that is deliberate -- how much of
+    equity a strategy may have at risk in premium is the single most consequential number
+    in a long-options book, and a platform that picks it has made the strategy's main
+    decision on the researcher's behalf.
+    """
+    from backtest.portfolio.constraints import PremiumBudget
+
+    if given is None:
+        return None
+    if isinstance(given, PremiumBudget):
+        return given
+    known = {"max_premium_pct", "max_premium_per_expiry_pct", "min_cash_pct"}
+    unknown = sorted(set(given) - known)
+    if unknown:
+        raise StartupError(
+            f"these are not premium-budget settings: {unknown}. It takes "
+            f"{', '.join(sorted(known))}, each a share of equity"
+        )
+    if not given:
+        raise StartupError(
+            "a premium budget with no limits in it would be no budget. Set at least one "
+            "of max_premium_pct, max_premium_per_expiry_pct, min_cash_pct -- for "
+            "example premium_budget={'max_premium_pct': 0.10}"
+        )
+    try:
+        return PremiumBudget(**{k: float(v) for k, v in given.items()})
+    except ValueError as exc:
+        raise StartupError(str(exc)) from exc
+
+
+def _exposure_from(given):
+    """Portfolio exposure limits from a mapping, with the unknown key refused.
+
+    **This existed, the engine called it every candidate, and nothing could set it.**
+    `ExposureLimits` had unit tests and a live call site at `loop.py`'s entry check, and
+    no parameter reached it from `run()` or the interface — so the document's Constraint
+    row read as built on the strength of code that could not be switched on. A reverse
+    wiring check (`tests/test_reachable.py`) now fails on any engine parameter in that
+    state.
+
+    Fractions of equity rather than amounts, for the reason `ExposureLimits` gives:
+    equity moves, and a dollar cap set at the start is a different constraint by the end.
+    """
+    from backtest.portfolio.constraints import ExposureLimits
+
+    if given is None:
+        return None
+    if isinstance(given, ExposureLimits):
+        return given
+    known = {"max_delta_pct", "max_vega_pct", "max_positions", "on_breach"}
+    unknown = sorted(set(given) - known)
+    if unknown:
+        raise StartupError(
+            f"these are not exposure settings: {unknown}. It takes "
+            f"{', '.join(sorted(known))}"
+        )
+    if not given:
+        raise StartupError(
+            "an exposure limit with nothing in it would be no limit. Set at least one of "
+            "max_delta_pct, max_vega_pct, max_positions -- for example "
+            "exposure={'max_delta_pct': 0.5}"
+        )
+    out = dict(given)
+    for key in ("max_delta_pct", "max_vega_pct"):
+        if key in out:
+            value = float(out[key])
+            if value <= 0:
+                raise StartupError(
+                    f"{key} is a share of equity and must be positive; got {value}. "
+                    f"A limit at or below zero forbids every entry"
+                )
+            out[key] = value
+    if "max_positions" in out:
+        out["max_positions"] = int(out["max_positions"])
+        if out["max_positions"] < 1:
+            raise StartupError(
+                f"max_positions must be at least 1; got {out['max_positions']}. "
+                f"Use max_concurrent=0 if the intent is to open nothing"
+            )
+    return ExposureLimits(**out)
+
+
 def _lifecycle_from(given) -> "Lifecycle":
     """The lifecycle settings from a mapping, with the unknown key refused.
 
@@ -275,6 +362,54 @@ def _lifecycle_from(given) -> "Lifecycle":
             f"{', '.join(sorted(known))}"
         )
     return Lifecycle(**dict(given))
+
+
+def check_data(
+    *,
+    symbol: str = "QQQ",
+    start: str | date = "2015-01-01",
+    end: str | date = "2024-12-31",
+    chain: "str | object | None" = None,
+    costs: CostConfig | None = None,
+    synthetic: SyntheticChainConfig | None = None,
+    refresh: bool = False,
+):
+    """Load the data a run would load, check it, and report -- **without running
+    anything**.
+
+    The entry point for the question "is my data usable here", which until now had no
+    answer short of starting a backtest and reading its failure. The checks are the data
+    layer's own (``backtest.data.pipeline``), so this reports exactly what a run would
+    hit: the source and whether it is synthetic, the dual-price split, the calendar, the
+    quality flags, rates, dividends, the volatility proxy, the expiries, and the chain's
+    columns and availability dates.
+
+    Takes the same ``symbol``, ``start``, ``end`` and ``chain`` as :func:`run`, so a
+    configuration that checks out here is the one that will run.
+
+    Returns a ``PipelineReport``: ``.text()`` for a person, ``.as_dict()`` for a
+    program, ``.failed`` and ``.warned`` for a script that has to decide. **It raises
+    nothing for bad data** -- that is the point of a report -- but it does raise if the
+    data cannot be loaded at all, because then there is nothing to report on.
+
+    >>> report = check_data(symbol="QQQ", start="2023-01-01", end="2023-12-31",
+    ...                     chain={"kind": "file", "path": "your/data.parquet"})
+    >>> print(report.text())                       # doctest: +SKIP
+    """
+    from backtest.data.pipeline import inspect_pipeline
+
+    proxy = VOL_PROXY_BY_SYMBOL.get(symbol)
+    config = BacktestConfig(
+        symbol=symbol,
+        start=_as_date(start),
+        end=_as_date(end),
+        notional_capital=100_000.0,
+        contract=ContractSpec(symbol=symbol, vol_proxy=proxy),
+        costs=costs or CostConfig(),
+        synthetic=synthetic or SyntheticChainConfig(),
+    )
+    market = MarketData(config, refresh=refresh)
+    return inspect_pipeline(market, build_chain_source(chain, market, config))
 
 
 def run(
@@ -331,6 +466,13 @@ def run(
     #: ``{"max_loss": 5000, "scenarios": [[-0.05, 0.5], [-0.10, 1.0]]}``. Both keys are
     #: required -- which shocks a strategy should survive is a research choice.
     scenario_limit: "Mapping[str, Any] | None" = None,
+    premium_budget: "Mapping[str, Any] | None" = None,
+    exposure: "Mapping[str, Any] | None" = None,
+    # **A realism assumption, and it was unreachable too.** The engine refuses an entry
+    # the cash cannot pay for; turning that off is what makes the two engines comparable
+    # (the trade-table engine has no book and so no cash constraint), and it was settable
+    # only by constructing the engine by hand. It is already in the run fingerprint.
+    enforce_capital: bool = True,
 ) -> "Result":
     """Run one backtest.
 
@@ -448,9 +590,33 @@ def run(
             market, chain_source, signal_set, config, max_concurrent=max_concurrent,
             shadow_days=shadow_days, brake=_brake_from(risk),
             scenario_limit=_scenario_limit_from(scenario_limit),
+            budget=_premium_budget_from(premium_budget),
+            limits=_exposure_from(exposure),
+            enforce_capital=enforce_capital,
         ).run(strategy, until=_as_date(until) if until else None,
               resume_from=resume_from)
     else:
+        if exposure is not None:
+            raise StartupError(
+                "the trade-table engine cannot enforce an exposure limit. The limit is "
+                "on the **book's** delta and vega, and the trade table evaluates each "
+                "trade independently with no book to aggregate. Use "
+                "engine='event_driven'"
+            )
+        if not enforce_capital:
+            raise StartupError(
+                "the trade-table engine has no cash constraint to turn off: it "
+                "evaluates each trade independently without a running balance, which is "
+                "what enforce_capital=False makes the event-driven engine do. Passing it "
+                "here would read as a setting that had an effect"
+            )
+        if premium_budget is not None:
+            raise StartupError(
+                "the trade-table engine cannot enforce a premium budget. The budget is "
+                "a limit on what the **book** has at risk at once, and the trade table "
+                "evaluates each trade independently with no book -- there is nothing for "
+                "a total to be a total of. Use engine='event_driven'"
+            )
         if scenario_limit is not None:
             raise StartupError(
                 "the trade-table engine cannot enforce a scenario limit. The limit is "
@@ -534,6 +700,23 @@ class Result:
     def costs(self) -> dict[str, Any]:
         return R.cost_breakdown(self.trades)
 
+    def spread(self) -> dict[str, Any]:
+        """The spread paid, as a share of the premium. See
+        :func:`backtest.research.metrics.spread_paid`."""
+        return R.spread_paid(self.trades)
+
+    def vol_premium(self) -> dict[str, Any]:
+        """IV at entry against the volatility realised while held. See
+        :func:`backtest.research.metrics.iv_versus_realized`.
+
+        Needs the daily path, so the trade-table engine returns the reason rather than a
+        figure -- it evaluates each trade over the whole range without stepping through
+        it, and there is no path to take a volatility of.
+        """
+        paths = getattr(self.raw, "paths_frame", None)
+        return R.iv_versus_realized(self.trades,
+                                    paths() if callable(paths) else paths)
+
     def provenance(self) -> dict[str, Any]:
         out = R.data_provenance(self.trades)
         if self.hold_out:
@@ -599,6 +782,26 @@ class Result:
                          f"fill with no chain is one nobody can explain, and it is not "
                          f"visible in the trade table **")
         return "\n".join(lines)
+
+    def turnover(self) -> dict:
+        """How much was traded relative to the capital employed.
+
+        Beside ``costs()`` rather than instead of it: the cost share says what was paid,
+        and turnover says how much activity produced it.
+        """
+        from backtest.research.metrics import turnover
+
+        # `self.raw.equity`, and absent on the trade-table engine -- which is a refusal
+        # with a reason rather than an AttributeError, as `equity_metrics` does it. The
+        # doc-example guard caught this: I wrote `self.equity`, which does not exist,
+        # and documented the call without running it.
+        equity = getattr(self.raw, "equity", None)
+        if equity is None:
+            raise AttributeError(
+                "the trade-table engine has no equity curve, so turnover has nothing to "
+                "divide by. Rerun with engine=\"event_driven\"."
+            )
+        return turnover(self.trades, equity)
 
     def manifest(self) -> dict[str, Any]:
         """Configuration, provenance and dependency versions — what makes the result
@@ -666,6 +869,17 @@ class Result:
         # prices — calling it "synthetic" alone would hash two different chains alike.
         data_version = ("synthetic:" + str(sorted(settings.get("synthetic", {}).items()))
                         if provenance.get("all_synthetic") else "vendor")
+        # **The cleaning rules, which are part of what data the run saw.**
+        #
+        # The document's second data rule is that cleaning is replayable on the same raw
+        # data and the same rule version. The rules never reached the fingerprint, so a
+        # run that dropped every crossed quote and one that kept them shared an id --
+        # and a sensitivity test over cleaning, which the register asks for by name,
+        # would have reported one run repeated. Sixth time this class of gap has turned
+        # up: something that moves the result reaching the engine and not the id.
+        cleaning = getattr(getattr(self, "_chain", None), "cleaning", None)
+        if cleaning is not None and cleaning.version():
+            data_version += " clean:" + str(cleaning.version())
         commit = code_version()
         return {
             "run_id": run_id(strategy=strategy, settings=settings, execution=execution,
@@ -713,7 +927,27 @@ class Result:
             f"{s['count']} trades | win rate {s['win_rate']:.1%} | mean holding "
             f"{s['avg_holding_days']:.1f} trading days",
             f"gross {s['gross_pnl']:,.0f} | fees {s['fees']:,.0f} | "
-            f"net {s['net_pnl']:,.0f}",
+            f"net {s['net_pnl']:,.0f}   (the spread is inside gross — see costs below)",
+        ]
+        # **Three returns where there is a curve to compute them from.** `total_return`
+        # is the account's, and the account earns interest on its cash: the ledger keeps
+        # that as its own term of the identity and this line is where it used to be
+        # folded back in and read as the strategy's.
+        try:
+            m = self.equity_metrics()
+        except Exception:                                   # noqa: BLE001
+            m = None                                        # no equity curve
+        if m is not None:
+            lines += [
+                f"strategy {m['strategy_total_return']:+.1%} "
+                f"({m['strategy_annualised']:+.2%} a year) | "
+                f"account {m['account_total_return']:+.1%} "
+                f"({m['annualised']:+.2%}) | "
+                f"interest {m['interest_earned']:,.0f} earned on cash",
+                f"sharpe {m['sharpe']:.2f} | sortino {m['sortino']:.2f}   "
+                f"(on the excess return, over a {m['risk_free_rate']:.2%} risk-free rate)",
+            ]
+        lines += [
             "",
             "— per-trade P&L distribution —",
         ]
@@ -740,26 +974,55 @@ class Result:
             )
 
         c = self.costs()
-        lines += [
-            "",
-            "— costs —",
+        # **The spread on its own line, and first.** This section used to list the three
+        # fees and total them, which for an option buyer is the smaller half of the cost
+        # and reads as the whole of it -- the more so because `slippage_per_contract`
+        # defaults to 0, so the line said the cost of trading was negligible.
+        lines += ["", "— costs —"]
+        if c.get("spread") is not None:
+            lines.append(
+                f"  spread (paid inside the fill) {c['spread']:,.0f} | fees "
+                f"{c['fees']:,.0f} | total {c['total']:,.0f} "
+                f"({c['cost_pct_of_premium']:.1%} of the {c['premium_traded']:,.0f} "
+                f"premium traded)")
+        else:
+            lines.append(
+                f"  fees {c['fees']:,.0f} ({c['fees_pct_of_premium']:.1%} of the "
+                f"{c['premium_traded']:,.0f} premium traded). {c['spread_note']}")
+        lines.append(
             f"  commission {c['commission']:,.0f} | regulatory {c['regulatory']:,.0f} | "
-            f"slippage {c['slippage']:,.0f} | total {c['total']:,.0f} "
-            f"({c['fees_pct_of_gross']:.1%} of gross)",
-        ]
+            f"slippage {c['slippage']:,.0f}")
+        # Against the edge before costs, which is gross rebuilt at the mid: the spread is
+        # inside every fill price, so a ratio to plain gross has it on both sides of the
+        # division. Absent rather than misleading when there is no edge to be a share of.
+        if c.get("cost_pct_of_gross_at_mid") is not None:
+            lines.append(
+                f"  that is {c['cost_pct_of_gross_at_mid']:.0%} of the "
+                f"{c['gross_pnl_at_mid']:,.0f} this made before costs, filling at the "
+                f"mid")
+        elif c.get("gross_note"):
+            lines.append(f"  {c['gross_note']}")
         if c["eaten_by_costs"]:
             lines.append("  !! Gross is positive and net is negative: the edge does not "
                          "cover the trading costs")
 
         cap = self.raw.capital_check()
-        lines += [
-            "",
-            "— what this engine does not cover —",
-            "  The trade-table engine computes each trade independently: no capital "
-            "constraint and no portfolio equity curve, so no drawdown and no Sharpe.",
+        # **It said "the trade-table engine" on every run, including event-driven ones.**
+        # The capital figures below are worth printing either way -- peak concurrent
+        # positions and the capital they needed -- but the sentence above them described
+        # a limitation the event-driven engine does not have, on its own output.
+        if self.raw.ENGINE == "trade_table":
+            lines += [
+                "",
+                "— what this engine does not cover —",
+                "  The trade-table engine computes each trade independently: no capital "
+                "constraint and no portfolio equity curve, so no drawdown and no Sharpe.",
+            ]
+        else:
+            lines += ["", "— capital —"]
+        lines.append(
             f"  Peak concurrent positions {cap['peak_positions']}, needing about "
-            f"{cap['peak_capital']:,.0f} (notional {cap['notional_capital']:,.0f})",
-        ]
+            f"{cap['peak_capital']:,.0f} (notional {cap['notional_capital']:,.0f})")
         if not cap["feasible"]:
             lines.append("  !! Peak capital exceeds the notional, so this result is not "
                          "achievable with the capital given; recheck it with the "
@@ -795,6 +1058,68 @@ class Result:
         from backtest.accounting.attribution import attribute
 
         return attribute(self.trades)
+
+    def greeks_by_expiry(self, day=None):
+        """The book's greeks grouped by expiry, on one session.
+
+        ``day`` defaults to the last session of the run. The book-wide total cannot tell
+        a book with all its vega on one Friday from one spreading it over six, and that
+        difference is the whole of the concentration question for an options book.
+        """
+        from backtest.portfolio.scenarios import greeks_by_expiry
+
+        snapshots = getattr(self.raw, "snapshots", None)
+        if not snapshots:
+            raise AttributeError(
+                "the trade-table engine keeps no book, so there is nothing to group by "
+                "expiry. Rerun with engine=\"event_driven\"."
+            )
+        when = day or snapshots[-1].day
+        ledger = self.raw.ledger
+        return greeks_by_expiry(
+            ledger.positions, self._chain, when,
+            self._market.spot(when).or_else(float("nan")),
+            snapshots[-1].equity_mid)
+
+    def prelaunch(self, *, thesis: str | None = None, sweep=None, delay=None,
+                  realism=None, baselines=None, trials=None):
+        """The document's pre-launch checklist (6.2), run against this result.
+
+        Eight criteria, each `pass`, `fail` or **`unknown`** -- and unknown is not a soft
+        pass: `ready` is false while any criterion is unmeasured, because a tick beside
+        work nobody did is worse than no checklist.
+
+        The cheap criteria are computed here. The five that need a second run are passed
+        in (`result.sweep(...)`, `delay_test()`, `realism_test()`, `baselines()`), because
+        running five backtests inside a reporting call would be a surprise measured in
+        minutes -- and the document's protocol has them run deliberately.
+
+        `thesis` is what the strategy is **supposed** to earn from, and there is no
+        default: "greeks attribution matches the thesis" cannot be answered without it,
+        and a tool that guessed would be marking its own homework.
+        """
+        from backtest.research.prelaunch import checklist
+
+        return checklist(self, thesis=thesis, sweep=sweep, delay=delay,
+                         realism=realism, baselines=baselines, trials=trials)
+
+    def attribution_daily(self):
+        """P&L attribution stepped **day by day**, with the spread as its own term.
+
+        The one-step `attribution()` expands from entry to exit on the entry greeks; over
+        a multi-week option hold its residual runs to tens of percent. This uses each
+        day's own greeks and reports the spread separately instead of leaving it in the
+        residual. Needs the daily path, so it is event-driven only.
+        """
+        from backtest.accounting.attribution import attribute_daily
+
+        paths = getattr(self.raw, "paths_frame", None)
+        if paths is None:
+            raise AttributeError(
+                "the trade-table engine produces no daily path, so attribution can only "
+                "be the one-step kind. Rerun with engine=\"event_driven\"."
+            )
+        return attribute_daily(self.trades, paths)
 
     def attribution_by(self, column: str, bins: int = 4):
         from backtest.accounting.attribution import attribute_by
@@ -869,6 +1194,21 @@ class Result:
         return sweep_levels(self.trades, paths, shadow,
                             take_profits=take_profits, stop_losses=stop_losses)
 
+    def _risk_free_rate(self) -> float:
+        """The period's average risk-free rate, from the series the interest was accrued
+        at. Falls back to the config constant, and says which in `equity_metrics`."""
+        market = getattr(self, "_market", None)
+        rates = getattr(market, "_rates", None)
+        if rates is not None and len(rates):
+            # The series is datetime-indexed and the config holds dates, which do not
+            # compare. Normalised rather than assumed either way.
+            index = pd.to_datetime(rates.index)
+            cut = rates.loc[(index >= pd.Timestamp(self.raw.config.start))
+                            & (index <= pd.Timestamp(self.raw.config.end))]
+            if len(cut):
+                return float(cut.mean())
+        return float(self.raw.config.fallback_risk_free_rate)
+
     def equity_metrics(self) -> dict:
         """The metrics that need an equity curve. The trade-table engine cannot
         produce them and says so."""
@@ -887,11 +1227,72 @@ class Result:
         drawdown = curve / curve.cummax() - 1
         vol = float(returns.std() * np.sqrt(252)) if len(returns) > 1 else float("nan")
         annual = float((curve.iloc[-1] / curve.iloc[0]) ** (1 / years) - 1)
+
+        # ── three returns, named apart ─────────────────────────────────────────
+        #
+        # **The ledger keeps interest as its own term of the accounting identity and this
+        # function folded it back in.** `equity_mid` is cash plus holdings, and the cash
+        # carries every dollar of interest earned, so `total_return` was the account's
+        # return being read as the strategy's. On this project's own fixture that is a
+        # difference of thousands on a strategy whose net P&L is a few hundred.
+        #
+        # So three figures with three names, rather than one figure that is quietly the
+        # wrong one for most questions:
+        #
+        #   strategy  what the trading produced, interest removed
+        #   account   what the account did, interest included -- what a statement shows
+        #   excess    the account's return less the risk-free rate, which is the one a
+        #             risk-adjusted ratio is defined on
+        strategy_curve = equity.get("strategy_equity")
+        if strategy_curve is None:                 # a curve from before the column existed
+            strategy_curve = curve
+        strategy_returns = strategy_curve.pct_change().dropna()
+        strategy_annual = float(
+            (strategy_curve.iloc[-1] / strategy_curve.iloc[0]) ** (1 / years) - 1)
+        strategy_vol = (float(strategy_returns.std() * np.sqrt(252))
+                        if len(strategy_returns) > 1 else float("nan"))
+
+        # **The rate the cash actually earned, not the config's fallback.** Interest is
+        # accrued session by session off the market's own rate series; deducting the
+        # fallback constant instead would subtract a different number from the one that
+        # was added, which is the mismatch this whole separation exists to remove. The
+        # fallback is used only when there is no series -- the same order the ledger uses.
+        rate = self._risk_free_rate()
+        excess_annual = annual - rate
+
+        # **Sharpe on the excess return, which is its definition.** It was
+        # `annualised / vol` on a curve that *included* the interest -- the risk-free
+        # rate added once and not subtracted once, both times in the flattering
+        # direction. At 4.5% against a 20-40% vol that is 0.1 to 0.2 of Sharpe.
+        sharpe = excess_annual / vol if vol and np.isfinite(vol) else float("nan")
+        downside = strategy_returns[strategy_returns < 0]
+        downside_vol = (float(downside.std() * np.sqrt(252))
+                        if len(downside) > 1 else float("nan"))
+        sortino = (excess_annual / downside_vol
+                   if downside_vol and np.isfinite(downside_vol) else float("nan"))
+
         return {
+            # The strategy on its own, which is what a component decision is judged on.
+            "strategy_total_return": float(
+                strategy_curve.iloc[-1] / strategy_curve.iloc[0] - 1),
+            "strategy_annualised": strategy_annual,
+            "strategy_annualised_vol": strategy_vol,
+            "interest_earned": float(equity["interest"].iloc[-1])
+            if "interest" in equity.columns else float("nan"),
+            # The account, interest included. `total_return` keeps its name and its
+            # meaning -- it was always the account's figure -- and is now labelled.
             "total_return": float(curve.iloc[-1] / curve.iloc[0] - 1),
+            "account_total_return": float(curve.iloc[-1] / curve.iloc[0] - 1),
             "annualised": annual,
             "annualised_vol": vol,
-            "sharpe": annual / vol if vol else float("nan"),
+            # Excess, and the rate it is excess of.
+            "risk_free_rate": rate,
+            "excess_annualised": excess_annual,
+            "sharpe": sharpe,
+            "sortino": sortino,
+            "ratio_basis": ("sharpe and sortino are on the excess return "
+                            f"(account {annual:.2%} less the risk-free {rate:.2%}); "
+                            f"the strategy alone returned {strategy_annual:.2%}"),
             "max_drawdown": float(drawdown.min()),
             "max_drawdown_liq": float((liq / liq.cummax() - 1).min()),
             "mean_capital_used": float((equity["deployed"] / curve).mean()),
@@ -912,7 +1313,8 @@ class Result:
         bars = self._market.bars
         bench = bars.adjusted("close")
         return summary(self.raw.equity, self.trades, benchmark=bench,
-                       synthetic=self.synthetic)
+                       synthetic=self.synthetic,
+                       risk_free=self._risk_free_rate())
 
     @property
     def synthetic(self) -> bool:

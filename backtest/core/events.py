@@ -67,35 +67,68 @@ from backtest.core.errors import InvariantError, StartupError
 
 
 class EventType(str, Enum):
-    """The named event types.
+    """The architecture document's thirteen, plus two of our own.
 
-    The document names eight -- ``MarketEvent``, ``QuoteEvent``, ``SignalEvent``,
-    ``OrderEvent``, ``FillEvent``, ``RiskEvent``, ``TimerEvent``, ``ExpiryEvent`` -- and
-    then an ellipsis, with the count given as thirteen. The other five are **derived
-    rather than quoted**, each from something else the document asks for, and which is
-    which is recorded here so nobody later reads a guess as a specification:
+    **This list was wrong and the correction is worth recording.** An earlier version
+    said the document named eight and that the other five were "derived rather than
+    quoted", with the derivation written out so nobody would read a guess as a
+    specification. Reading the document itself -- rather than the transcription in
+    ``requirements.md`` -- showed the derivation was ten right, two invented and three
+    missed.
 
-    - ``CORPORATE_ACTION`` -- the first step of the processing order (1.32), and a step the
-      engine's loop does not have at all
-    - ``TARGET_PORTFOLIO`` -- requirement 3.2, which names it as an event
-    - ``REJECT`` -- 4.2's "log every rejected order"; a rejection is not a fill and
-      collapsing the two loses the count that matters
-    - ``ACCOUNTING`` -- the last step of the processing order
-    - ``STATE`` -- 0.2's ``get_state``/``set_state``, and 5.1's resume: a snapshot is a
-      point in the stream, not a side channel
+    The document's thirteen, from its own event table (pages 10 and 11):
+
+    ======================  ==========  =============================================
+    Document                Here        Note
+    ======================  ==========  =============================================
+    MarketEvent             MARKET      the underlying's bar
+    QuoteEvent              QUOTE       the option chain snapshot
+    CorporateActionEvent    CORPORATE_  dividend, split, rights
+                            ACTION
+    ContractAdjustEvent     CONTRACT_   an OCC adjustment: new multiplier, new strike
+                            ADJUST
+    UniverseEvent           UNIVERSE    the tradable set for a date
+    TimerEvent              TIMER       start of day, snapshot, rebalance, end of day
+    SignalEvent             SIGNAL      what a component decided
+    TargetPortfolioEvent    TARGET_     target quantity per contract plus reasons
+                            PORTFOLIO
+    RiskEvent               RISK        a risk rule triggered
+    OrderEvent              ORDER       side, quantity, type, limit, time in force
+    FillEvent               FILL        filled quantity, price, fee, slippage
+    OrderStatusEvent        ORDER_      partial fill, reject, cancel, **and the reason**
+                            STATUS
+    ExpiryEvent             EXPIRY      settlement price, exercise or lapse
+    ======================  ==========  =============================================
+
+    ``ORDER_STATUS`` replaces what was called ``REJECT``. A rejection is one of its four
+    cases and the narrow name lost the other three -- a partial fill is not a rejection
+    and is the figure 4.2 asks to be reported.
+
+    Two are **ours and not the document's**, named here as such rather than smuggled into
+    the thirteen:
+
+    - ``ACCOUNTING`` -- the processing order's penultimate stage. The document has it as a
+      stage and not as an event; it is one here because the mark is what the order exists
+      to put last, and a stage nothing announces cannot be checked.
+    - ``STATE`` -- 0.2's ``get_state``/``set_state`` and 5.1's resume. A snapshot is a
+      point in the stream rather than a side channel.
     """
 
+    # ── the document's thirteen ──
     CORPORATE_ACTION = "corporate_action"
+    CONTRACT_ADJUST = "contract_adjust"
     MARKET = "market"
     QUOTE = "quote"
+    UNIVERSE = "universe"
     TIMER = "timer"
     SIGNAL = "signal"
     RISK = "risk"
     TARGET_PORTFOLIO = "target_portfolio"
     ORDER = "order"
-    REJECT = "reject"
+    ORDER_STATUS = "order_status"
     FILL = "fill"
     EXPIRY = "expiry"
+    # ── ours, for the reasons above ──
     STATE = "state"
     ACCOUNTING = "accounting"
 
@@ -107,23 +140,42 @@ class EventType(str, Enum):
 #: subtly different from the document it was copied from.
 PHASE: Mapping[EventType, int] = {
     EventType.CORPORATE_ACTION: 10,    # splits and dividends, before anything is priced
+    EventType.CONTRACT_ADJUST: 15,     # an OCC adjustment, in the same first stage
     EventType.MARKET: 20,              # the underlying's bar
     EventType.QUOTE: 25,               # the option chain for the day
+    EventType.UNIVERSE: 27,            # the tradable set, after the data it is drawn from
     EventType.TIMER: 30,               # scheduled work, before decisions are made
     EventType.SIGNAL: 40,              # what the components decided
     EventType.RISK: 45,                # the portfolio's own brake, after the signals
     EventType.TARGET_PORTFOLIO: 50,    # what the book should hold
     EventType.ORDER: 60,               # the gap between target and actual
-    EventType.REJECT: 65,              # an order that did not become an intent
+    EventType.ORDER_STATUS: 65,        # partial fill, reject or cancel, with the reason
     EventType.FILL: 70,                # what actually happened
     EventType.EXPIRY: 80,              # settlement
-    EventType.STATE: 85,               # the snapshot, after the day's work
-    EventType.ACCOUNTING: 90,          # the mark, last, so it includes everything above
+    EventType.ACCOUNTING: 85,          # the mark, after everything that moves the book
+    EventType.STATE: 90,               # the end-of-day snapshot, last
 }
 
-#: The document's order as prose, for the error message when something is out of place.
-ORDER_AS_WRITTEN = ("corporate actions -> market data -> signals -> portfolio -> orders "
-                    "-> fills -> expiry -> accounting")
+def sort_key(event: "Event") -> tuple:
+    """The document's three sort keys: timestamp, processing phase, sequence.
+
+    Exposed as a function because the ordering is a property of the **stream**, not of
+    this object: a stream written to disk and read back has to be re-sorted, and sorting
+    it by anything else is a different run. The figure on page 2 names all three.
+    """
+    return (event.when, event.phase, event.id)
+
+
+#: The document's order, in its own words (page 11).
+#:
+#: **Nine stages, not eight.** The transcription dropped two: "contract adjustments" from
+#: the first stage, and "end-of-day snapshot" from the last. Both matter to the table
+#: above -- an OCC adjustment changes a contract's multiplier and strike, so it belongs
+#: with the corporate actions and before anything is priced; and the snapshot is what a
+#: resumed run restores from, so it comes after the mark rather than with it.
+ORDER_AS_WRITTEN = ("corporate actions and contract adjustments -> market data -> "
+                    "signals -> portfolio and risk -> orders -> fills -> expiry "
+                    "settlement -> accounting -> end-of-day snapshot")
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,7 +384,15 @@ class EventBus:
                 if not ready:
                     break
                 phase = min(e.phase for e in ready)
-                batch = [e for e in ready if e.phase == phase]
+                # **(timestamp, phase, sequence)** -- the figure's three sort keys.
+                #
+                # Within a phase this used to be publication order, held by the list
+                # rather than written on the event. That is the same order while the
+                # stream lives in this list and stops being the same order the moment
+                # one is persisted and read back, when it would depend on the storage.
+                # `id` is the sequence: assigned once, at publish, and monotonic.
+                batch = sorted((e for e in ready if e.phase == phase),
+                               key=lambda e: e.id)
                 for event in batch:
                     self._pending.remove(event)
                     self._history.append(event)

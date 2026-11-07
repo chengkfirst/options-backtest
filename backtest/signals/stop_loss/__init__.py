@@ -103,6 +103,68 @@ def _trailing(ctx: Mapping[str, Any], *, fraction: float) -> bool:
     return (state["high_water"] - ratio) >= fraction
 
 
+def _ratchet(ctx: Mapping[str, Any], *, fraction: float, trigger: float,
+             to: float) -> bool:
+    """A fixed stop that **moves once**, when the trade is far enough ahead.
+
+    The commonest real stop rule there is -- "once it is up 30%, move the stop to
+    breakeven" -- and the one form that could not be written here, because moving a stop
+    was not an action the system had.
+
+    ``fraction`` is the stop it starts at, ``trigger`` is how far ahead the trade must be
+    for the move, and ``to`` is the stop it moves to. ``to=0.0`` is breakeven; a negative
+    value is refused by the engine, because a stop that fires while the trade is ahead is
+    a take-profit wearing the wrong name.
+
+    **Why this is not the trailing stop.** A trailing stop moves every session and gives
+    back a fixed fraction of the best. This moves once, to a level the researcher chose,
+    and then stops moving. On a trade that runs up and chops sideways the trailing stop
+    exits and this one does not; which is right is the question the pair makes askable.
+
+    The move is a logged SET_STOP action, so a reader can see when the stop moved and
+    which slot asked -- the difference between this and a component keeping the level in
+    its own state, where the move is invisible.
+    """
+    ratio = ctx.get("premium_ratio")
+    if ratio is None or not math.isfinite(ratio):
+        return False
+    ratio = float(ratio)
+
+    state = ctx["state"]
+    if not state.get("moved") and ratio >= trigger:
+        setter = ctx.get("set_stop")
+        if setter is not None:
+            setter(to, f"up {ratio:.1%}, past the {trigger:.1%} trigger: the stop moves "
+                       f"from {fraction:.1%} to {to:.1%}")
+            state["moved"] = True
+            state["level"] = to
+
+    # `None` means "not moved yet", so the parameter is the level. The
+    # initial-state hook cannot see the parameters, which is why this is a
+    # fallback here rather than a value written at the start.
+    level = state.get("level") if state.get("level") is not None else fraction
+    return ratio <= -level
+
+
+RATCHET = register(Variant(
+    slot="stop_loss", name="ratchet", version=1,
+    describes="starts at a fixed stop and moves it once, when the trade is far enough "
+              "ahead -- 'up 30%, stop to breakeven'. Unlike the trailing stop it moves "
+              "once to a chosen level rather than every session by a fixed give-back, "
+              "and the move is a logged SET_STOP action rather than private state",
+    params=(
+        Param("fraction", "float", "the stop it starts at, as a loss fraction",
+              lo=0.0, hi=1.0),
+        Param("trigger", "float", "how far ahead the trade must be before the stop moves",
+              lo=0.0, hi=5.0),
+        Param("to", "float", "the stop it moves to; 0.0 is breakeven", lo=0.0, hi=1.0),
+    ),
+    decide=_ratchet,
+    stateful=True,
+    initial_state=lambda ctx: {"moved": False, "level": None},
+))
+
+
 TRAILING = register(Variant(
     slot="stop_loss", name="trailing", version=1,
     describes="out when the premium falls by a fraction **from its best**, not from "

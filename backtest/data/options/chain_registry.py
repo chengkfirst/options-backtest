@@ -97,8 +97,33 @@ def _dispatch(name: str, opts: dict, market, config):
 
 
 def _synthetic(opts, market, config):
+    """``chain="synthetic"``, or ``chain={"kind":"synthetic"}``.
+
+    **It takes no options, and says so rather than ignoring them.** It used to accept
+    whatever it was handed and use none of it, so ``chain={"kind":"synthetic",
+    "clean":["crossed_quote"]}`` ran with no cleaning at all and raised nothing -- the
+    exact failure this project refuses everywhere else: a researcher who believes a rule
+    is in force and is reading the result without it.
+
+    Cleaning in particular cannot mean anything here. The generator prices every row from
+    Black-Scholes on the underlying's close, so there are no crossed quotes, no quotes
+    below intrinsic and no missing quotes for a rule to find -- a rule set would report
+    zero rows touched and look as though the data were clean, when the truth is that it
+    was never dirty.
+    """
     from backtest.data.options.synthetic.generator import SyntheticChainSource
 
+    unknown = sorted(k for k in (opts or {}) if k != "kind")
+    if unknown:
+        raise StartupError(
+            f"the synthetic chain takes no options and was given {unknown}. Its prices "
+            f"come from Black-Scholes on the underlying's close, so there is nothing to "
+            f"clean, map or rescale. "
+            + ("Cleaning rules belong to a real data source: use "
+               'chain={"kind": "file", "path": ..., "clean": [...]}. '
+               if "clean" in unknown else "")
+            + "The generator's own parameters are set with synthetic=SyntheticChainConfig(...)"
+        )
     return SyntheticChainSource(market, config)
 
 
@@ -117,7 +142,64 @@ def _file(opts, market, config):
         column_map=opts.get("column_map"),
         scale=opts.get("scale"),
         strict=bool(opts.get("strict", True)),
+        cleaning=_cleaning_from(opts.get("clean")),
+        iv_model=str(opts.get("iv_model", "european")),
     )
+
+
+def _cleaning_from(given):
+    """Cleaning rules from the config, by name.
+
+    ``clean=["crossed_quote", "no_quote", {"wide_spread": 0.20}]``. Named rather than
+    passed as objects so a run's cleaning survives into the YAML config file and back --
+    a rule set that cannot be written down is a rule set a run cannot reproduce.
+
+    ``None`` means no rules. There is no default set, for the reason in
+    ``data/options/clean.py``: a platform-chosen cleaning rule is the platform deciding
+    which market conditions a strategy is tested through.
+    """
+    if given is None:
+        return None
+    from backtest.data.options import clean as rules
+
+    BY_NAME = {
+        "crossed_quote": rules.crossed_quote,
+        "below_intrinsic": rules.below_intrinsic,
+        "no_quote": rules.no_quote,
+        "wide_spread": rules.wide_spread,
+    }
+    built = []
+    for item in given:
+        if isinstance(item, str):
+            name, arg = item, None
+        elif isinstance(item, Mapping) and len(item) == 1:
+            (name, arg), = item.items()
+        else:
+            raise StartupError(
+                f"a cleaning rule is a name or a one-entry mapping of name to its "
+                f"threshold, got {item!r}"
+            )
+        maker = BY_NAME.get(name)
+        if maker is None:
+            raise StartupError(
+                f"{name!r} is not a cleaning rule; one of {', '.join(sorted(BY_NAME))}"
+            )
+        if name == "wide_spread":
+            if arg is None:
+                raise StartupError(
+                    "wide_spread needs its threshold: "
+                    "{\"wide_spread\": 0.20} means a spread up to 20% of the mid is "
+                    "tradable. Which spreads a strategy can live with is the "
+                    "researcher's choice, not the platform's"
+                )
+            built.append(maker(max_share_of_mid=float(arg)))
+        elif name == "below_intrinsic" and arg is not None:
+            built.append(maker(tolerance=float(arg)))
+        else:
+            if arg is not None:
+                raise StartupError(f"{name!r} takes no threshold, got {arg!r}")
+            built.append(maker())
+    return rules.Cleaning(rules=tuple(built))
 
 
 register("synthetic", _synthetic)

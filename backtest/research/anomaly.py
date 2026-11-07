@@ -189,19 +189,53 @@ def _exit_never_fires(t, **_) -> "Finding | None":
 
 
 def _costs_eat_edge(t, *, costs=None, **_) -> "Finding | None":
-    """Costs are too large a share of gross P&L — a marginal edge will not survive
-    real execution."""
+    """Costs are too large a share of the edge before costs.
+
+    **This rule was blind to the option buyer's largest cost.** It read
+    `fees_pct_of_gross`, and the spread is not a fee -- it is paid inside the fill, so it
+    could never be in the numerator. On this project's own fixture the spread is several
+    times the commission, which means the one rule that exists to say "the edge will not
+    survive execution" was measuring the smaller half.
+
+    Two readings now, because they fail differently:
+
+    - **the edge before costs is positive and the costs take too much of it.** Measured
+      against gross rebuilt at the mid, so the spread is in the numerator and not in the
+      denominator. The old ratio had the spread in neither.
+    - **the edge before costs is not positive at all.** Then there is no ratio to compare
+      and the old rule returned nothing -- the quietest possible outcome for the worst
+      possible case. Reported as its own finding.
+    """
     if not costs:
         return None
-    pct = costs.get("fees_pct_of_gross")
+    total = float(costs.get("total", 0.0) or 0.0)
+    at_mid = costs.get("gross_pnl_at_mid")
+
+    if at_mid is not None and float(at_mid) <= 0:
+        return Finding(
+            "costs", "high",
+            "there is no edge for the costs to eat: gross P&L is not positive even at "
+            "the mid",
+            f"before any cost, filling every order at the mid, the strategy makes "
+            f"{float(at_mid):,.0f}. Costs of {total:,.0f} are then beside the point -- "
+            f"the entry and exit rules are not finding anything, and no cost assumption "
+            f"will change that.",
+        )
+
+    pct = costs.get("cost_pct_of_gross_at_mid")
     if pct is None or not np.isfinite(pct) or pct < _cut("cost_share_warning"):
         return None
+    spread = costs.get("spread")
+    share = (f" The spread is {float(spread) / total:.0%} of it"
+             if spread is not None and total else "")
     return Finding(
         "costs", "high",
-        f"costs ate {pct:.0%} of gross P&L",
-        f"commission and slippage total {costs.get('total', 0):,.0f}. Live costs are "
-        f"usually above backtest costs, and at this ratio the edge is unlikely to "
-        f"survive real execution.",
+        f"costs ate {pct:.0%} of the edge before costs",
+        f"costs total {total:,.0f} against {float(costs['gross_pnl_at_mid']):,.0f} of "
+        f"gross P&L at the mid, which is {pct:.0%}.{share}, and the spread is the cost "
+        f"that is paid inside the fill rather than charged as a fee. Live costs are "
+        f"usually above backtest costs, so at this ratio the edge is unlikely to survive "
+        f"real execution.",
     )
 
 

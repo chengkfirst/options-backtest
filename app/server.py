@@ -37,7 +37,7 @@ warnings.filterwarnings("ignore")
 
 from meta import _describe_gaps, _meta_payload, _tradeoff  # noqa: E402
 from runner import (  # noqa: E402
-    STORE, SYNTHETIC_WARNING, VALIDATIONS, _finite, run_backtest, validate,
+    STORE, SYNTHETIC_WARNING, VALIDATIONS, _finite, ideas, run_backtest, validate,
     validations_for,
 )
 from store import VERDICTS  # noqa: E402
@@ -107,14 +107,20 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
 
     def end_headers(self):
-        """Every static file is revalidated against the server.
+        """Every static file is fetched again, every time.
 
         Without this, Chrome caches js/css heuristically and a reload after an edit still
-        runs the old code, raising nothing. A local tool does not care about the
-        bandwidth; correctness comes first.
+        runs the old code, raising nothing. A local tool does not care about the bandwidth;
+        correctness comes first.
+
+        **`no-store`, not `no-cache`.** `no-cache` means "revalidate", and the index stamps
+        only the files it names itself -- `js/app.js?v=...`. Every module those import is
+        requested at its bare path, and the browser was serving those out of its cache after
+        an edit: the page then runs a mixture of old and new modules, which is worse than
+        either, and the symptom is a screen that disagrees with the source in front of you.
         """
         if not self.path.startswith("/api/"):
-            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
     def guess_type(self, path):
@@ -152,9 +158,16 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path == "/api/meta":
             return self._json(self._meta())
         if url.path == "/api/runs":
+            # `archived=1` asks for the hidden ones too. The design plan: archived runs are
+            # "hidden by default and still count toward the idea's trials", so the list needs
+            # a way to show them — a filter that cannot be turned off is a filter that makes
+            # the trial count in the header look wrong.
             return self._json({"runs": STORE.runs(
                 strategy_name=q.get("strategy"), symbol=q.get("symbol"),
-                verdict=q.get("verdict"), limit=int(q.get("limit", 200)))})
+                verdict=q.get("verdict"), limit=int(q.get("limit", 200)),
+                include_archived=q.get("archived") in ("1", "true"))})
+        if url.path == "/api/ideas":
+            return self._json({"ideas": ideas(), "verdicts": VERDICTS})
         if url.path == "/api/run":
             try:
                 run_id = int(q.get("id", ""))
@@ -194,6 +207,14 @@ class Handler(SimpleHTTPRequestHandler):
             for key in ("equity_metrics", "scenarios", "attribution"):
                 if isinstance(record.get("analysis"), dict) and key in record["analysis"]:
                     record[key] = record["analysis"][key]
+            # A run stored before a part of the analysis existed has no key for it, and an
+            # absent key is not the same thing as a recorded `null`: the first makes the
+            # interface's contract check report the backend as out of step, the second says
+            # "this run does not have that" and lets the page fall back. Every part the
+            # contract declares is present, so only one of those two can happen.
+            if isinstance(record.get("analysis"), dict):
+                for key in ("baselines", "trade_stats"):
+                    record["analysis"].setdefault(key, None)
             return self._json(record)
         if url.path == "/api/strategies":
             name = q.get("name")
@@ -220,7 +241,8 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_HEAD()
 
     def do_POST(self):
-        if self.path not in ("/api/run", "/api/note", "/api/run/delete", "/api/validate"):
+        if self.path not in ("/api/run", "/api/note", "/api/run/delete",
+                             "/api/run/archive", "/api/run/deletion", "/api/validate"):
             return self._json({"error": f"unknown endpoint {self.path}"}, 404)
         try:
             length = int(self.headers.get("Content-Length", 0))
@@ -239,12 +261,31 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": str(exc)}, 400)
             return self._json({"note": note})
 
-        if self.path == "/api/run/delete":
+        # Archiving and deleting are different operations with different consequences for
+        # the record, so they are different endpoints rather than a flag on one.
+        if self.path == "/api/run/archive":
             try:
-                STORE.delete_run(self._run_id(payload))
+                STORE.archive_run(self._run_id(payload),
+                                  bool(payload.get("archived", True)))
             except (ValueError, KeyError) as exc:
                 return self._json({"error": str(exc)}, 400)
             return self._json({"ok": True})
+
+        # What a delete would take, without taking it. The interface asks this before it
+        # asks the researcher, so the question it puts to them names what is at stake
+        # rather than only asking whether they meant it.
+        if self.path == "/api/run/deletion":
+            try:
+                return self._json(STORE.deletion_takes(self._run_id(payload)))
+            except (ValueError, KeyError) as exc:
+                return self._json({"error": str(exc)}, 400)
+
+        if self.path == "/api/run/delete":
+            try:
+                took = STORE.delete_run(self._run_id(payload))
+            except (ValueError, KeyError) as exc:
+                return self._json({"error": str(exc)}, 400)
+            return self._json({"ok": True, "took": took})
 
         if self.path == "/api/validate":
             try:

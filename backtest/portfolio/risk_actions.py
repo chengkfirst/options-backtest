@@ -43,12 +43,19 @@ BUILT: dict[RiskAction, str] = {
     RiskAction.SCALE_DOWN: "",
     RiskAction.NO_NEW_POSITIONS: "",
     RiskAction.LIQUIDATE: "",
-    RiskAction.PAUSE: (
-        "pausing until a person resumes needs a run that can stop and be restarted, "
-        "which needs component state to be saved and restored. A backtest that paused "
-        "with no way to resume would simply be a backtest that ended early, reported as "
-        "though it had run to the end"
-    ),
+    # **Built now, and what it took is worth recording.** This was refused for a long
+    # time with the reason that pausing until a person resumes needs a run that can stop
+    # and be restarted -- which needed component state to be saved and restored. That
+    # arrived with 0.2's get_state/set_state and 5.1's checkpoint, so the refusal was
+    # removed rather than carried on out of habit.
+    #
+    # What makes it a real fourth action rather than a second name for
+    # ``no_new_positions``: the **run stops**. The result says it paused, carries the
+    # checkpoint, and resuming is a separate deliberate act. A pause that let the run
+    # continue would be indistinguishable from the other three, and a pause that ended
+    # the run silently would be a backtest that stopped early reported as though it had
+    # run to the end -- which is the sentence this entry used to hold.
+    RiskAction.PAUSE: "",
 }
 
 

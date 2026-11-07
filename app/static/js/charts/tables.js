@@ -91,7 +91,8 @@ export function renderRobust(rows){
   const yv=Object.values(by), best=yv.length?Math.max(...yv):0;
   const lines=[1,3,5,10].filter(n=>n<rows.length).map(n=>{
     const cut=sorted.slice(0,n).reduce((a,r)=>a+r.net_pnl,0);
-    return [`without the best ${n} trades`,total-cut,rows.length-n];});
+    return [n === 1 ? "without the best trade" : `without the best ${n} trades`,
+            total-cut,rows.length-n];});
   if(yv.length>1)lines.push(["without the best year",total-best,"—"]);
   $("robust").innerHTML=`<thead><tr><th>case</th><th>net P&L left</th><th>trades left</th><th>verdict</th></tr></thead><tbody>
     <tr><td>all of them</td><td class="n ${sgn(total)}">${money(total)}</td><td class="n">${rows.length}</td>

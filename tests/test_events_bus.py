@@ -49,6 +49,57 @@ def _bus_recording() -> tuple[EventBus, list[EventType]]:
     return bus, seen
 
 
+class TestTheDocumentsThirteen:
+    """The event list, held to the document rather than to a transcription.
+
+    An earlier version of ``core/events.py`` said the document named eight types and that
+    five were "derived rather than quoted" -- with the derivation written out so nobody
+    would read a guess as a specification. Reading the document itself showed the
+    derivation was **ten right, two invented and three missed**.
+
+    So the list is pinned here, by name, against the document's own event table. Two
+    extra types are ours and are named as such; a third appearing without being added
+    here fails, which is the point.
+    """
+
+    #: The document's own table, pages 10 and 11. Thirteen.
+    DOCUMENTS_OWN = (
+        "market", "quote", "corporate_action", "contract_adjust", "universe", "timer",
+        "signal", "target_portfolio", "risk", "order", "fill", "order_status", "expiry",
+    )
+
+    #: Not in the document's table, and here for reasons recorded in the module.
+    #: ``accounting`` is a **stage** of the processing order rather than an event there;
+    #: ``state`` is what 0.2's get_state and 5.1's resume snapshot.
+    OURS = ("accounting", "state")
+
+    @pytest.mark.req("0.1.bus")
+    def test_all_thirteen_of_the_documents_types_exist(self):
+        present = {t.value for t in EventType}
+        missing = [n for n in self.DOCUMENTS_OWN if n not in present]
+        assert not missing, (
+            f"these are in the document's event table and not here: {missing}. The count "
+            f"is thirteen and the names are the document's"
+        )
+        assert len(self.DOCUMENTS_OWN) == 13
+
+    def test_nothing_else_is_here_without_being_named_as_ours(self):
+        """A fourteenth type smuggled in among the document's would make the list a
+        guess again, which is how the first version went wrong."""
+        extra = sorted({t.value for t in EventType}
+                       - set(self.DOCUMENTS_OWN) - set(self.OURS))
+        assert not extra, (
+            f"{extra} are neither in the document's table nor listed as ours. Add them "
+            f"to OURS with a reason, or take them out"
+        )
+
+    def test_every_type_has_a_place_in_the_order(self):
+        """A type with no phase would be delivered in publication order, which is the
+        dependence the phase table exists to remove."""
+        unplaced = sorted(t.value for t in EventType if t not in PHASE)
+        assert not unplaced, f"these have no phase: {unplaced}"
+
+
 class TestTheOrderWithinATimestamp:
     """The document's order, which is the whole reason a bus exists here."""
 
@@ -60,15 +111,20 @@ class TestTheOrderWithinATimestamp:
         stages and a table of thirteen numbers, and any pair of them can agree while the
         whole disagrees.
         """
+        # **Nine stages.** The transcription in `requirements.md` had eight: it dropped
+        # "contract adjustments" from the first and "end-of-day snapshot" from the last,
+        # and this test was written from the transcription rather than the document.
         stages = [
             (EventType.CORPORATE_ACTION, "corporate actions"),
+            (EventType.CONTRACT_ADJUST, "contract adjustments"),
             (EventType.MARKET, "market data"),
             (EventType.SIGNAL, "signals"),
-            (EventType.TARGET_PORTFOLIO, "portfolio"),
+            (EventType.TARGET_PORTFOLIO, "portfolio and risk"),
             (EventType.ORDER, "orders"),
             (EventType.FILL, "fills"),
-            (EventType.EXPIRY, "expiry"),
+            (EventType.EXPIRY, "expiry settlement"),
             (EventType.ACCOUNTING, "accounting"),
+            (EventType.STATE, "end-of-day snapshot"),
         ]
         numbers = [PHASE[t] for t, _ in stages]
         assert numbers == sorted(numbers), (

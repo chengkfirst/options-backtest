@@ -116,7 +116,13 @@ def test_regression_baseline_unchanged():
 
 
 #: The three methods that change the book. Everything else on the ledger reads it.
-LEDGER_WRITES = ("apply_fill", "settle_expiry", "liquidate_stock")
+LEDGER_WRITES = ("apply_fill", "settle_expiry", "liquidate_stock",
+                 # Added when the Details column's cash clauses landed. The guard below
+                 # caught them the same run: a method that moves cash and is not here
+                 # could be called from a deciding component and the scan would stay
+                 # green, which is the one thing this list is for.
+                 "accrue_interest", "credit_dividend", "deposit",
+                 "freeze", "unfreeze")
 
 #: Where decisions are made: the slots the document says may read positions and must not
 #: place orders. The engine is deliberately absent -- placing orders is its whole job.

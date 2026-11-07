@@ -1,0 +1,73 @@
+# The guards, on a clean clone.
+#
+# Why this exists: every guard in this repository runs against the working tree of the
+# machine that writes the code, and two of the failures this project has actually had are
+# invisible there by construction.
+#
+#   - `backtest/research/` was excluded by a .gitignore rule without a leading slash. Six
+#     modules were never published while their tests were. Locally everything passed and
+#     `git status` was clean; only a clone on another machine showed it.
+#   - `app/static/bench.js` moved during the interface rebuild and a test still read it.
+#     That one does fail locally — but it failed from the first clean clone, which is
+#     where it was eventually found, rather than at the commit that caused it.
+#
+# A checkout into an empty directory is the only thing that answers "does this work for
+# anyone but me". So this runs the **full** check, not --fast: the pre-commit hook runs
+# --fast for speed, and this is the run that has no excuse to skip anything.
+#
+# It cannot be run from a developer machine. What was verified before committing it: the
+# YAML parses, and every command in it succeeds locally.
+
+name: guards
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # The full run is about fourteen minutes here, 800 seconds of it the test suite. Sixty
+    # gives room for a slower runner without letting a hung job burn an hour unnoticed.
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # 3.11 rather than the newest: numpy 1.26.4 and pandas 2.1.4 are pinned and publish
+      # no wheels for 3.13, which is why pyproject.toml caps requires-python at <3.13.
+      # Testing the floor of the supported range is also the more useful of the two ends.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the project and its development dependencies
+        run: pip install -e ".[dev]"
+
+      # No --fast. This is the run that would have caught both failures above.
+      #
+      # PYTEST_ADDOPTS deselects the tests marked `timing`, and only here. Those two
+      # assert wall-clock seconds, so on a shared two-core runner they measure the
+      # runner: the same near-identical code produced 40.9s and 21.1s against a 20s
+      # bound, and the branch went red and green by which machine it landed on. The
+      # bound is not loosened — it is the only statement of what "usable" meant — so
+      # the tests keep running locally, where the figures were measured, and the step
+      # below reports them here without blocking. See
+      # tests/test_adapters.py::TestTheFileSourceIsUsableOnRealVolumes.
+      - name: Run every guard
+        env:
+          PYTEST_ADDOPTS: -m "not timing"
+        run: python -m tools.check
+
+      # Not blocking, by design: this reports a number, it does not judge it. A real
+      # tenfold regression is still obvious in the log, and `continue-on-error` keeps a
+      # busy runner from failing a build for a reason that is not in the diff.
+      - name: Timing tests, reported and not enforced
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "Wall-clock tests. The bound is written for a developer machine;"
+          echo "here the number is the record, not the verdict."
+          python -m pytest tests -m timing -v --durations=0 --no-header -rA

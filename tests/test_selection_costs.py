@@ -373,3 +373,134 @@ class TestAZeroBidContract:
             "if this ever starts refusing, the spread filter is no longer the only thing "
             "standing between a zero bid and a plausible-looking delta"
         )
+
+
+@kind("guard")
+class TestLambdaWidensWhereAFillIsHarder:
+    """The document: slippage is "a multiple of the half-spread, **wider near expiry and
+    for deep out-of-the-money strikes**".
+
+    λ was one constant, which prices the easiest fill in the book the same as the
+    hardest. Both widenings default to **zero**, which is the group-1 rule: a realism
+    assumption is set conservatively and tested for sensitivity, and a platform-chosen
+    widening would be the platform deciding how much of the edge survives.
+    """
+
+    @staticmethod
+    def _costs(**over):
+        from backtest.core.config import CostConfig
+
+        return CostConfig(**over)
+
+    def test_the_default_is_the_constant_lambda(self):
+        """So every run before this is unchanged, and the regression baseline does not
+        move. Asserted rather than assumed, because "it defaults to off" is the claim
+        that lets a new cost model land without re-reading every stored result."""
+        from backtest.execution.costs import effective_lambda
+
+        costs = self._costs()
+        assert effective_lambda(costs, days_to_expiry=1, delta=0.01) == \
+               costs.adverse_fraction
+
+    def test_it_widens_inside_the_near_expiry_window(self):
+        from backtest.execution.costs import effective_lambda
+
+        costs = self._costs(near_expiry_days=5, near_expiry_extra=0.5)
+        assert effective_lambda(costs, days_to_expiry=6) == pytest.approx(1.0)
+        assert effective_lambda(costs, days_to_expiry=5) == pytest.approx(1.5)
+        assert effective_lambda(costs, days_to_expiry=0) == pytest.approx(1.5)
+
+    def test_it_widens_below_the_delta_threshold(self):
+        """**Delta, not moneyness.** A 5% out-of-the-money strike is a different animal
+        at 10% volatility and at 40%, and delta already carries the volatility and the
+        tenor."""
+        from backtest.execution.costs import effective_lambda
+
+        costs = self._costs(deep_otm_delta=0.10, deep_otm_extra=0.4)
+        assert effective_lambda(costs, delta=0.15) == pytest.approx(1.0)
+        assert effective_lambda(costs, delta=0.05) == pytest.approx(1.4)
+        # A put's delta is negative and is just as far out of the money.
+        assert effective_lambda(costs, delta=-0.05) == pytest.approx(1.4)
+
+    def test_the_two_add_rather_than_multiply(self):
+        """Two multipliers compound into a number nobody chose -- 1.5 x 1.5 is 2.25,
+        which is past the cap the config refuses -- while two additions are each readable
+        in the result as the thing that was set."""
+        from backtest.execution.costs import effective_lambda
+
+        costs = self._costs(near_expiry_days=5, near_expiry_extra=0.5,
+                            deep_otm_delta=0.10, deep_otm_extra=0.4)
+        assert effective_lambda(costs, days_to_expiry=2, delta=0.05) == \
+               pytest.approx(1.9)
+
+    def test_an_absent_input_does_not_widen(self):
+        """A missing days-to-expiry or delta is not evidence of an easy fill, and
+        inventing a widening from an unknown would put a cost in the result that no
+        observation supports. The absence is the data layer's to report."""
+        from backtest.execution.costs import effective_lambda
+
+        costs = self._costs(near_expiry_days=5, near_expiry_extra=0.5,
+                            deep_otm_delta=0.10, deep_otm_extra=0.4)
+        assert effective_lambda(costs) == pytest.approx(1.0)
+        assert effective_lambda(costs, days_to_expiry=None, delta=None) == \
+               pytest.approx(1.0)
+
+    def test_a_widening_reaches_the_fill_price(self):
+        """The arithmetic end to end, on a 1.00/1.10 quote.
+
+        **λ multiplies the half-spread, not the spread** -- the document's formula is
+        ``mid + λ(ask − mid)``. The mid is 1.05 and the half-spread 0.05, so λ = 1 pays
+        the ask at 1.10 and λ = 1.5 pays 1.05 + 0.075 = **1.125**.
+
+        My first version of this test asserted 1.15, which is λ applied to the whole
+        spread. The code was right and the hand arithmetic was wrong -- recorded because
+        the same slip in the other direction would have made a test agree with a bug.
+        """
+        from backtest.core.types import Side
+        from backtest.execution.costs import fill_price
+
+        costs = self._costs(near_expiry_days=5, near_expiry_extra=0.5)
+        assert fill_price(1.00, 1.10, Side.BUY, costs, days_to_expiry=30) == \
+               pytest.approx(1.10)
+        assert fill_price(1.00, 1.10, Side.BUY, costs, days_to_expiry=2) == \
+               pytest.approx(1.125)
+        # And a sell is worse in the other direction, by the same 0.025.
+        assert fill_price(1.00, 1.10, Side.SELL, costs, days_to_expiry=30) == \
+               pytest.approx(1.00)
+        assert fill_price(1.00, 1.10, Side.SELL, costs, days_to_expiry=2) == \
+               pytest.approx(0.975)
+
+    def test_half_a_setting_is_refused(self):
+        """A window with no widening, or a widening with no window, is a setting that
+        looks in force and does nothing."""
+        from backtest.core.errors import StartupError
+
+        for over in ({"near_expiry_days": 5}, {"near_expiry_extra": 0.5},
+                     {"deep_otm_delta": 0.1}, {"deep_otm_extra": 0.4}):
+            with pytest.raises(StartupError) as caught:
+                self._costs(**over)
+            assert "both or neither" in str(caught.value), over
+
+    def test_a_negative_widening_is_refused(self):
+        """It would make a fill **better** near expiry, which is the opposite of what
+        the document observes."""
+        from backtest.core.errors import StartupError
+
+        with pytest.raises(StartupError):
+            self._costs(near_expiry_days=5, near_expiry_extra=-0.5)
+
+    def test_both_engines_pass_the_two_inputs(self):
+        """Missed in one, the two engines diverge on any run that configures the
+        widening -- and the divergence would look like a slippage effect rather than a
+        missing argument. The two being row-identical is the cross-check this project
+        rests on."""
+        import pathlib
+
+        for name in ("backtest/engine/loop.py", "backtest/engine/vectorized.py"):
+            source = pathlib.Path(name).read_text(encoding="utf-8")
+            calls = source.count("= execute(")
+            passed = source.count("days_to_expiry=")
+            assert passed >= calls, (
+                f"{name} calls execute() {calls} time(s) and passes days_to_expiry "
+                f"{passed} time(s)"
+            )

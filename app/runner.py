@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from collections import OrderedDict
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from compilers import compile_entry, compile_plan, compile_review, compile_signals
@@ -48,6 +48,12 @@ COLUMNS = [
     # actually made at order time**, not one imposed afterwards from the outcome —
     # without it the interface can only group by numeric bands.
     "tag", "note",
+    # How far each trade ran in favour and against while it was open. The design plan
+    # lists both among the trade table's default columns, and the excursion study is built
+    # on them — but they were not in this list, so the one surface that could show them
+    # per trade never received them. Only the event-driven engine collects them; under the
+    # trade table the column is simply absent, which the interface reads as "not recorded".
+    "mfe", "mae",
 ]
 #: Signal columns come through by prefix, so custom signals arrive automatically.
 SIGNAL_PREFIX = "entry_sig_"
@@ -235,7 +241,7 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     # a row of zeros.
     if kwargs["engine"] == "event_driven":
         try:
-            equity = _with_drawdown(result.raw.equity)
+            equity = _with_benchmark(_with_drawdown(result.raw.equity), result)
             record["equity"] = json.loads(
                 equity.reset_index().to_json(orient="records", date_format="iso"))
             record["equity_metrics"] = result.equity_metrics()
@@ -298,11 +304,42 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     )
     STORE.record_analysis(
         record["id"], analysis,
-        equity=(_with_drawdown(result.raw.equity)
+        equity=(_with_benchmark(_with_drawdown(result.raw.equity), result)
                 if kwargs["engine"] == "event_driven"
                 and getattr(result.raw, "equity", None) is not None else None),
     )
     return record
+
+
+def _with_benchmark(equity, result):
+    """The daily curve plus **what holding the underlying would have done**.
+
+    The plan's overview is "equity vs benchmark" and the reason is blunt: a return shown
+    on its own cannot be judged. This run reports 50.7% annualised, and the underlying over
+    the same period returned more — a fact the page had no way to state, while showing the
+    strategy's figure in the largest type on the screen.
+
+    Scaled to the same starting capital so the two lines are comparable as money rather
+    than as rates, and aligned on the equity curve's own dates: a benchmark on a different
+    calendar would cross the strategy wherever the calendars disagreed.
+    """
+    bars = getattr(result, "_market", None)
+    if bars is None:
+        return equity
+    try:
+        close = result._market.bars.adjusted("close")
+    except Exception:  # noqa: BLE001
+        # The benchmark is a comparison, not the result. A data source that cannot supply
+        # one loses the line, not the run.
+        return equity
+    out = equity.copy()
+    aligned = close.reindex(out.index).ffill()
+    first = aligned.dropna()
+    if first.empty:
+        return out
+    start_equity = float(out["equity_mid"].iloc[0])
+    out["benchmark"] = aligned / float(first.iloc[0]) * start_equity
+    return out
 
 
 def _with_drawdown(equity):
@@ -330,6 +367,8 @@ def _analysis(result, record: dict[str, Any]) -> dict[str, Any]:
     """
     from dataclasses import asdict
 
+    from backtest.research import metrics
+
     out: dict[str, Any] = {}
 
     def attempt(name: str, fn):
@@ -349,6 +388,38 @@ def _analysis(result, record: dict[str, Any]) -> dict[str, Any]:
     attempt("by_exit_reason", lambda: json.loads(
         result.by_exit_reason().reset_index().to_json(orient="records")))
     attempt("investor", lambda: result.investor_view())
+
+    # The backend's own trade statistics — the average win and loss, the profit factor,
+    # the mean holding period. `metrics.trade_stats` has computed these all along and no
+    # surface read them, so the page could say what the run made and not how it made it:
+    # whether the wins are large and rare or small and frequent is the first question after
+    # the total, and the number answering it was already in the record.
+    attempt("trade_stats", lambda: _finite(metrics.trade_stats(result.trades)))
+
+    # The baseline that answers the question actually being asked. `investor_view` carries
+    # buy-and-hold, which for an option strategy is the weakest comparison there is: it
+    # compares a leveraged, time-decaying position against one unit of the underlying held
+    # throughout, so a strategy that was only ever in the market for days is judged against
+    # a year of drift. `delta_equivalent` instead holds **the same first-order exposure in
+    # shares over the same dates**, which isolates the one thing the option was bought for:
+    # convexity and a capped loss, against time decay and the spread.
+    #
+    # draws=0 keeps this free. It is arithmetic over the trade log and the underlying's
+    # closes, no second backtest. The random-entry baseline in the same module does need a
+    # full run per draw and stays a validation that has to be asked for.
+    attempt("baselines", lambda: [
+        {
+            "name": c.name,
+            "strategy": _finite(c.strategy),
+            "baseline": _finite(c.baseline),
+            "excess": _finite(c.excess),
+            "percentile": _finite(c.percentile),
+            "spread": [_finite(v) for v in c.baseline_spread] if c.baseline_spread else None,
+            "note": c.note,
+            "valid_on_synthetic": c.valid_on_synthetic,
+        }
+        for c in result.baselines(draws=0)
+    ])
 
     # The excursion study carries its distribution as a DataFrame, which JSON cannot hold —
     # the server's serialisation guard caught that rather than dropping the connection.
@@ -396,20 +467,19 @@ VALIDATIONS: dict[str, dict[str, Any]] = {
     "baselines": {
         "label": "against a baseline",
         "why": "is this better than entering at random, or than just holding the "
-               "underlying. One run of this decides whether an idea is worth researching.",
+               "underlying.",
         "engines": None,
     },
     "ablation": {
         "label": "what each slot is worth",
-        "why": "remove one component at a time and see what the result loses. A slot "
-               "that costs nothing to remove is not earning its complexity.",
+        "why": "remove one component at a time and see what the result loses.",
         "engines": None,
     },
     "counterfactual": {
         "label": "would a different exit have been better",
         "why": "replays each trade against other take-profit and stop-loss levels using "
-               "the prices kept past the actual exit. A trade whose alternative never "
-               "fired is censored, not assumed to have closed.",
+               "the prices kept past the actual exit. An alternative that never fired is "
+               "censored, not assumed closed.",
         "engines": ("event_driven",),
     },
     "trials": {
@@ -614,13 +684,142 @@ def _serialisable(kwargs: dict[str, Any], payload: dict[str, Any]) -> dict[str, 
     return out
 
 
+def _blank(v) -> bool:
+    """Whether a submitted value means "not given".
+
+    Stripped first: a box the user cleared can come back as a space, and `float("  ")` raises
+    where the whole point of these two is that an empty box is **absent**, not invalid.
+    """
+    return v is None or (isinstance(v, str) and v.strip().lower() in ("", "none"))
+
+
 def _opt_int(v):
-    return None if v in (None, "", "none") else int(v)
+    return None if _blank(v) else int(str(v).strip())
 
 
 def _opt_float(v):
-    return None if v in (None, "", "none") else float(v)
+    return None if _blank(v) else float(str(v).strip())
 
 
 #: These types must carry a charset. Without one the browser guesses with its own
 #: default encoding and non-ASCII text comes out garbled.
+
+
+# ── the experiment log's groups ──────────────────────────────────────────────────────
+#
+# The design plan groups runs by **idea**, not by date, "because the idea's trial count is
+# what the Deflated Sharpe needs and what keeps research honest". So the group header is not
+# a label: it carries the size of the search that produced the best result under it.
+#
+# Everything here is read from the record. The count comes from
+# `backtest.research.tracker`, which is the same counter the deflated Sharpe uses, so the
+# number in the header and the number in the deflation cannot disagree.
+
+
+def ideas() -> list[dict[str, Any]]:
+    """Every idea in the store, with the size of the search under it.
+
+    Three counts rather than one, because they answer different questions and a single
+    "runs" number hides both of the others:
+
+    - ``runs`` is how many times a backtest finished under this name, **archived included**.
+      Archiving is the researcher saying they are done looking; it is not the run
+      un-happening, and a trial count that shrank when a failure was tidied away would
+      report the survivor as more significant than the work supports.
+    - ``distinct`` is how many different configurations that was. A rerun of one
+      configuration is not a second trial.
+    - ``unplaced`` is how many rows carry no reproducibility fingerprint, which are rows
+      saved before the column existed. They cannot be told from a rerun, so they are left
+      out of ``distinct`` and counted here instead — which makes ``distinct`` a **lower
+      bound** and says so rather than quietly rounding up.
+    """
+    from backtest.research import tracker
+
+    rows = STORE.runs(limit=10_000, include_archived=True)
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        idea = row["strategy_name"]
+        group = out.setdefault(idea, {
+            "idea": idea, "runs": 0, "archived": 0, "symbols": set(),
+            "last": "", "best_sharpe": None, "best_run": None,
+            "hold_out": None, "hold_out_touched": False, "verdicts": {},
+        })
+        group["runs"] += 1
+        group["archived"] += 1 if row.get("archived") else 0
+        group["symbols"].add(row["symbol"])
+        group["last"] = max(group["last"], str(row["started"]))
+        sharpe = row.get("sharpe_annualised")
+        if sharpe is not None and (group["best_sharpe"] is None
+                                  or sharpe > group["best_sharpe"]):
+            group["best_sharpe"] = float(sharpe)
+            # Which run set the record, and over how long — the deflation needs the span in
+            # years because the stored Sharpe is annualised, and mixing the two is the
+            # mistake that inflates the answer.
+            span = (date.fromisoformat(str(row["end_date"])[:10])
+                    - date.fromisoformat(str(row["start_date"])[:10])).days / 365.25
+            group["best_run"] = {"id": row["id"], "years": span}
+        verdict = row.get("last_verdict") or "open"
+        group["verdicts"][verdict] = group["verdicts"].get(verdict, 0) + 1
+        # The hold-out is declared per run in the manifest. An idea's hold-out is the one its
+        # runs reserved; a disagreement between them is itself worth seeing, so the first one
+        # found is reported and `hold_out_mixed` says whether the others matched.
+        held = ((row.get("manifest") or {}).get("provenance") or {}).get("hold_out") or {}
+        window = held.get("hold_out")
+        if window:
+            if group["hold_out"] is None:
+                group["hold_out"] = window
+            elif group["hold_out"] != window:
+                group["hold_out_mixed"] = True
+            if held.get("touched"):
+                group["hold_out_touched"] = True
+
+    for idea, group in out.items():
+        records = STORE.run_records(idea)
+        placed = [r for r in records if r["run_id"]]
+        group["unplaced"] = len(records) - len(placed)
+        if placed:
+            trials = tracker.count_trials(placed, idea=idea)
+            group["distinct"] = trials.distinct
+            group["reruns"] = trials.runs - trials.distinct
+            group["deflated"] = _deflate_best(trials, group)
+        else:
+            group["distinct"] = 0
+            group["reruns"] = 0
+            group["deflated"] = None
+        group["symbols"] = sorted(group["symbols"])
+
+    return sorted(out.values(), key=lambda g: g["last"], reverse=True)
+
+
+def _deflate_best(trials, group) -> dict[str, Any] | None:
+    """The best Sharpe under an idea, discounted by how much searching produced it.
+
+    **The headline and its discount belong together.** The best of sixty tries is not a
+    result, and a group header that shows the maximum beside the trial count and leaves the
+    deflation to a button somebody has to remember to press is showing the one number that
+    needs the correction in the one place it does not have it.
+
+    ``periods`` has to be on the Sharpe's own frequency, and the stored Sharpe is annualised,
+    so the period count is the best run's span **in years**. That is the error the deflation
+    refuses rather than guesses at, so the span is read from the run that set the record, not
+    assumed. Under two years it declines, and the refusal travels instead of a number.
+    """
+    from backtest.research import tracker
+
+    best = group.get("best_run")
+    if trials.best_sharpe is None or not best:
+        return None
+    years = best.get("years")
+    if not years or years < 2:
+        return {"refused": f"the best run covers {years:.1f} years and the deflation needs "
+                           f"at least two: a Sharpe over one short window carries too little "
+                           f"information to discount" if years else
+                           "the best run's period could not be read"}
+    try:
+        d = tracker.deflate(trials, periods=int(years))
+    except Exception as exc:  # noqa: BLE001
+        # The deflation refuses inputs it cannot support, and the refusal **is** the answer.
+        return {"refused": str(exc)}
+    return {"sharpe": d.sharpe, "trials": d.trials, "periods": d.periods,
+            "benchmark": d.benchmark, "probability": d.probability, "says": d.verdict(),
+            "run": best.get("id")}

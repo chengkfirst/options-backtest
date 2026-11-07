@@ -154,14 +154,17 @@ right order:
 
 ---
 
-## 5. Falsification (goal two; 1 of 24 done)
+## 5. Falsification (goal four; 5 of 24 done)
 
 **This group has the highest priority**: one run says whether the strategy is worth
 researching further, before any statistical inference is finished.
 
-### 5.1  A random-entry control  **needs tooling**
+### 5.1  A random-entry control  **can do**
 Can random entries at the same frequency do as well? If so the signal does nothing and the
-return is the underlying's drift.
+return is the underlying's drift. `research/baselines.py: random_entry`, reachable as
+`r.baselines(draws=n)`: only the timing is randomised, the result is a percentile across
+many draws rather than one, and the comparison is valid on a synthetic chain because both
+sides are priced by it (criterion 4.5).
 
 ### 5.2  A reverse test  **needs tooling**
 Does doing the opposite also make money? Both directions making money means the return is
@@ -175,7 +178,9 @@ What is left without the best N trades. `investor_view()` gives the top-5 share;
 systematic curve is not built.
 
 ### 5.5  Sensitivity to costs and to execution delay  **can do**
-`cost_sensitivity()` exists. What one more day's delay does is not built.
+`cost_sensitivity()` exists, and so does the delay half: `result.delay_test(extra=(1, 2))`
+reruns the strategy with the signal delayed, over `run(execution_lag_days=n)` (criteria 4.8
+and 4.9).
 
 ### 5.6  Selection perturbation  **needs data**
 The adjacent strike, the adjacent expiry — does it still hold? Holding on one contract only
@@ -279,7 +284,7 @@ hard blocker at present.
 
 ## 8. The four groups of choice, and which may be optimised
 
-> From `Plan/backtest-system-architecture.pdf`, "Research and Trade-off Register". The
+> From [docs/architecture.md](docs/architecture.md), "Research and Trade-off Register". The
 > full register is there; what matters here is the **discipline**, because it decides
 > which of the questions above may be answered by searching for the best value.
 
@@ -326,9 +331,14 @@ Of these seven, **none is enforced by a tool yet** — see requirements.md 1.28 
 ## 10. Future topics · the systems still to build
 
 > From the architecture document. These are **systems**, not questions — each one is work
-> before it is research. They are here rather than in `requirements.md` because each is
+> before it is research. They are here rather than in `requirements.md` because each was
 > blocked on something concrete, and the trigger is what decides when it stops being
 > future.
+>
+> **10.2 and 10.3 are no longer future.** Every row in both is built; each now says where
+> it is and what is left of it. They are kept rather than deleted because the trigger each
+> one was waiting on is the useful half of the record — but 10.1, 10.4 and 10.5 are the
+> only parts of section 10 still describing work.
 >
 > The rule from section 8 applies: anything in group 1 (a realism assumption) is built
 > conservatively and only tested for sensitivity. None of these is ever tuned for return.
@@ -344,26 +354,26 @@ Of these seven, **none is enforced by a tool yet** — see requirements.md 1.28 
 | **Capacity** | How much money the strategy holds: a participation cap and return decay as capital grows | option volume, which the synthetic chain does not have |
 | **Earnings and event exposure** | Splitting results by whether a trade was held through an event. A long option through earnings behaves very differently | a point-in-time earnings calendar |
 
-### 10.2  Blocked on Layer 0, not on data
+### 10.2  Was blocked on Layer 0, not on data — and Layer 0 landed
 
-| Topic | What it unlocks | Blocked on |
+| Topic | What it unlocks | Where it is, and what is left |
 |---|---|---|
-| **The event bus** | Layers communicating only by events, and a fill traceable back through fill → order → signal → component | nothing but the work. **This is the single largest unlock**: the three rows below all wait on it |
-| **The component protocol and a variant registry** | A slot as a registered component with a parameter schema and a version, so a run differs from its baseline in one slot alone and the change history of the strategy is auditable | the event bus, for `on_event` to receive from |
-| **Variant swap** | The second of the document's research tools. Ablation is built; swapping one slot for a different registered variant is not | the registry |
-| **Attribution by component** | Which slot opened, sized, reduced or closed each part of a trade. The action envelope already carries `component_id`; nothing fills it | the protocol |
-| **A shared trade context** | Slots influencing each other through a per-trade record instead of not at all, which is what makes the seven genuinely separate | the protocol, plus the open decision in 10.4 |
+| **The event bus** | Layers communicating only by events, and a fill traceable back through fill → order → signal → component | **built** — `core/events.py: EventBus`, fifteen named types, the document's order within a timestamp in `PHASE`, and `result.why()` printing the chain for every fill (criteria 0.6, 1.15). What is left is the word *only*: the engine publishes the chain and still acts inline, so turning the loop into handlers is the remaining work, and it is what 7.2 needs |
+| **The component protocol and a variant registry** | A slot as a registered component with a parameter schema and a version, so a run differs from its baseline in one slot alone and the change history of the strategy is auditable | **built** — `core/component.py`: named, versioned, parameter-schema'd forms registered per slot, bound after validation, carried into the run fingerprint as `slot/name@version`. **No `on_event`**: `decide` is what the engine calls, and when the loop becomes handlers that is what `on_event` will dispatch to |
+| **Variant swap** | The second of the document's research tools. Swapping one slot for a different registered variant | **built** — `research/forms.py`, as `r.compare_forms(slot, forms)`, which requires the forms to compare rather than defaulting them (criterion 1.40). Twelve shipped forms across **four of the seven slots** — stop loss (4), take profit (2), headwind (2), positioning (4) — so setup, entry and hedge are the three still with one form each |
+| **Attribution by component** | Which slot opened, sized, reduced or closed each part of a trade | **built** — the engine fills `component_id` (`engine/loop.py`, e.g. `component_id="setup"` and `component_id="review"`), and `EventDrivenResult.actions_frame` is one row per fill with the slot that issued it (`accounting/tradebook.py:136-175`), followable per trade with `trace()` |
+| **A shared trade context** | Slots influencing each other through a per-trade record instead of not at all, which is what makes the seven genuinely separate | **built** — `core/trade_context.py: TradeContext`, assembled in one place for both engines (`accounting/tradebook.py: trade_context`), with each slot writing to its own namespace |
 
-### 10.3  Blocked on nothing — the next things to build
+### 10.3  Was blocked on nothing — and all six are now built
 
-| Topic | What it unlocks | Note |
+| Topic | What it unlocks | Where it is |
 |---|---|---|
-| **Shadow tracking** | Keeping a closed trade's contract quoted for a window afterwards, which is what counterfactual exits need. Without prices after the exit, stop and target research is guesswork | the most valuable of the three, because it unblocks the exit research the whole of section 3 is waiting for |
-| **Counterfactual exits** | Replaying each closed trade under an alternative exit, to measure money saved or given up. In-sample by construction, so anything it suggests must be confirmed out of sample | shadow tracking |
-| **Validation: walk-forward, purged k-fold, block bootstrap** | Section 9's protocol enforced rather than remembered. A locked hold-out, confidence intervals instead of point estimates, a minimum trade count | nothing |
-| **An ExperimentTracker** | Trials counted across an idea, which the Deflated Sharpe needs. `run_id` now identifies a run uniquely and `app/store.py` stores runs immutably — the two halves exist and are not joined | nothing |
-| **Interaction tests** | Varying two slots jointly and comparing against the sum of the single-slot effects. A large gap means the two have to be researched together | ablation exists, so this is the natural next step |
-| **A parameter surface** | Whether a result sits on a plateau or a spike. `research/sweep.py` records the trials; nothing plots the surface or measures the neighbourhood | nothing |
+| **Shadow tracking** | Keeping a closed trade's contract quoted for a window afterwards, which is what counterfactual exits need. Without prices after the exit, stop and target research is guesswork | `EventDrivenResult.shadow` / `shadow_frame` (`accounting/tradebook.py:135, 191-199`), for `shadow_days` sessions after the exit (criterion 1.26) |
+| **Counterfactual exits** | Replaying each closed trade under an alternative exit, to measure money saved or given up. In-sample by construction, so anything it suggests must be confirmed out of sample | `research/counterfactual.py`, as `r.counterfactual(take_profits=…, stop_losses=…)`. A trade whose alternative never fires is **censored**, never assumed to have closed (criterion 2.11) |
+| **Validation: walk-forward, purged k-fold, block bootstrap** | Section 9's protocol enforced rather than remembered. A locked hold-out, confidence intervals instead of point estimates, a minimum trade count | `research/validation/`: `splits.py` (walk-forward, purged k-fold with an embargo), `intervals.py` (trade and block bootstrap, block length required rather than defaulted), `deflated.py`; and the hold-out locked by `research/holdout.py`, which raises on an overlap unless `unlock="<why>"` is recorded (criterion 1.53) |
+| **An ExperimentTracker** | Trials counted across an idea, which the Deflated Sharpe needs | `research/tracker.py`: `count_trials` keyed by `run_id` so a rerun is not a new trial, a record without one **raises**, and `deflate()` hands the count to the Deflated Sharpe. Which runs belong to one idea stays a judgement and is not guessed |
+| **Interaction tests** | Varying two slots jointly and comparing against the sum of the single-slot effects. A large gap means the two have to be researched together | `research/ablation.py: interaction`, with `additive_share` from `core/thresholds.py` as the cut above which the two have to be researched together |
+| **A parameter surface** | Whether a result sits on a plateau or a spike | `research/sweep.py: surface` and `plateau`, with `plateau_share`, `slope_share` and `plateau_tolerance` in `core/thresholds.py`. Nothing **plots** it — the interface shows no heatmap |
 
 ### 10.4  Open decisions · not work, but choices
 

@@ -147,8 +147,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "the two records of a fill are held one to one",
         "backtest/engine/loop.py",
-        "        actions.append(TradeAction(",
-        "        [].append(TradeAction(",
+        "        actions.append(TradeAction(\n            action=intent.kind,",
+        "        [].append(TradeAction(\n            action=intent.kind,",
         ("tests/test_chain.py::TestTheTwoRecordsOfAFillAgree",),
     ),
     Mutation(
@@ -207,8 +207,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "the list of what counts as a ledger write is the real one",
         "tests/test_architecture.py",
-        'LEDGER_WRITES = ("apply_fill", "settle_expiry", "liquidate_stock")',
-        'LEDGER_WRITES = ("apply_fill",)',
+        'LEDGER_WRITES = ("apply_fill", "settle_expiry", "liquidate_stock",',
+        'LEDGER_WRITES = ("apply_fill",)  # (',
         ("tests/test_architecture.py::"
          "test_the_ledger_write_list_is_the_real_one",),
     ),
@@ -315,6 +315,391 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        if not verdict.exercise_now:",
         "        if False:",
         ("tests/test_early_exercise.py::TestTheFlagScreensAndTheTreeDecides",),
+    ),
+    Mutation(
+        # A checklist that scores an unrun check as satisfied is worse than none.
+        "an unmeasured pre-launch criterion is not a pass",
+        "backtest/research/prelaunch.py",
+        "        return all(c.status == PASS for c in self.checks)",
+        "        return not self.failed",
+        ("tests/test_prelaunch.py::TestUnknownIsNotAPass",),
+    ),
+    Mutation(
+        # A one-year run reported 100% of its profit in one year, over the limit.
+        "a one-year run cannot fail the dates concentration",
+        "backtest/research/prelaunch.py",
+        "    if len(by_year) < 2:",
+        "    if False:",
+        ("tests/test_prelaunch.py::TestTheConcentrationCriterion",),
+    ),
+    Mutation(
+        # Two of the four sizing methods raised a TypeError the first time anyone
+        # picked them, because the risk budget was computed above the branch using it.
+        "every sizing method the interface offers actually runs",
+        "backtest/portfolio/positioning.py",
+        '    "scale_by_vol": ("target_vol", "risk_pct"),',
+        '    "scale_by_vol": ("target_vol",),',
+        ("tests/test_position_variants.py::TestTwoMethodsHadNeverRun",
+         "tests/test_position_variants.py::TestEverySelectableMethodHasAForm"),
+    ),
+    Mutation(
+        # The book-wide total cannot tell one expiry from six.
+        "greeks are grouped by expiry, not only totalled",
+        "backtest/portfolio/scenarios.py",
+        "    total_vega = float(out[\"vega\"].abs().sum())",
+        "    total_vega = 0.0",
+        ("tests/test_greeks_by_expiry.py::TestTheConcentrationItExistsToShow",),
+    ),
+    Mutation(
+        # A logged stop move that does not move the stop is the worst of three states.
+        #
+        # **The test had to be written for this, not just pointed at.** The first attempt
+        # aimed at the ratchet's tests, and they passed with the branch broken: the
+        # ratchet is a component and decides its own exit, so the built-in rule never
+        # runs. The branch is reachable the other way round -- a take-profit variant
+        # moving the stop while the stop itself is the rule -- which is the influence
+        # channel in miniature and now has its own test.
+        "a moved stop is the one the built-in rule is tested against",
+        "backtest/engine/loop.py",
+        "                    level = (trade.stop_level if trade.stop_level is not None",
+        "                    level = (None if trade.stop_level is not None",
+        ("tests/test_set_stop.py::TestOneSlotMovesAnotherSlotsStop",),
+    ),
+    Mutation(
+        # Without the action the move is invisible: the stop changes and nothing says so.
+        "a stop move is recorded as an action",
+        "backtest/engine/loop.py",
+        "            actions.append(TradeAction(\n                action=Action.SET_STOP,",
+        "            [].append(TradeAction(\n                action=Action.SET_STOP,",
+        ("tests/test_set_stop.py::TestTheRatchetMovesTheStop",),
+    ),
+    Mutation(
+        # Three figures' worth of requirements were never read, because the text
+        # extraction every inventory was built from drops images.
+        "the inventory is checked against the figures in the PDF itself",
+        "tests/plan_details.py",
+        "    (6, \"slot interaction: the trade context between the seven slots, what it holds, \"",
+        "    (99, \"slot interaction: the trade context between the seven slots, what it holds, \"",
+        ("tests/test_plan_details.py::TestTheFiguresWereRead",),
+    ),
+    Mutation(
+        # The slot diagram says the context also holds read-only book state; the engine
+        # built every one of them with an empty mapping.
+        "a slot can read the book it is trading",
+        "backtest/engine/loop.py",
+        "                    equity=snap.equity_mid, cash=snap.cash,",
+        "                    cash=snap.cash,",
+        ("tests/test_figures.py::TestTheContextHoldsTheBook",),
+    ),
+    Mutation(
+        # "The outcome is written back to the trade context so slots can see it."
+        "a constraint's veto reaches the slots",
+        "backtest/engine/loop.py",
+        "                    # It is the **previous** session's refusal: see the clear below.\n"
+        "                    vetoed=self._last_entry_veto,",
+        '                    vetoed="",',
+        ("tests/test_figures.py::TestThePortfolioVerdictReachesTheSlots",),
+    ),
+    Mutation(
+        # The policy existed as a constant, so the research tool had nothing to compare.
+        "the conflict policy comes from the lifecycle",
+        "backtest/engine/loop.py",
+        "        self._conflict_policy = strategy.lifecycle.conflict_policy",
+        '        self._conflict_policy = "stop_first"',
+        ("tests/test_conflict_policy.py::TestTheEngineAppliesIt",),
+    ),
+    Mutation(
+        # The cost section listed three fees and totalled them, for a book whose largest
+        # cost is the spread and is not a fee.
+        "the spread is part of the cost total",
+        "backtest/research/metrics.py",
+        "    total = fee_total + (spread_dollars if spread_known else 0.0)",
+        "    total = fee_total",
+        ("tests/test_cost_truth.py::TestTheSpreadIsInTheTotal",
+         "tests/test_cost_truth.py::TestTheAnomalyRuleCanSeeIt"),
+    ),
+    Mutation(
+        # `total / abs(gross)` on a losing run is "fees as a share of the loss", printed
+        # as "% of gross".
+        "a losing run gets no cost-to-gross ratio",
+        "backtest/research/metrics.py",
+        "    if gross_at_mid > 0:",
+        "    if True:",
+        ("tests/test_cost_truth.py::TestTheDenominator",),
+    ),
+    Mutation(
+        # The rule read fees_pct_of_gross, so the spread could never be in the numerator.
+        "the cost rule measures the edge before costs",
+        "backtest/research/anomaly.py",
+        '    pct = costs.get("cost_pct_of_gross_at_mid")',
+        '    pct = costs.get("fees_pct_of_premium")',
+        ("tests/test_cost_truth.py::TestTheAnomalyRuleCanSeeIt",),
+    ),
+    Mutation(
+        # The ledger keeps interest as its own term and the report folded it back in.
+        "the strategy's return is reported apart from the account's",
+        "backtest/accounting/tradebook.py",
+        '                    "strategy_equity": s.equity_mid - s.interest,',
+        '                    "strategy_equity": s.equity_mid,',
+        ("tests/test_return_separation.py::TestTheEquityFrameCarriesWhatSeparatesThem",
+         "tests/test_return_separation.py::TestThreeReturnsWithThreeNames"),
+    ),
+    Mutation(
+        # The risk-free rate was added once through the interest and subtracted never.
+        "sharpe is on the excess return",
+        "backtest/api/sdk.py",
+        "        sharpe = excess_annual / vol if vol and np.isfinite(vol) else float(\"nan\")",
+        "        sharpe = annual / vol if vol and np.isfinite(vol) else float(\"nan\")",
+        ("tests/test_return_separation.py::TestThreeReturnsWithThreeNames",),
+    ),
+    Mutation(
+        # Paying the full Treasury rate on every dollar of cash is a claim about the
+        # broker, and it runs in the flattering direction.
+        "the share of the rate the cash earns is an assumption, not 1.0 in the code",
+        "backtest/accounting/ledger.py",
+        '        rate = rate * float(get("cash_interest_share"))',
+        "        rate = rate * 1.0",
+        ("tests/test_return_separation.py::TestTheCashRateIsAnAssumption",),
+    ),
+    Mutation(
+        # A signed total as the denominator reverses every term's sign.
+        "an attribution share is of the movement, not of the signed total",
+        "backtest/accounting/attribution.py",
+        "            \"share\": {k: (v / self.magnitude if self.magnitude else float(\"nan\"))",
+        "            \"share\": {k: (v / gross if gross else float(\"nan\"))",
+        ("tests/test_attribution_daily.py::TestTheSharesAreMagnitudes",),
+    ),
+    Mutation(
+        # Without the spread as its own term it sits in the residual, where it cannot be
+        # told from the expansion failing.
+        "the spread is an attribution term rather than part of the residual",
+        "backtest/accounting/attribution.py",
+        '        terms["spread"] = -(',
+        '        terms["spread"] = 0.0 * -(',
+        ("tests/test_attribution_daily.py::TestTheSpreadIsItsOwnTerm",),
+    ),
+    Mutation(
+        # The exposure limit had unit tests, a live call site, and no way in.
+        "the exposure limit can be set from run()",
+        "backtest/api/sdk.py",
+        "            limits=_exposure_from(exposure),",
+        "            limits=None,",
+        ("tests/test_reachable.py::TestTheExposureLimitActuallyBinds",),
+    ),
+    Mutation(
+        # Two runs that cleaned the data differently shared one id, so a sensitivity
+        # test over cleaning -- which the register asks for by name -- read as one run
+        # repeated.
+        "the cleaning rule set reaches the run fingerprint",
+        "backtest/api/sdk.py",
+        '            data_version += " clean:" + str(cleaning.version())',
+        "            pass",
+        ("tests/test_cleaning_fingerprint.py::TestTheRuleSetReachesTheRunId",),
+    ),
+    Mutation(
+        # It accepted cleaning rules and applied none of them, raising nothing.
+        "the synthetic chain refuses options it would ignore",
+        "backtest/data/options/chain_registry.py",
+        '    unknown = sorted(k for k in (opts or {}) if k != "kind")',
+        "    unknown = []",
+        ("tests/test_cleaning_fingerprint.py::TestTheSyntheticChainRefusesWhatItCannotDo",),
+    ),
+    Mutation(
+        # Delta and vega were limited and premium at risk was not, which is the one
+        # whose breach is a certainty rather than a scenario.
+        "the premium budget blocks an entry that would cross it",
+        "backtest/engine/loop.py",
+        "        if self.budget is not None and self.budget.active:",
+        "        if False:",
+        ("tests/test_premium_budget.py::TestTheEngineReadsIt",),
+    ),
+    Mutation(
+        # 10% of equity on one expiry and 10% spread over six are the same total and
+        # different books. Only the per-expiry limit can tell them apart.
+        "a concentration on one expiry is refused even inside the total budget",
+        "backtest/portfolio/constraints.py",
+        "            if after > self.max_premium_per_expiry_pct:",
+        "            if False:",
+        ("tests/test_premium_budget.py::TestThePerExpiryBudget",),
+    ),
+    Mutation(
+        # The fill was recorded and the quote it came from was discarded, which made the
+        # spread paid uncomputable and lambda unauditable per trade.
+        "the quote is recorded beside the fill",
+        "backtest/accounting/tradebook.py",
+        '        "mid": mid,',
+        "",
+        ("tests/test_options_metrics.py::TestOnARealRun",),
+    ),
+    Mutation(
+        # A realised vol of 0 reads as the most profitable possible trade for a buyer.
+        "a holding window too short to measure is excluded, not zeroed",
+        "backtest/research/metrics.py",
+        "        if len(returns) < min_returns:",
+        "        if False:",
+        ("tests/test_options_metrics.py::TestImpliedAgainstRealized",),
+    ),
+    Mutation(
+        # It reported "the requested range is covered" for a 2030 request against data
+        # ending in 2023, and seven of nine steps then passed on it.
+        "a range the data does not reach fails the source check",
+        "backtest/data/pipeline.py",
+        "        FAIL if disjoint else (WARN if notes else PASS),",
+        "        PASS,",
+        ("tests/test_check_data.py::TestWhatItSaysAboutDataItDoesNotHave",),
+    ),
+    Mutation(
+        # A zero dividend biases every in-the-money call's IV, and the rows it is worst
+        # on are the ones early exercise turns on.
+        "IV is solved at the market's own dividend yield",
+        "backtest/data/options/adapters.py",
+        "                self.market.dividend_yield(a, e, float(sp))",
+        "                0.0",
+        ("tests/test_adapters.py::TestWhichIVModelSolvedIt",),
+    ),
+    Mutation(
+        # Bisection on a flat function returns wherever it stopped: 0.1631 for a
+        # contract priced at a true 0.25.
+        "a price at the intrinsic has no implied volatility",
+        "backtest/data/options/american.py",
+        "    if abs(price - intrinsic) < max(tolerance, intrinsic * 1e-6):",
+        "    if False:",
+        ("tests/test_american.py::TestTheAmericanIVSolve",),
+    ),
+    Mutation(
+        "which IV model solved a row is on the row",
+        "backtest/data/options/adapters.py",
+        '                "|iv_american" if use_american else "|iv_european")',
+        '                "")',
+        ("tests/test_adapters.py::TestWhichIVModelSolvedIt",),
+    ),
+    Mutation(
+        # One constant λ prices the easiest fill in the book the same as the hardest.
+        "λ widens near expiry",
+        "backtest/execution/costs.py",
+        "    if (costs.near_expiry_days > 0 and days_to_expiry is not None",
+        "    if (False and days_to_expiry is not None",
+        ("tests/test_selection_costs.py::TestLambdaWidensWhereAFillIsHarder",),
+    ),
+    Mutation(
+        "λ widens deep out of the money",
+        "backtest/execution/costs.py",
+        "    if (costs.deep_otm_delta > 0.0 and delta is not None",
+        "    if (False and delta is not None",
+        ("tests/test_selection_costs.py::TestLambdaWidensWhereAFillIsHarder",),
+    ),
+    Mutation(
+        # Two multipliers compound into a number nobody chose; two additions are each
+        # readable in the result as the thing that was set.
+        "the two widenings add rather than multiply",
+        "backtest/execution/costs.py",
+        "        out += costs.deep_otm_extra",
+        "        out *= 1.0 + costs.deep_otm_extra",
+        ("tests/test_selection_costs.py::TestLambdaWidensWhereAFillIsHarder",),
+    ),
+    Mutation(
+        # Folded into realised, a losing strategy reads as a profitable one: over three
+        # years the interest is twenty times the fixture strategy's net P&L.
+        "interest is not the strategy's P&L",
+        "backtest/accounting/ledger.py",
+        "        self.total_interest += earned",
+        "        self.realised += earned",
+        ("tests/test_cash_and_interest.py::TestInterestIsNotTheStrategysPnL",),
+    ),
+    Mutation(
+        "interest is a term of the accounting identity",
+        "backtest/accounting/ledger.py",
+        "            + unreal_stock + self.total_interest + self.total_dividends",
+        "            + unreal_stock + self.total_dividends",
+        ("tests/test_cash_and_interest.py::TestInterestIsNotTheStrategysPnL",),
+    ),
+    Mutation(
+        "a dividend reaches shares and not options",
+        "backtest/accounting/ledger.py",
+        "        position = self._stock.get(symbol)\n        if position is None or per_share <= 0:",
+        "        position = self._positions.get(symbol)\n        if position is None or per_share <= 0:",
+        ("tests/test_cash_and_interest.py::TestDividendsReachCashOnlyForShares",),
+    ),
+    Mutation(
+        # The refusal has to happen when the order is placed, which is where a real
+        # account refuses it.
+        "cash is refused at the order, not at the fill",
+        "backtest/accounting/ledger.py",
+        "        if amount > self.available + 1e-9:",
+        "        if False:",
+        ("tests/test_cash_and_interest.py::TestFrozenCashRefusesAtTheOrder",),
+    ),
+    Mutation(
+        "a position cannot be sold on the day it opened",
+        "backtest/accounting/ledger.py",
+        "        return 0 if position.opened >= when else position.abs_quantity",
+        "        return position.abs_quantity",
+        ("tests/test_cash_and_interest.py::TestTheSettlementRule",),
+    ),
+    Mutation(
+        "the ledger notices an entry going missing",
+        "backtest/accounting/ledger.py",
+        "        if len(self.events) != self._sealed:",
+        "        if False:",
+        ("tests/test_ledger.py",),
+    ),
+    Mutation(
+        # A flag nothing reads is a cleaning rule that reports and does not clean -- the
+        # exact state `check_frame` was in before this stage existed.
+        "a row a cleaning rule marked untradable is not filled",
+        "backtest/execution/costs.py",
+        "    if flags and UNTRADABLE_FLAG in str(flags):",
+        "    if False:",
+        ("tests/test_clean.py::TestTheMarkRefusesAFill",),
+    ),
+    Mutation(
+        "no cleaning rule is on by default",
+        "backtest/data/options/clean.py",
+        "        if not self.rules:",
+        "        if False:",
+        ("tests/test_clean.py::TestWhatTheStageRefusesToDo",),
+    ),
+    Mutation(
+        # Double-counting would make a rule set look like it removed more than it did.
+        "a row two rules match is attributed to the first",
+        "backtest/data/options/clean.py",
+        "            fresh = hit & ~handled",
+        "            fresh = hit",
+        ("tests/test_clean.py::TestTheReport",),
+    ),
+    Mutation(
+        # A pause that lets the loop continue is a second name for no_new_positions.
+        "pause stops the run",
+        "backtest/engine/loop.py",
+        "            if self._risk.action is RiskAction.PAUSE:",
+        "            if False:",
+        ("tests/test_pause.py::TestAPausedRunSaysSo",),
+    ),
+    Mutation(
+        "a paused run carries a checkpoint",
+        "backtest/engine/loop.py",
+        "                if (until is not None or paused_on is not None) else None),",
+        "                if until is not None else None),",
+        ("tests/test_pause.py::TestAPausedRunSaysSo",
+         "tests/test_pause.py::TestResumingAPausedRun"),
+    ),
+    Mutation(
+        # A reference rather than a copy shows a trade closed in February a regime
+        # from June.
+        "the candidate's record is copied into the trade that opens",
+        "backtest/engine/loop.py",
+        "                born = born.opened_from(dict(from_candidate.of(\"setup\")))",
+        "                pass  # born = born.opened_from(...)",
+        ("tests/test_trade_context.py::TestTheCandidateAndEntrySlots",),
+    ),
+    Mutation(
+        # A buy placed before the sell that pays for it is a rejected order in a cash
+        # account, on a day the strategy intended to trade.
+        "sells are ordered before buys",
+        "backtest/portfolio/target.py",
+        "        return tuple(sorted(out, key=lambda o: (o.quantity > 0, str(o.contract))))",
+        "        return tuple(out)",
+        ("tests/test_target.py::TestTheDiff",),
     ),
     Mutation(
         "the scenario limit is read before an entry is placed",
@@ -427,8 +812,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "a slot writes only into its own namespace",
         "backtest/core/trade_context.py",
-        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(slot, {}))",
-        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(\"shared\", {}))",
+        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(slot, {}),",
+        "        return SlotWriter(slot=slot, _into=self._slots.setdefault(\"shared\", {}),",
         ("tests/test_trade_context.py::TestTwoSlotsCanHoldTheSameKey",),
     ),
     Mutation(

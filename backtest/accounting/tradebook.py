@@ -152,6 +152,13 @@ class EventDrivenResult:
     #: None for a whole run: a checkpoint of a finished run is a thing nobody can
     #: continue, and offering one would invite the attempt.
     checkpoint: Any = None
+    #: The session a risk rule paused the run on, or None.
+    #:
+    #: **A result that stopped early has to say so.** Without this a paused run and a
+    #: completed one look alike -- the same shape with fewer trades -- and every figure
+    #: computed from it would be over a period nobody chose.
+    paused_on: Any = None
+    paused_reason: str = ""
 
     @property
     def actions_frame(self):
@@ -237,7 +244,19 @@ class EventDrivenResult:
 
     @property
     def equity(self) -> pd.DataFrame:
-        """Both equity curves plus capital utilisation."""
+        """Both equity curves, capital utilisation, and **what the account earned that
+        the strategy did not**.
+
+        `interest` and `premium_at_risk` are on the snapshots and were dropped from this
+        frame, which left every reader of the exported curve unable to separate the
+        strategy's result from the account's. The ledger goes to some trouble to keep
+        interest as its own term of the accounting identity; a curve that folds it back in
+        and does not carry the column undoes that silently.
+
+        `strategy_equity` is the curve with the cash interest removed -- what the trading
+        actually produced. The two differ by a figure that is not small: on three years of
+        $100,000 at 4.5% the interest is around $9,300.
+        """
         return pd.DataFrame(
             [
                 {
@@ -245,6 +264,12 @@ class EventDrivenResult:
                     "equity_mid": s.equity_mid, "equity_liq": s.equity_liq,
                     "option_value": s.option_value_mid, "stock_value": s.stock_value,
                     "positions": s.n_positions, "deployed": s.deployed,
+                    #: Cumulative interest earned on the cash balance to this session.
+                    "interest": s.interest,
+                    #: What the book can lose: the premium paid on everything long.
+                    "premium_at_risk": s.premium_at_risk,
+                    #: Equity with the interest taken out -- the strategy on its own.
+                    "strategy_equity": s.equity_mid - s.interest,
                 }
                 for s in self.snapshots
             ]
@@ -282,8 +307,28 @@ def trade_context(
         return Maybe.some(float(value))
 
     spot = numeric("underlying_price")
+    bid, ask = numeric("bid"), numeric("ask")
+    #: **The quote, so the spread paid is recoverable afterwards.**
+    #:
+    #: It was not. The fill price was recorded and the quote it came from was discarded,
+    #: which makes the document's "average spread paid as % of premium" uncomputable from
+    #: a finished run -- and that is the metric that decides whether a long-options edge
+    #: survives its own costs. It also makes λ, the register's most impactful realism
+    #: assumption, unauditable per trade: nothing in the result says how far from the mid
+    #: the fill actually was.
+    #:
+    #: Recorded as the mid and the spread rather than as the bid and the ask, because
+    #: those are the two numbers every reader of this wants: the price that would have
+    #: been paid at no cost, and the width that cost is a fraction of.
+    mid = (Maybe.some((bid.unwrap() + ask.unwrap()) / 2.0)
+           if bid.is_present and ask.is_present
+           else Maybe.missing("the quote's two sides are not both available"))
     context: dict[str, Maybe[float]] = {
         "underlying_price": spot,
+        "mid": mid,
+        "spread": (Maybe.some(ask.unwrap() - bid.unwrap())
+                   if bid.is_present and ask.is_present
+                   else Maybe.missing("the quote's two sides are not both available")),
         "iv": numeric("iv"),
         "delta": numeric("delta"),
         "gamma": numeric("gamma"),

@@ -92,6 +92,24 @@ class TestTheDiff:
         _want(target, contract, 0, "stop_loss", "fired")
         assert target.orders({contract: -2})[0].quantity == 2    # buying back
 
+    def test_sells_come_before_buys(self):
+        """**So the cash suffices.** The document says this of the order generator and it
+        was missing: orders came out sorted by contract, so a buy could be placed before
+        the sell that pays for it. In a cash account that is a rejected order on a day the
+        strategy intended to trade -- and the trade is then absent from the result with
+        only a rejection event to say why.
+        """
+        buying, selling = _contract(400.0), _contract(410.0)
+        target = TargetPortfolio()
+        # Written buy-first, so a stable sort on the contract alone would keep it there.
+        _want(target, buying, 3, "entry", "a new position")
+        _want(target, selling, 0, "stop_loss", "fired")
+        orders = target.orders({buying: 0, selling: 2})
+        assert [o.quantity > 0 for o in orders] == [False, True], (
+            f"the orders came out {[o.quantity for o in orders]}; the sell has to be "
+            f"first or the buy may be rejected for cash on a day the strategy traded"
+        )
+
     def test_the_orders_are_in_a_stable_order(self):
         """Not dictionary order. Two runs of the same day must queue the same orders in
         the same sequence, or the fill prices differ for a reason that is not the

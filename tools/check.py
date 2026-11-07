@@ -22,6 +22,9 @@ front/back contract     the UI needs a field the server never sends
 doc examples            the snippets in the README do not run
 component definitions   a form field that is not a run() parameter: no effect
 language                mixed-language identifiers that stop matching
+vocabulary              two words for one concept on two screens
+standing assumptions    a sheet row that states its own answer and goes stale
+self-test coverage      a suite that quietly stops covering a module
 =====================  ====================================================
 
 The bar for a new convention: **a concrete failure first, then the guard.**
@@ -32,6 +35,7 @@ noise nobody reads.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -53,9 +57,21 @@ GUARDS: tuple[tuple[str, list[str], bool], ...] = (
     ("components",   [sys.executable, "-m", "pytest", "tests/test_components.py", "-q"], False),
     ("wiring",       [sys.executable, "tools/check_wiring.py"], False),
     ("contrast",     [sys.executable, "tools/check_contrast.py"], False),
+    # The three interface guards. They were written and then never registered here, so a
+    # convention this project holds to -- one word per concept, a standing-assumptions sheet
+    # that reads the record, a self-test that still covers every module -- was checked only
+    # by whoever remembered to run it. That is the state the first line of this file calls a
+    # wish rather than a convention.
+    ("words",        [sys.executable, "tools/check_words.py"], False),
+    ("evidence",     [sys.executable, "tools/check_evidence.py"], False),
+    ("self-test",    [sys.executable, "tools/check_selftest.py"], False),
     ("modules",      [sys.executable, "tools/check_modules.py"], False),
     ("baseline",     [sys.executable, "-m", "tools.baseline", "check"], False),
     ("test suite",   [sys.executable, "-m", "pytest", "tests", "-q"], True),
+    ("plan parts",   [sys.executable, "-m", "pytest",
+                      "tests/test_plan_components.py", "-q"], False),
+    ("plan details", [sys.executable, "-m", "pytest",
+                      "tests/test_plan_details.py", "-q"], False),
     ("doc claims",   [sys.executable, "tools/check_doc_claims.py"], False),
     ("doc examples", [sys.executable, "tools/check_docs.py"], True),
 )
@@ -64,9 +80,17 @@ GUARDS: tuple[tuple[str, list[str], bool], ...] = (
 def main() -> int:
     ap = argparse.ArgumentParser(description="run every guard")
     ap.add_argument("--fast", action="store_true", help="skip the slow guards")
+    ap.add_argument("--verbose", action="store_true",
+                    help="print a failed guard's whole output, not only its last line. "
+                         "Implied when CI is set in the environment")
     args = ap.parse_args()
 
+    # Somewhere you cannot re-run the guard by hand, the one-line hint is not a hint --
+    # it is the whole report. See :func:`_show_everything`.
+    verbose = args.verbose or bool(os.environ.get("CI"))
+
     results: list[tuple[str, bool, float, str]] = []
+    failures: list[tuple[str, list[str], str]] = []
     for name, cmd, slow in GUARDS:
         if slow and args.fast:
             continue
@@ -77,6 +101,7 @@ def main() -> int:
         if not ok:
             lines = [x for x in (r.stdout + r.stderr).strip().splitlines() if x.strip()]
             tail = lines[-1] if lines else "(no output)"
+            failures.append((name, cmd, r.stdout + r.stderr))
         results.append((name, ok, time.time() - t0, tail))
         print(f"  {'OK  ' if ok else 'FAIL'} {name:13s} {time.time() - t0:5.1f}s"
               + (f"   {tail[:70]}" if tail else ""))
@@ -86,11 +111,46 @@ def main() -> int:
     print()
     if bad:
         print(f"FAIL  {len(bad)} guard(s) did not pass: {', '.join(bad)}")
-        print("  See the hints above; run one on its own for its full output.")
+        if verbose:
+            _show_everything(failures)
+        else:
+            print("  See the hints above; run one on its own for its full output,")
+            print("  or re-run with --verbose to print it here.")
         return 1
     print(f"OK  all {len(results)} guards passed"
           + ("  (--fast: slow ones skipped)" if args.fast else ""))
     return 0
+
+
+def _show_everything(failures: list[tuple[str, list[str], str]]) -> None:
+    """Print each failed guard's whole output, under the command that produced it.
+
+    ## Why this exists
+
+    A failing guard normally prints one line here, and the footer says to run it on its
+    own for the rest. That is right at a terminal and useless anywhere else -- and
+    "anywhere else" now includes the thing most likely to be the first to see a failure.
+
+    The continuous-integration run reported::
+
+        FAIL test suite    1472.4s   1 failed, 1408 passed, 1 skipped
+
+    and that was the entire report. One test out of 1410 had failed, on a clean clone,
+    which is the case CI exists to catch -- and the name of the test was nowhere, because
+    pytest's own summary had been captured and thrown away but for its last line. Nobody
+    can act on that without re-running twenty-five minutes of suite.
+
+    So: the tail stays the default, because at a terminal the next thing you do is run
+    the one guard; and where you cannot do that, everything is printed. ``CI`` is set by
+    GitHub Actions and by every other runner; ``--verbose`` is for the same need locally,
+    such as a run redirected to a file.
+    """
+    for name, cmd, output in failures:
+        print()
+        print(f"{'=' * 72}")
+        print(f"  {name}  --  {' '.join(str(c) for c in cmd)}")
+        print(f"{'=' * 72}")
+        print(output.rstrip() or "(no output)")
 
 
 def _record(*, passed: bool, partial: bool) -> None:

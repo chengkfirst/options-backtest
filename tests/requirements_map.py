@@ -197,11 +197,28 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("1.rule1", "1",
                 "No data enters a backtest without an available_at",
                 "a row used on a day it had not been published"),
+    # **Two of the three are replayable and checkably so; adjustment is not.**
+    #
+    # The recorded reason here was stale -- it said there was no cleaning stage of our
+    # own, written before `data/options/clean.py` existed. Cleaning is now a set of named
+    # rules that are pure functions of the frame, the IV solve is deterministic in its
+    # inputs, and both the rule set and the IV model reach the run fingerprint, so "the
+    # same raw data and rule version give the same result" is a statement a reader can
+    # check rather than take on trust.
+    #
+    # Adjustment is the half that is still absent and the half the falsifier is about:
+    # the adjusted price comes from the vendor's column, which is rewritten by every
+    # later dividend, so the same raw file read today and in a year gives different
+    # adjusted prices and nothing here records which version was used. That needs the
+    # corporate-action feed `1.corporate` waits on.
     Requirement("1.rule2", "1",
                 "Cleaning, adjustment and IV calculation are replayable",
                 "the same raw data and rule version giving two different results",
-                not_built="no cleaning or adjustment stage of our own; the adjustment "
-                          "comes from the vendor's column and is not point-in-time"),
+                not_built="**cleaning and the IV solve are**: the rules are named, pure, "
+                          "ordered, and in the run id, and the IV model is too. "
+                          "Adjustment is not -- the adjusted price is the vendor's "
+                          "column, rewritten by every later dividend, with no version "
+                          "recorded. Needs the feed `1.corporate` waits on"),
     Requirement("1.rule3", "1",
                 "An option price and the underlying used with it come from the same "
                 "timestamp window",
@@ -392,15 +409,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "one slot overwriting another's value, or a reader unable to say which "
                 "slot produced a field"),
     Requirement("S.namespaces_candidate", "S",
-                "The setup and entry slots write to their namespaces too, as the "
-                "candidate's own record",
-                "a trade whose candidate namespace cannot say which regime armed it",
-                not_built="setup and entry are still bare callables rather than "
-                          "components, so there is nothing to hand a writer to. Their "
-                          "namespaces exist and stay empty, which is honest: an empty "
-                          "namespace is not a claim. `hedge` is absent entirely. This "
-                          "arrives with the component protocol reaching those two slots, "
-                          "which is also what S.lifecycle's Armed state needs"),
+                "The setup and entry slots write to their namespaces too, and the "
+                "candidate's record is copied into the trade when it opens",
+                "a trade carrying a candidate record from a later arming rather than "
+                "from the session it opened on"),
     Requirement("S.view", "S",
                 "Every slot reads through the DataView, so the availability cut applies "
                 "to all of them",

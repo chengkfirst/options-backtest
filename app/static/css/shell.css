@@ -186,7 +186,9 @@ body.rail-open .rail-name {
 }
 
 /* ── the drawer ──
-   Built in phase 2 for the trade card. Here now so the shell's geometry is settled once.
+   Where every detail opens: the trade card, and whatever later needs to be read beside the
+   page it came from rather than instead of it. 400 px by the token, draggable to 560, and
+   expandable to the full window.
 */
 .drawer {
   position: fixed;
@@ -200,6 +202,100 @@ body.rail-open .rail-name {
   border-radius: var(--radius-lg) 0 0 0;
   overflow-y: auto;
   z-index: 4;
+  display: flex;
+  flex-direction: column;
+  /* Motion for a change of place only, which is what a drawer arriving is. */
+  animation: drawer-in var(--motion-base) var(--ease);
+}
+
+@keyframes drawer-in {
+  from { transform: translateX(12px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer { animation: none; }
+}
+
+/* Full screen is a two-column read of the same card: the plan's "expands to a full-screen
+   two-column view", which is what a long action log and a context block want. */
+.drawer.full {
+  width: 100%;
+  max-width: none;
+  border-radius: 0;
+}
+
+.drawer.full .drawer-body {
+  column-width: 420px;
+  column-gap: var(--space-6);
+}
+
+/* The grip is the left edge. 6 px is enough to hit and narrow enough not to eat clicks
+   meant for the content. */
+.drawer-grip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+}
+
+.drawer-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-titles { min-width: 0; flex: 1; }
+
+.drawer-head h3 {
+  margin: 0;
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+}
+
+.drawer-sub {
+  margin: 2px 0 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.drawer-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
+/* The card's own actions, on their own row under the title: each is a verb and its object,
+   and three of them do not fit beside a trade id. */
+.drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-body { padding: var(--space-4); }
+
+/* The page keeps its own scroll behind the drawer; only the room it has narrows, so the
+   chart the reader is comparing the card against is still on screen. */
+body.drawer-open .frame { padding-right: var(--drawer-width); }
+/* The drawer is a child of the body, not a sibling of the frame, so this asks the body
+   whether it contains an expanded one rather than trying to walk across to it. */
+body.drawer-open:has(.drawer.full) .frame { padding-right: 0; }
+
+@media (max-width: 1200px) {
+  body.drawer-open .frame { padding-right: 0; }
 }
 
 /* ── the bench, inside the frame ──
@@ -239,7 +335,8 @@ body.rail-open .rail-name {
   font-size: var(--font-sm);
   line-height: 1.45;
   pointer-events: none;
-  box-shadow: 0 6px 20px rgb(0 0 0 / 0.28);
+  /* No shadow: section 12 says so, and an overlay that already has `--border-strong` on a
+     raised surface is separated without one. */
   animation: tip-in var(--motion-fast) var(--ease);
 }
 
@@ -260,3 +357,101 @@ body.rail-open .rail-name {
    on a page built to explain itself, is nearly everywhere. The explanation appearing is
    the affordance. Where a hint that one exists is still wanted, it is a dotted underline
    on the label, which marks the word without touching the pointer. */
+
+/* ── the command palette ──
+   One box over the page, reached with ⌘K. It is deliberately not a page: a reader opens it
+   because they have lost the thread, and sending them to a search page to find their way
+   back would be the wrong direction. Dim the page behind it rather than hiding it, so the
+   place they are returning to is still visible.
+*/
+.palette {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: color-mix(in srgb, var(--surface-0) 55%, transparent);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.palette-box {
+  width: min(620px, 92vw);
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: var(--font-md);
+}
+
+.palette-input:focus { outline: none; }
+
+.palette-list {
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.palette-row {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  font-size: var(--font-base);
+}
+
+.palette-row.on { background: var(--accent-soft); }
+
+.palette-kind {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.palette-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.palette-hint {
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.palette-empty {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.palette-foot {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+/* A link that acts as a button needs the button's box: `.btn` in app.css was written for
+   `<button>`, which is already inline-block and centred. */
+a.btn {
+  display: inline-block;
+  text-decoration: none;
+  line-height: 1.6;
+  margin-top: var(--space-3);
+}

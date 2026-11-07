@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from compilers import PLAN_HELP, USER_CODE_HELP
+from compilers import PLAN_HELP, REVIEW_HELP, USER_CODE_HELP
 
 def _tradeoff(q: dict[str, str]) -> dict[str, Any]:
     """One day's moneyness x tenor trade-off surface.
@@ -70,6 +70,61 @@ def _tradeoff(q: dict[str, str]) -> dict[str, Any]:
 
 
 
+def _actions() -> dict[str, Any]:
+    """The action vocabulary, split into what runs and what does not."""
+    from backtest.core.actions import BUILT, Action
+
+    return {
+        "built": [a.value for a in Action if not BUILT.get(a)],
+        "missing": {a.value: why for a, why in BUILT.items() if why},
+    }
+
+
+def _pace() -> dict[str, float]:
+    """Seconds of wall clock per year of backtest, by engine, from the runs on record.
+
+    **A spread, not a number.** The runtime is driven by how many positions the engine ends
+    up valuing, not by the span: on this record, five-year runs have taken anywhere from 1.6
+    to 416 seconds. A point estimate would simply be wrong in a different way from the
+    hardcoded one it replaces, so the median and the ninth decile both travel, and the
+    interface says both.
+
+    An engine with fewer than three runs on record gets no entry, and the interface says it
+    does not know rather than quoting a number nobody measured.
+    """
+    from datetime import date
+    from statistics import median
+
+    from store import Store
+
+    by_engine: dict[str, list[float]] = {}
+    try:
+        rows = Store().runs(limit=400, include_archived=True)
+    except Exception:  # noqa: BLE001
+        return {}
+    for row in rows:
+        seconds = row.get("seconds")
+        config = row.get("config") or {}
+        if not seconds or seconds <= 0:
+            continue
+        try:
+            span = (date.fromisoformat(str(row["end_date"])[:10])
+                    - date.fromisoformat(str(row["start_date"])[:10])).days / 365.25
+        except (ValueError, KeyError, TypeError):
+            continue
+        if span <= 0:
+            continue
+        by_engine.setdefault(config.get("engine") or "trade_table", []).append(seconds / span)
+    def spread(rates: list[float]) -> dict[str, float]:
+        rates = sorted(rates)
+        at = lambda q: rates[min(len(rates) - 1, int(q * len(rates)))]  # noqa: E731
+        return {"median": round(median(rates), 2), "high": round(at(0.9), 2),
+                "runs": len(rates)}
+
+    return {engine: spread(rates)
+            for engine, rates in by_engine.items() if len(rates) >= 3}
+
+
 def _meta_payload() -> dict[str, Any]:
     """Everything static the interface needs.
 
@@ -95,6 +150,19 @@ def _meta_payload() -> dict[str, Any]:
             {"a": a, "b": b, "why": why} for a, b, why in COUPLINGS
         ],
         "gaps": _describe_gaps(),
+        # The shared action vocabulary, and **which of it the engine can actually execute**.
+        # `backtest.core.actions.BUILT` is the one definition of that in code and carries the
+        # reason for each gap; the composer crosses it with the architecture's per-slot
+        # vocabulary so a card can say what a slot may emit and what will actually happen.
+        # Read rather than restated, because a note written on this side goes stale the day
+        # the engine grows one of them.
+        "actions": _actions(),
+        # How long a backtest actually takes, per engine, measured from the record rather
+        # than guessed. The form used to say "roughly four seconds a year", which on this
+        # machine's own history is half of what it takes — an estimate that is wrong by
+        # a factor of two is worse than none, because the reader stops believing the
+        # progress line and starts wondering whether the page has hung.
+        "pace": _pace(),
         # The registered forms of each slot. The composer builds its variant pickers and
         # their parameter forms from this, so a form added in the backend is offered in
         # the interface with no edit on this side.
@@ -177,7 +245,29 @@ def _meta_payload() -> dict[str, Any]:
                 "        return rsi.unwrap() < 25\n"
                 "    return rsi.unwrap() < 35\n"
             ),
-            "review_code": "",
+            "review_code": (
+                "def review(ctx, pos):\n"
+                '    """Asked of every open position, every day.\n'
+                "\n"
+                "    Return None to keep holding. Uncomment a line to make\n"
+                "    it a rule. kind= names the slot whose reasoning closed\n"
+                "    the trade, so a staged exit still files under (3).\n"
+                '    """\n'
+                "    # Take profit in stages, not all at one level:\n"
+                "    # if pos.ratio > 0.5:\n"
+                "    #     return Reduce(0.5, \"half off at +50%\")\n"
+                "\n"
+                "    # A stop that moves: out after giving back a third\n"
+                "    # peak = pos.mfe_so_far\n"
+                "    # if peak > 0.4 and pos.ratio < peak * 0.67:\n"
+                "    #     return Close(\"gave a third back\", kind=\"take_profit\")\n"
+                "\n"
+                "    # The thesis failed. Usually fires before a fixed stop\n"
+                "    # if ctx.signal(\"close\") < ctx.signal(\"sma_50\"):\n"
+                "    #     return Close(\"below the 50-day\", kind=\"stop_loss\")\n"
+                "\n"
+                "    return None\n"
+            ),
             "signals_code": (
                 "# Custom signals: name -> function(bars) -> Series\n"
                 "# Always use adjusted(), or ex-dividend days produce false gaps\n"
@@ -189,6 +279,7 @@ def _meta_payload() -> dict[str, Any]:
         },
         "code_help": USER_CODE_HELP,
         "plan_help": PLAN_HELP,
+        "review_help": REVIEW_HELP,
     }
 
 
@@ -206,14 +297,26 @@ def _components() -> dict[str, Any]:
     """
     from backtest.core.component import SLOTS, variants
 
+    #: How a form for this slot reaches the engine. Declared here, in the layer that
+    #: already translates a filled-in form into ``run()`` arguments, rather than guessed in
+    #: the browser — the interface should carry whatever the registry holds without
+    #: knowing anything about what a slot *means*.
+    #:
+    #: ``risk`` is the book-wide rule: it acts on the whole book rather than on one trade,
+    #: so the engine takes it by its own argument. Everything else is a component of a
+    #: trade and goes through ``components``.
+    sends_to = {slot: ("risk" if slot == "headwind" else "components") for slot in SLOTS}
+
     by_slot: dict[str, list[dict[str, Any]]] = {slot: [] for slot in SLOTS}
     for v in variants():
         by_slot.setdefault(v.slot, []).append({
+            "slot": v.slot,
             "name": v.name,
             "version": v.version,
             "ref": v.ref,
             "describes": v.describes,
             "stateful": v.stateful,
+            "sends_to": sends_to.get(v.slot, "components"),
             "params": [{
                 "name": p.name, "kind": p.kind, "means": p.means,
                 "lo": p.lo, "hi": p.hi, "required": p.required,

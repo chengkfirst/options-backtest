@@ -44,11 +44,36 @@ export function go(path, query){
   window.location.hash = toHash(path, query);
 }
 
+/** Change the view state **and** leave a step in the history.
+ *
+ * For the parts a reader moves between on purpose — a tab, a selected trade — so that back
+ * returns to the one before rather than leaving the run entirely. `replace` stays for
+ * everything continuous.
+ *
+ * The merge is the same as `replace`'s: a step that dropped the brushed range would make
+ * going back to the previous tab arrive at a different reading from the one left behind.
+ */
+export function step(query){
+  const {path, query: was} = location_();
+  const merged = {...was, ...query};
+  for(const [k, v] of Object.entries(merged))
+    if(v == null || v === "") delete merged[k];
+  const hash = toHash(path, merged);
+  if(hash === window.location.hash) return;
+  // `hash =` pushes a history entry and fires hashchange, which re-enters the route — and
+  // the route is what renders the new tab, so nothing here renders it a second time.
+  window.location.hash = hash;
+}
+
 /** Change the view state **without** adding a history entry.
  *
- * For a brush, a filter or a tab: dozens of those in a minute would otherwise bury the
- * last real navigation under a hundred back-button steps. The URL still describes the
- * view, so a copied link opens what is on screen.
+ * For a brush or a filter: a drag produces dozens of these a second, and each one in the
+ * history would bury the last real navigation under a hundred back-button steps. The URL
+ * still describes the view, so a copied link opens what is on screen.
+ *
+ * A tab switch is **not** one of these — see `step` below. The addendum's state table asks
+ * that view state in the URL make back and forward work, and a tab is the one piece of it
+ * a reader moves between deliberately and expects to be able to undo.
  */
 export function replace(query){
   const {path, query: was} = location_();
@@ -100,6 +125,13 @@ export function start(fallback = "/"){
     const changed = !current || current.route !== hit.route;
     if(changed && current?.route.leave) current.route.leave();
     current = {route: hit.route, params: hit.params, query: q};
+    // **A new surface opens at its top.** The browser keeps the scroll position across a
+    // hash change, so ticking two runs at the bottom of a hundred-row log and pressing
+    // compare landed the reader in the middle of the comparison's trade table — below the
+    // columns, below the differences, below the result, with nothing on screen saying what
+    // page they were on. Only on a change of surface: a tab switch inside a run is a step
+    // within one page and must keep its place.
+    if(changed) window.scrollTo({top: 0});
     hit.route.enter({params: hit.params, query: q, changed});
   };
   window.addEventListener("hashchange", render);

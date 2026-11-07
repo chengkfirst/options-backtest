@@ -1,6 +1,7 @@
 # Working conventions
 
-> This file is independent of `Plan/backtest-system-architecture.pdf` (the architecture)
+> This file is independent of [docs/architecture.md](docs/architecture.md) (the architecture,
+> transcribed from the PDF in `Plan/`)
 > and [requirements.md](requirements.md) (what is built against it). It covers one thing
 > only: **how to make sure what gets built is right, and does not break quietly.**
 
@@ -42,9 +43,12 @@ python -m tools.check --fast    # for a small change, skipping the slow ones
 | **shipped** | files that exist locally and not in git | fast |
 | **language** | anything in the project that is not English | fast |
 | **components** | the seven components' definitions being self-consistent; **a field must be a real `run()` parameter** | fast |
-| **wiring** | the interface declares `CONTRACT` in `bench.js`, checked against a real response — **at the depth it is read**, so a renamed nested field fails too | fast |
+| **wiring** | the interface declares `CONTRACT` in `app/static/js/contract.js`, checked against a real response — **at the depth it is read**, so a renamed nested field fails too | fast |
 | **contrast** | a colour pair too close to read, in either theme. Verified in reverse by the palette it was written for: the design plan's proposed values failed its own 4.5:1 rule in **twenty text pairs** across the two themes, and one slot colour was invisible on the dark ground | fast |
 | **modules** | an interface module importing a name nothing exports, or using one it did not import. There is no bundler, so that raises only when the code path runs | fast |
+| **evidence** | the standing-assumptions sheet going stale or going quiet: a row that writes its value instead of reading the record, one that cannot report a good state, or a permanent limitation of the platform left undeclared. Checking is the backend's; this holds the sheet that says what the machinery assumed | fast |
+| **selftest** | the browser self-test losing a module. It runs every frontend module against the cases that have broken them — absence printed as a number, a chart given no rows, an escape safe in text and not in an attribute — at `/selftest.html`; this holds that it still covers the tree | fast |
+| **words** | two words for one concept on screen, a button that names a verb and no object, an exclamation mark or a "please". The design plan's terms table exists because a reader who meets both "component" and "slot" has to work out whether they are the same thing | fast |
 | **baseline** | an unintended change in results | 8 s |
 | **test suite** | behavioural regression | 2 min |
 | **doc examples** | the snippets in the README not running | 1 min |
@@ -66,7 +70,7 @@ method's old name after it was renamed.
 How it works:
 
 1. What the interface needs from the backend is written in `CONTRACT` in
-   `app/static/bench.js`
+   `app/static/js/contract.js`
 2. **The interface checks it at runtime** — a missing field is reported at once, and
    `undefined` never seeps into rendering
 3. **`check_wiring` checks the same declaration against a real response** before committing
@@ -193,10 +197,10 @@ Already done:
 
 | The fact | Where it is defined | What is generated from it |
 |---|---|---|
-| What the seven components are and what they ask for | `backtest/components.py` | the interface's form, the gap list, `tools/status.py` |
+| What the seven components are and what they ask for | `COMPONENTS` in `backtest/core/slots.py` | the interface's form, the gap list, `tools/status.py` |
 | The dependency layers | `LAYERS` in `tools/check_deps.py` | the check itself |
 | Each signal's meaning and unit | `SIGNAL_META` in `signals/registry.py` | the interface reference, `describe_signals()` |
-| Which columns wiring in data needs | `SCHEMA` in `data/adapters.py` | the health check, the documentation table |
+| Which columns wiring in data needs | `SCHEMA` in `data/options/adapters.py` | the health check, the documentation table |
 
 **Not yet done, recorded honestly**: the statuses of the acceptance criteria in
 `requirements.md` are hand-written. Criteria like "the interface is clear" or "the
@@ -241,8 +245,52 @@ git push
 sneakier of them: `tools/` looks specific and is not. If a file you did not write is already
 staged, `git restore --staged <path>` puts it back; leave it for whoever wrote it.
 
-**No tool checks this.** A guard cannot know which session wrote which line — it rests on
-reading the staged list before committing, which costs one command.
+**The broad forms are now refused rather than remembered.** A guard still cannot know
+which session wrote which line — nothing can — so the part that rests on a person is
+unchanged: **read the staged list before committing.** What a tool *can* do is refuse the
+two commands that make the mistake possible, and
+[`tools/hooks/refuse_broad_git_add.py`](tools/hooks/refuse_broad_git_add.py) does:
+`git add -A`, `--all`, `-u`, `.`, `:/`, and any pathspec that is a directory. It allows
+explicit file paths, `--dry-run`, `-p`, and a pathspec that does not exist on disk, and it
+fails open on its own bugs — a hook that blocked every command in the repository because
+of a bug in itself would be worse than the mistake it guards.
+
+Each builder working in **its own worktree and branch** removes the shared tree that makes
+this possible at all; see the worktree workflow in [CLAUDE.md](CLAUDE.md). The hook is for
+the case where sessions do share a tree, which is still the ordinary case.
 
 Write **why** in the commit message, not only what changed. What you will want to know in
 six months is why it was decided this way, not what the diff already shows.
+
+---
+
+## The guards that are not part of `tools.check`
+
+Four of them, each outside the fixed check because of *when* or *where* it has to run
+rather than what it reads. Same bar as any other guard: a concrete failure first, then the check,
+verified in reverse.
+
+| Guard | What it catches | The failure it answers to |
+|---|---|---|
+| [`tools/hooks/refuse_broad_git_add.py`](tools/hooks/refuse_broad_git_add.py) · a Claude Code `PreToolUse` hook on Bash, registered in `.claude/settings.json` | a `git add` whose pathspec names more than the caller chose: `-A`, `--all`, `-u`, `.`, `:/`, a directory | `git add -A` swept a half-finished interface rebuild into a commit about component state; `git add tools/` committed another session's 469-line guard under a message about CSS tokens. The history then says things that are not true, and the history is the only account of why anything was done |
+| [`tools/githooks/pre-commit`](tools/githooks/pre-commit) · enabled per clone with `git config core.hooksPath tools/githooks` | a commit made while a guard is red. Runs `tools.check --fast` and refuses on failure | "any failure means no commit" was held by whoever remembered to run the guards. That is the state the first line of this file calls a wish — and this project has the evidence: three guards in `tools/check.py` were written and never registered there, so they ran only when someone thought of them |
+| [`.github/workflows/check.yml`](.github/workflows/check.yml) · the **full** check on every push and pull request | anything that only fails on a clean clone | `backtest/research/` was excluded by a `.gitignore` rule missing its leading slash: six modules unpublished, their tests pushed, every local guard green and `git status` clean. Only a clone on another machine shows that class of failure |
+| [`tools/hooks/restrict_paths.py`](tools/hooks/restrict_paths.py) · a `PreToolUse` hook registered **per agent**, in `.claude/agents/<name>.md` | a builder agent editing outside the paths it owns — the engine reaching into `app/`, or the reverse. **`Write` and `Edit` only: it does not watch `Bash`,** so it removes the easy way across the line and not every way | "I will not edit that directory" is a promise about every future turn. The failure it answers to is the plausible one: an engine change needs one field in the composer, the agent is right there, it reaches across, and nothing raises. The guards would still catch a contract *mismatch*; they cannot catch one agent owning both sides, which is what makes a mismatch likely |
+
+Why each is outside `tools.check` rather than in it: the first has to run **before** a
+command, which no checker invoked afterwards can do; the second has to run **at** the
+commit; the third has to run **somewhere else**, on a checkout into an empty directory;
+and the fourth has to run **as one particular agent**, since the same edit is right from
+one and wrong from another. `tools.check` itself cannot do any of the four, and the two
+that wrap it call it rather than duplicate it.
+
+All three hooks are verified in reverse, and two keep their verification as tests —
+`tests/test_git_add_hook.py` and `tests/test_restrict_paths_hook.py`, 148 cases between
+them. The second reads each agent definition's **own** arguments rather than restating
+them, so changing what an agent owns is what changes the behaviour under test. The
+`git add` one —
+`tests/test_git_add_hook.py`, 69 cases driven through the real interface, a JSON payload on
+stdin and an exit code out — because the forms it must refuse are a list, and a list
+belongs where it is re-run. It earned that: it refused its own first real use, reading a
+`git add -A` quoted inside a commit message's here-document as a command. A here-document
+body is data, and the documents here quote that form on nearly every page about committing.

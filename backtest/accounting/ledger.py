@@ -105,6 +105,18 @@ class Snapshot:
     n_stock: int
     deployed: float          # capital tied up (entry cost plus collateral)
     stale_marks: int         # positions marked with a stale quote
+    #: **Premium at risk**, which the document calls the core budget measure for a long
+    #: book: the maximum this book can lose, which for a long option is the premium paid.
+    #:
+    #: The same arithmetic as ``deployed`` for a long-only book, and a different name on
+    #: purpose. ``deployed`` is "capital tied up" and includes a short put's collateral,
+    #: which is not at risk in the same sense -- the collateral comes back unless the put
+    #: is exercised. A reader budgeting risk needs the loss figure, not the capital one,
+    #: and the two part company the moment anything is short.
+    premium_at_risk: float = 0.0
+    #: Interest earned on the idle cash balance this session, at the risk-free rate.
+    #: Zero when no rate was supplied -- see ``accrue_interest``.
+    interest: float = 0.0
 
 
 class Ledger:
@@ -123,11 +135,168 @@ class Ledger:
         self.total_fees = 0.0
         #: Cumulative realised P&L.
         self.realised = 0.0
+        #: Cumulative interest earned on cash, kept apart from ``realised`` because it
+        #: is not the strategy's P&L: a book that sat in cash all year would show it.
+        self.total_interest = 0.0
+        #: Deposits less withdrawals. A term in the identity for the same reason: a
+        #: deposit moves the equity and is not a profit.
+        self.external_flows = 0.0
+        #: Dividends received on shares. **Its own term**, as the document's P&L
+        #: breakdown has it -- "realised, unrealised, fees, dividends". Not realised P&L,
+        #: because the position's own gain or loss is separate and this is income from
+        #: holding it; and not interest, because a reader asking where a figure came from
+        #: needs the two apart. Found by the identity failing by exactly 62.00 on a run
+        #: that took delivery of 100 shares across a 0.62 ex-date.
+        self.total_dividends = 0.0
+        #: Cash committed to orders that have been placed and not yet filled.
+        #:
+        #: **The document's "frozen by open orders".** Without it two entries decided on
+        #: the same day are each checked against the whole balance and both can fill --
+        #: the capital check then refuses the second *at the fill*, which is the right
+        #: outcome by the wrong route: the trade is reported as refused rather than never
+        #: placed, and a real account would not have accepted the order.
+        self._frozen: dict[int, float] = {}
+        #: Cash movements are append-only and this is the guarantee rather than the
+        #: habit. Nothing in the system rewrites a booked entry today; a future path that
+        #: did would not be stopped without this.
+        self._sealed = 0
 
     # ── queries ───────────────────────────────────────────
     @property
     def cash(self) -> float:
+        """The cash balance, frozen amounts included.
+
+        This is the accounting figure and the one the identity uses. For "what can be
+        spent", see :attr:`available`.
+        """
         return self._cash
+
+    @property
+    def frozen(self) -> float:
+        """Cash committed to orders placed and not yet filled."""
+        return sum(self._frozen.values())
+
+    @property
+    def available(self) -> float:
+        """What can still be committed: the balance less what is already promised."""
+        return self._cash - self.frozen
+
+    def freeze(self, order_id: int, amount: float) -> None:
+        """Commit cash to an order that has been placed and not yet filled.
+
+        Refused when the amount exceeds what is available, which is the point: the
+        refusal happens **when the order is placed** rather than when it fills, and a
+        real account refuses there too.
+        """
+        if amount < 0:
+            raise InvariantError(f"cannot freeze a negative amount ({amount:,.2f})")
+        if order_id in self._frozen:
+            raise InvariantError(
+                f"order {order_id} already has {self._frozen[order_id]:,.2f} frozen "
+                f"against it. Freezing twice would commit the cash twice and the second "
+                f"freeze would look like a second order"
+            )
+        if amount > self.available + 1e-9:
+            raise InvariantError(
+                f"order {order_id} needs {amount:,.2f} and {self.available:,.2f} is "
+                f"available ({self._cash:,.2f} on hand, {self.frozen:,.2f} already "
+                f"committed to other orders)"
+            )
+        self._frozen[order_id] = float(amount)
+
+    def unfreeze(self, order_id: int) -> float:
+        """Release an order's cash: it filled, or it was cancelled or rejected."""
+        return self._frozen.pop(order_id, 0.0)
+
+    def accrue_interest(self, when: date, rate: float, *, days: int = 1) -> float:
+        """Book one session's interest on the cash balance.
+
+        **Not the strategy's P&L**, which is why it is tracked separately: a book that
+        sat in cash all year would earn this, and folding it into ``realised`` would
+        credit the strategy with the risk-free rate.
+
+        A rate of zero books nothing and records nothing, so a run that does not supply
+        a rate is unchanged -- which is every run before this existed.
+        """
+        if rate <= 0 or self._cash <= 0 or days <= 0:
+            return 0.0
+        # **The share of the rate the cash actually earns**, a realism assumption rather
+        # than a fact: a retail sweep usually pays below Treasury and pledged cash pays
+        # nothing. 1.0 by default, in the register's group 1, sensitivity-tested only --
+        # see `core/thresholds.py`.
+        from backtest.core.thresholds import get
+
+        rate = rate * float(get("cash_interest_share"))
+        if rate <= 0:
+            return 0.0
+        earned = self._cash * rate * days / 365.0
+        self._cash += earned
+        self.total_interest += earned
+        self._record(when, "interest",
+                     f"{earned:,.2f} on {self._cash - earned:,.2f} of cash at "
+                     f"{rate:.4%} for {days} day(s)", earned, None)
+        return earned
+
+    def credit_dividend(self, symbol: str, per_share: float, when: date) -> float:
+        """Pay a dividend on **shares** held, if any.
+
+        An option pays no dividend and this does not pretend otherwise: it looks only at
+        stock positions, which in this system come from physical delivery at exercise or
+        expiry. Before delivery existed there was nothing for this to pay.
+
+        Gross, not after tax. A withholding rate is a fact about the account's domicile
+        rather than about the market, and inventing one would put a figure in the result
+        that nobody chose -- see ``tests/plan_details.py``.
+        """
+        position = self._stock.get(symbol)
+        if position is None or per_share <= 0:
+            return 0.0
+        cash = position.shares * per_share
+        self._cash += cash
+        self.total_dividends += cash
+        self._record(when, "dividend",
+                     f"{position.shares:+d} {symbol} shares at {per_share:.4f} per "
+                     f"share, gross of any withholding", cash, position.trade_id)
+        return cash
+
+    def deposit(self, amount: float, when: date, *, reason: str) -> None:
+        """An external flow in or out. ``reason`` is required.
+
+        The daily-P&L invariant already takes an ``external_flows`` term and nothing
+        supplied it, so this closes the shape rather than adding one. A flow with no
+        reason would make the identity hold while leaving the equity change unexplained,
+        which is the opposite of what the identity is for.
+        """
+        if not reason:
+            raise InvariantError(
+                "an external flow needs a reason: the daily-P&L identity will balance "
+                "either way, and an unexplained equity change is what it exists to "
+                "surface"
+            )
+        if self._cash + amount < 0:
+            raise InvariantError(
+                f"a withdrawal of {abs(amount):,.2f} leaves {self._cash + amount:,.2f} "
+                f"in cash, and this is a non-margin account"
+            )
+        self._cash += float(amount)
+        self.external_flows += float(amount)
+        self._record(when, "deposit" if amount >= 0 else "withdrawal", reason,
+                     float(amount), None)
+
+    def sellable(self, contract: ContractId, when: date) -> int:
+        """How much of a position may be sold on ``when``.
+
+        **US equity and ETF options settle T+1**, so a contract bought today cannot be
+        sold today. Nothing in this system has hit it, because a one-day execution lag is
+        enforced and no position is ever closed on the session it opened -- which is
+        exactly why the rule had to be written down rather than relied upon: it holds by
+        a coincidence of configuration, and the coincidence ends the moment the lag is
+        configurable or an intraday snapshot is added.
+        """
+        position = self._positions.get(contract)
+        if position is None:
+            return 0
+        return 0 if position.opened >= when else position.abs_quantity
 
     @property
     def positions(self) -> tuple[Position, ...]:
@@ -347,6 +516,13 @@ class Ledger:
             equity_liq=self._cash + liq_total + stock_total,
             n_positions=len(self._positions), n_stock=len(self._stock),
             deployed=deployed, stale_marks=stale_count,
+            # **Premium at risk**: what this book can lose, which for a long option is
+            # the premium paid. Long positions only -- a short's collateral is capital
+            # tied up and comes back unless the option is exercised, so counting it here
+            # would overstate the loss a budget is set against.
+            premium_at_risk=sum(p.cost_basis for p in self._positions.values()
+                                if p.quantity > 0),
+            interest=self.total_interest,
         )
 
     def _collateral(self, pos: Position) -> float:
@@ -381,14 +557,25 @@ class Ledger:
         """The accounting identity:
 
             closing equity = opening cash + realised P&L − fees + unrealised P&L
+                             + interest + dividends + external flows
 
         A breach means a code bug: abort at once, because continuing only produces
         wrong conclusions.
+
+        **Interest and external flows are terms of their own**, not folded into
+        ``realised``. Both move the equity and neither is the strategy's P&L: a book that
+        sat in cash all year earns the interest, and a deposit is not a profit. Folding
+        either into realised would credit the strategy with it; leaving either out would
+        make the identity fail on a correct run -- which is how this was found, by the
+        identity refusing the session after interest was first booked.
         """
         unreal_opt, unreal_stock = self.unrealised(snapshot)
         expected = (
-            self.initial_cash + self.realised - self.total_fees + unreal_opt + unreal_stock
+            self.initial_cash + self.realised - self.total_fees + unreal_opt
+            + unreal_stock + self.total_interest + self.total_dividends
+            + self.external_flows
         )
+        self.verify_append_only()
         drift = snapshot.equity_mid - expected
         if abs(drift) > max(TOLERANCE, abs(expected) * 1e-9):
             raise InvariantError(
@@ -398,8 +585,44 @@ class Ledger:
                 f" − fees {self.total_fees:,.2f}"
                 f" + unrealised options {unreal_opt:+,.2f}"
                 f" + unrealised stock {unreal_stock:+,.2f}"
+                f" + interest {self.total_interest:+,.2f}"
+                f" + dividends {self.total_dividends:+,.2f}"
+                f" + external flows {self.external_flows:+,.2f}"
                 f" = {expected:,.2f}, actual equity {snapshot.equity_mid:,.2f}"
             )
 
-    def _record(self, when: date, kind: str, detail: str, cash_delta: float, trade_id: int | None) -> None:
-        self.events.append(LedgerEvent(when, kind, detail, round(cash_delta, 6), trade_id))
+    def _record(self, when: date, kind: str, detail: str, cash_delta: float,
+                trade_id: int | None) -> None:
+        """Book one entry. **Append-only, as a guarantee rather than a habit.**
+
+        The document says the ledger is append-only and nothing enforced it: entries went
+        into an ordinary list and no method refused a rewrite. Nothing in this system
+        edits a booked entry, so this is a missing guarantee rather than a bug -- and a
+        guarantee is the whole point of the word. A future path that corrected a fill by
+        editing its entry would leave a ledger that no longer says what happened, which
+        is the one thing a ledger is for.
+        """
+        if len(self.events) < self._sealed:
+            raise InvariantError(
+                f"the ledger had {self._sealed} entries and now has "
+                f"{len(self.events)}. Entries were removed, and a ledger that can lose "
+                f"an entry cannot be reconciled against anything"
+            )
+        self.events.append(LedgerEvent(when, kind, detail, round(cash_delta, 6),
+                                        trade_id))
+        self._sealed = len(self.events)
+
+    def verify_append_only(self) -> None:
+        """Raise if the entry list has been shortened or replaced since the last entry.
+
+        Called at every end-of-day check. It cannot see an entry edited **in place** --
+        ``LedgerEvent`` is frozen, which is what stops that -- so between the two the
+        guarantee holds: frozen entries cannot be changed, and this says none went
+        missing.
+        """
+        if len(self.events) != self._sealed:
+            raise InvariantError(
+                f"the ledger has {len(self.events)} entries and {self._sealed} were "
+                f"booked. An entry was added without going through the ledger, or one "
+                f"was removed"
+            )

@@ -1,0 +1,31 @@
+<meta charset="utf-8">
+<title>self test</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  body { padding: 24px; font: 13px/1.5 var(--sans); background: var(--surface-0); color: var(--text-primary); }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  #tally { font-family: var(--mono); color: var(--text-secondary); margin: 0 0 16px; }
+  .case { padding: 5px 0; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; }
+  .case p { margin: 3px 0 0 48px; color: var(--danger); white-space: pre-wrap; }
+  .ok { color: var(--success); }
+  .bad { color: var(--danger); }
+  /* The sandbox holds the detached nodes a renderer looks up by id. Off screen, not
+     hidden: a chart measured inside `display: none` has no width and would draw nothing,
+     which would make every size assertion pass for the wrong reason. */
+  #sandbox { position: absolute; left: -10000px; top: 0; width: 600px; }
+  /* A page with no way out of it is a trap, and this one is reached by typing a URL —
+     so the way back is the first thing on it, not the last. */
+  .back { margin: 0 0 12px; font-size: 12px; }
+  .back a { color: var(--accent); text-decoration: none; }
+  .back a:hover { text-decoration: underline; }
+</style>
+<p class="back"><a href="/">&larr; back to the bench</a></p>
+<h1>self test</h1>
+<p id="tally">running…</p>
+<div id="out"></div>
+<div id="sandbox"></div>
+<script type="module">
+  import {run} from "./js/selftest.js";
+  run();
+</script>

@@ -280,3 +280,149 @@ class TestTheImpossibilities:
                      dividend_yield=0.0, right=Right.CALL)
         assert got.intrinsic == got.hold == got.american == 60.0
         assert not got.exercise_now
+
+
+class TestTheAmericanIVSolve:
+    """The document asks for "a European or American model **matching the contract
+    style** (US equity and ETF options are American)", and the IV solve used a European
+    model for everything.
+
+    The error is one-sided and has a name. An American option is worth at least its
+    European counterpart, so a European solve returns an IV that is **too low** wherever
+    the early-exercise premium is real — and that premium is largest on exactly the
+    contracts a researcher looks at hardest: a deep in-the-money put, a call before a
+    dividend.
+    """
+
+    @staticmethod
+    def _round_trip(*, vol: float, **kw):
+        """Price at a known volatility, then solve it back."""
+        from backtest.data.options.american import implied_vol_american
+
+        priced = value(vol=vol, **kw)
+        return priced, implied_vol_american(price=priced.american, **kw)
+
+    def test_it_recovers_the_volatility_it_was_priced_at(self):
+        """The round trip, which is the only check that does not rest on theory: price
+        at a known σ with one function and solve it back with another."""
+        for kw, truth in (
+            (dict(spot=400.0, strike=400.0, years=0.5, rate=0.045,
+                  dividend_yield=0.0, right=Right.CALL), 0.22),
+            (dict(spot=380.0, strike=400.0, years=1.0, rate=0.05,
+                  dividend_yield=0.0, right=Right.PUT), 0.25),
+            (dict(spot=440.0, strike=400.0, years=0.5, rate=0.02,
+                  dividend_yield=0.04, right=Right.CALL), 0.20),
+        ):
+            _, got = self._round_trip(vol=truth, **kw)
+            assert got.is_present, got.reason
+            assert got.unwrap() == pytest.approx(truth, abs=0.002), kw
+
+    @kind("guard")
+    def test_a_price_at_the_intrinsic_has_no_implied_volatility(self):
+        """**The failure this found, and it is the project's own failure mode.**
+
+        When exercising now is optimal the American value *is* the intrinsic, at every
+        volatility — the root takes the max of holding and exercising and exercising wins
+        throughout. So the price carries no information about σ, and bisection on a flat
+        function returns wherever it stopped: on a 300/400 put at 5% it returned **0.1631
+        for a contract priced at a true 0.25**. A plausible number with nothing behind it,
+        returned because the arithmetic had to return something.
+        """
+        from backtest.data.options.american import implied_vol_american
+
+        kw = dict(spot=300.0, strike=400.0, years=1.0, rate=0.05,
+                  dividend_yield=0.0, right=Right.PUT)
+        priced = value(vol=0.25, **kw)
+        assert priced.exercise_now, "the premise is that exercising now is optimal"
+        assert priced.american == pytest.approx(priced.intrinsic)
+
+        got = implied_vol_american(price=priced.american, **kw)
+        assert got.is_missing, (
+            f"the solve returned {got.unwrap() if got.is_present else '?'} for a price "
+            f"that every volatility produces"
+        )
+        assert "every" in got.reason and "intrinsic" in got.reason
+
+    def test_a_european_solve_understates_it_where_the_premium_is_real(self):
+        """The reason the American solve had to exist, with the figures.
+
+        A put 5% in the money with a year to run: the American value is above the
+        European one by the early-exercise premium, so solving that price with a European
+        model has to invent extra volatility to reach it.
+        """
+        from backtest.data.options.pricing import implied_vol
+
+        kw = dict(spot=380.0, strike=400.0, years=1.0, rate=0.05,
+                  dividend_yield=0.0, right=Right.PUT)
+        priced = value(vol=0.25, **kw)
+        assert priced.american > priced.european + 1.0, "no premium, so nothing to show"
+
+        european = implied_vol(priced.american, kw["spot"], kw["strike"], kw["years"],
+                               kw["rate"], kw["dividend_yield"], kw["right"])
+        assert european.is_present
+        # **The direction is the claim, not the size.** An American option is worth at
+        # least its European counterpart, so a European solve must reach for *more*
+        # volatility -- that follows from the models and not from this data. How much
+        # more depends on the strike, the tenor and the rate, so a threshold here would
+        # be a measurement dressed as a law: I wrote 0.02 and the figure is 0.0196.
+        assert european.unwrap() > 0.25, (
+            f"the European solve returned {european.unwrap():.4f} for a price produced "
+            f"at 0.25, and it has to be **higher**: it must invent volatility to reach "
+            f"a price that early exercise explains"
+        )
+        # And the American solve does not have to, which is the pair that makes the
+        # point: same price, two models, and only one of them needs the extra.
+        from backtest.data.options.american import implied_vol_american
+
+        american = implied_vol_american(price=priced.american, **kw)
+        assert american.is_present
+        assert abs(american.unwrap() - 0.25) < abs(european.unwrap() - 0.25), (
+            f"the American solve ({american.unwrap():.4f}) is no closer to the truth "
+            f"than the European one ({european.unwrap():.4f})"
+        )
+
+    @kind("guard")
+    def test_the_bracket_starts_where_the_tree_can_price(self):
+        """Not at an arbitrary epsilon.
+
+        A CRR tree refuses a volatility far below the rate — the drift per step leaves
+        the up/down move and the risk-neutral probability leaves [0, 1], which is an
+        arbitrage in the model. The first version of this solve bracketed from 1e-4 and
+        **raised that refusal** on its first call. The floor is derived from the same
+        condition now: ``vol > |r − q| · sqrt(dt)``, with a factor of two of headroom.
+        """
+        from backtest.data.options.american import implied_vol_american
+
+        # A high rate makes the floor bite, and the solve must still answer.
+        got = implied_vol_american(
+            price=value(spot=400.0, strike=400.0, years=1.0, rate=0.20, vol=0.22,
+                        dividend_yield=0.0, right=Right.CALL).american,
+            spot=400.0, strike=400.0, years=1.0, rate=0.20, dividend_yield=0.0,
+            right=Right.CALL)
+        assert got.is_present, got.reason
+        assert got.unwrap() == pytest.approx(0.22, abs=0.005)
+
+    def test_a_price_no_volatility_produces_is_refused(self):
+        from backtest.data.options.american import implied_vol_american
+
+        kw = dict(spot=400.0, strike=400.0, years=0.5, rate=0.045,
+                  dividend_yield=0.0, right=Right.CALL)
+        assert implied_vol_american(price=1e9, **kw).is_missing
+        assert implied_vol_american(price=0.0, **kw).is_missing
+        assert implied_vol_american(price=-1.0, **kw).is_missing
+
+    def test_a_price_below_intrinsic_is_refused_with_the_reason(self):
+        """An American option can be exercised now, so no volatility produces a price
+        below its intrinsic value."""
+        from backtest.data.options.american import implied_vol_american
+
+        got = implied_vol_american(price=30.0, spot=440.0, strike=400.0, years=0.5,
+                                   rate=0.045, dividend_yield=0.0, right=Right.CALL)
+        assert got.is_missing and "intrinsic" in got.reason
+
+    def test_an_expired_contract_has_no_implied_volatility(self):
+        from backtest.data.options.american import implied_vol_american
+
+        got = implied_vol_american(price=5.0, spot=400.0, strike=400.0, years=0.0,
+                                   rate=0.045, dividend_yield=0.0, right=Right.CALL)
+        assert got.is_missing and "expired" in got.reason

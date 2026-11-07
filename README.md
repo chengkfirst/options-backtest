@@ -9,7 +9,8 @@ months). Two uses:
 
 > Where it stands and what is missing → **[requirements.md](requirements.md)**
 > (every criterion with its status)
-> The architecture → **`Plan/backtest-system-architecture.pdf`**
+> The architecture → **[docs/architecture.md](docs/architecture.md)**
+> (searchable and quotable; `Plan/backtest-system-architecture.pdf` remains the original)
 > What is built against it, layer by layer → **[requirements.md](requirements.md)**
 > Which questions the platform is meant to answer → **[research-questions.md](research-questions.md)**
 
@@ -17,7 +18,8 @@ months). Two uses:
 
 ## Install
 
-Python 3.11+.
+Python 3.11 or 3.12. **Not 3.13** — numpy 1.26.4 and pandas 2.1.4, which are pinned,
+publish no wheels for it, so the install fails rather than the project.
 
 ```bash
 pip install -e ".[dev]"
@@ -57,7 +59,28 @@ r = run(symbol="QQQ", start="2020-01-01", end="2024-12-31",
 r.summary()          # a one-page conclusion
 r.trades             # the trade log (each trade's greeks, IV, and every signal at entry and exit)
 r.equity_metrics()   # return, drawdown, Sharpe, capital used
+r.spread()           # what the fills cost, as a share of the premium they were paid on
+r.vol_premium()      # IV at entry against the volatility the underlying actually realised
 ```
+
+## Before the first run: check the data
+
+```python
+# skip (loads data)
+from backtest import check_data
+
+print(check_data(symbol="QQQ", start="2020-01-01", end="2024-12-31").text())
+```
+
+Nine checks, run against the data a backtest would load and **without running one**: the
+source and whether it is synthetic, the raw/adjusted price split, the trading calendar,
+the quality flags, rates, dividends, the volatility proxy, the expiry calendar, and the
+chain's columns. Each step prints what it measured, why it is checked, and the file to
+change it in.
+
+It reports rather than refuses — `report.failed` and `report.warned` are there for a
+script that has to decide. Point it at your own file with the same `chain=` argument
+`run()` takes, and a configuration that checks out here is the one that will run.
 
 ---
 
@@ -176,6 +199,59 @@ Two boundaries:
 
 ---
 
+# Cleaning rules
+
+```python
+# skip (needs your own data file)
+r = run(**config, chain={
+    "kind": "file", "path": "your/data.parquet",
+    "clean": ["crossed_quote", "below_intrinsic", "no_quote",
+              {"wide_spread": 0.20}],
+})
+print(r.raw.chain.cleaning_report.text())
+```
+
+```python
+# skip (needs your own data file)
+r = run(**config, chain={"kind": "file", "path": "your/data.parquet",
+                          "iv_model": "american"})   # default: "european"
+```
+
+**Which model solves the IV is your choice**, and the default is European because of a
+measurement rather than an argument: one American solve is a bisection over a 200-step
+binomial tree, about **13 ms**, so 200,000 rows is 43 minutes. Screening does not help —
+the put case applies whenever rates are positive, which is every put.
+
+The bias is one-sided and stated rather than hidden: an American option is worth at least
+its European counterpart, so a European solve returns an IV that is too **low** wherever
+early exercise has value — and that is largest on exactly the contracts you look at
+hardest, a deep in-the-money put or a call before a dividend. Every solved row carries
+`iv_european` or `iv_american` in `quality_flags`, so a result never has to be asked
+which produced it.
+
+**Supply an `iv` column if your vendor has one.** Neither model then runs: it is faster,
+and the vendor's own solve is also where a bad quote became an absent IV rather than a
+wrong one.
+
+**No cleaning rule is on by default**, and that is deliberate. A platform-chosen cleaning rule is
+the platform deciding which market conditions your strategy is tested through — and the
+register lists cleaning as a group-1 choice: **test its sensitivity, never optimise it.**
+Cleaner data can remove stressed periods and bias the result toward calm markets, so the
+reading that counts is the same run with the rules off, compared over the stressed
+stretches rather than over the whole range.
+
+Two things a rule can do, and the difference matters:
+
+- **mark untradable** — the row stays with its prices and no order fills against it. The
+  default for a wide spread or a missing quote, which is the document's own instruction:
+  never forward-fill a quote-less contract, because a halted contract at yesterday's
+  price is the most flattering thing a backtest can do with missing data.
+- **drop** — the row leaves. Only for a row that is not a price at all: a crossed quote,
+  or an ask below intrinsic value.
+
+Nothing writes a price. A cleaned price is a price somebody made up, and the one thing
+worse than bad data is bad data that looks fine.
+
 # Wiring in your own data
 
 **The synthetic option chain is a test fixture, not a data source.** Its IV is constant,
@@ -186,10 +262,16 @@ trusted.
 Three steps, with a tool for each:
 
 ```python
-from backtest.data.adapters import check_file, describe_schema
+from backtest.data.options.adapters import describe_schema
 
 print(describe_schema())    # 1. which columns, what each means, what absence costs
-# check_file("your/path")   # 2. a health check before any run: fatal / warning  # skip
+```
+
+```python
+# skip (needs your own data file)
+from backtest.data.options.adapters import check_file
+
+check_file("your/path")     # 2. a health check before any run: fatal / warning
 ```
 
 ```python
@@ -247,6 +329,7 @@ r.scenarios()        # historical scenario replay
 r.excursion()        # the MFE / MAE distribution, with **censoring detection**
 r.equity_metrics()   # return, drawdown, Sharpe, capital used
 r.events             # run events: selection failures, untradable, deferrals, dropped candidates
+r.turnover()         # premium traded over mean equity, and annualised
 r.why()              # why each fill happened: order -> target -> signal -> component
 r.manifest()         # the run_id, the commit, the data version, the config, provenance
 ```
@@ -286,6 +369,84 @@ print(batch.describe())
 batch of forty is forty trials whether or not thirty-nine are mentioned again, and that
 is the number the deflated Sharpe needs.
 
+## The account, and the strategy
+
+The ledger separates four things that all move the equity, because folding any of them
+into the strategy's P&L would credit the strategy with something it did not earn:
+
+| | |
+|---|---|
+| realised and unrealised | the strategy's own P&L |
+| **interest** | earned on the cash balance at the risk-free rate |
+| **dividends** | received on shares, which only arrive from physical delivery |
+| external flows | deposits and withdrawals |
+
+The figure worth knowing: over three years on $100,000 at 4.5%, **interest is around
+9,300 and the fixture strategy's net P&L is −473**. Twenty times. Folded in, a losing
+strategy reads as a profitable one — which is why the accounting identity carries each
+as its own term, and why it refused the first session after interest was booked.
+
+## What trading actually cost
+
+```python
+# skip (needs a finished run)
+r.costs()      # the spread beside the fees, over the premium traded
+r.spread()     # per-trade: what each fill paid away from the mid
+```
+
+**The spread is the cost that matters and it is not a fee.** It is paid inside the fill —
+a buy at the ask, a sell at the bid — so it never appears on a fee line. On this project's
+own fixture over six years the fees come to 506 and the spread to 3,396: **six and a half
+times**. A cost section that listed only the fees said trading was nearly free.
+
+Measured against two denominators, because neither alone is honest:
+
+- **of the premium traded** — defined whether the run won or lost, and the figure a buyer
+  thinks in ("the spread cost me 2% of what I paid")
+- **of gross P&L rebuilt at the mid** — the edge before costs. The spread is inside every
+  fill price, so a ratio to plain gross would have it on both sides of the division; and
+  when there is no edge, the ratio is absent with a reason rather than printed as a
+  percentage of a loss
+
+## Three returns, and which one a Sharpe is on
+
+```python
+# skip (needs a finished run)
+m = r.equity_metrics()
+m["strategy_total_return"]   # the trading, interest removed
+m["account_total_return"]    # what a statement would show
+m["excess_annualised"]       # the account less the risk-free rate
+m["sharpe"]                  # on the excess return
+```
+
+The ledger keeps interest as its own term of the accounting identity for a reason: a book
+that sat in cash all year would earn it. The equity curve is cash plus holdings, and the
+cash carries every dollar of it — so a single "total return" is the **account's** figure
+being read as the strategy's. On a long-options book most of the capital sits in cash, so
+this is not a rounding difference.
+
+Sharpe and Sortino are on the excess return, which is their definition. On a curve that
+includes the interest, a ratio to the raw return adds the risk-free rate once and
+subtracts it never — flattering twice over.
+
+`cash_interest_share` is in the register's group 1: paying the full Treasury rate on every
+idle dollar is a claim about the broker, not about the market, and it runs in the
+optimistic direction.
+
+## Where the P&L came from
+
+```python
+# skip (needs an event-driven run)
+print(r.attribution_daily().text())
+```
+
+Stepped **day by day**, on each day's own greeks, with the spread as its own line. The
+one-step version (`r.attribution()`) expands once from entry to exit on the entry greeks;
+over a three-week option hold its residual runs to tens of percent, and the system says as
+much about its own stress grid — past a 10% move a second-order expansion gets the
+direction wrong. A residual has to be read against the method, so each result says which
+it used.
+
 ## How much of this is the cost assumption
 
 ```python
@@ -301,6 +462,46 @@ at 0.5 is a **sensitivity**, not a result.
 The tool refuses a sweep that leaves 1.0 out, and names no best fraction. A sweep of 0.3,
 0.5 and 0.7 is a search for a figure that makes the strategy work, and it is what somebody
 rescuing a result would write.
+
+## What the book may have at risk at once
+
+```python
+# skip (a full backtest)
+r = run(**config, premium_budget={"max_premium_pct": 0.10,          # of equity, total
+                                   "max_premium_per_expiry_pct": 0.04,
+                                   "min_cash_pct": 0.20})
+```
+
+For a long-options book the maximum loss on a position is the premium paid, so premium at
+risk is the budget with a floor under it — and the only limit here whose breach is a
+**certainty** rather than a scenario: an option held to expiry out of the money loses all
+of its premium with probability one. Delta and vega limits answer a different question,
+which is how the book moves on the next dollar.
+
+**The per-expiry limit is not implied by the total.** Ten percent of equity over six
+expiries loses at most a sixth of it on any one Friday; the same ten percent on one expiry
+is all of it at once, and a total limit passes both identically.
+
+There is no default. How much of equity a strategy may have at risk is the single most
+consequential number in a long-options book, and a platform that picks it has made the
+strategy's main decision for you.
+
+## Is it ready: the pre-launch checklist
+
+```python
+# skip (needs a finished run)
+print(r.prelaunch(thesis="delta", trials=n).text())
+```
+
+The document's eight criteria as one gate. Each is `pass`, `fail` or **`unknown`** — and
+unknown is not a soft pass: `ready` is false while any criterion is unmeasured, because a
+tick beside work nobody did is worse than no checklist at all. Five of the eight need a
+second run (`sweep`, `delay_test`, `realism_test`, `baselines`), and each unknown says
+which one.
+
+`thesis` has no default. "Greeks attribution matches the thesis" cannot be answered
+without knowing what the strategy is supposed to earn from, and a tool that guessed would
+be marking its own homework.
 
 ## Before refining anything, run the baselines
 
@@ -481,6 +682,20 @@ research/   baselines.py   is it the signal, the structure, or the drift
             anomaly.py     eight rules that stay silent when nothing fires
 ```
 
-`research/` is your local research record (run history, trade logs, notes) and is **not
-version controlled** — it is your asset rather than code, and a SQLite binary cannot be
-merged. To back it up, copy that directory on its own.
+Those are the packages **inside `backtest/`**, which is the one place the layout is
+ambiguous and has to be said rather than inferred: there are two directories named
+`research/` and they are opposites.
+
+| | What it is | Version controlled |
+|---|---|---|
+| `backtest/research/` | code — the research tools listed above | **yes**, and a guard holds it so |
+| `/research/`, at the repository root | your local research record: run history, trade logs, notes | **no** |
+
+`/research/` at the root is your asset rather than code, and a SQLite binary cannot be
+merged, so it is excluded. To back it up, copy that directory on its own.
+
+The leading slash in `.gitignore` is what separates the two, and it is not cosmetic:
+without it, `research/` matches a directory of that name **at any depth** and excludes
+`backtest/research/` as well. That happened — six research modules went unpublished while
+their tests were pushed, so a fresh clone crashed and `git status` was clean the whole
+time. `tools/check_shipped.py` exists for it.

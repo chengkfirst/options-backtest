@@ -14,7 +14,7 @@ which is worse than not being there.
 ## What to do about it
 
 1. **Every fact is defined in exactly one place.** What a component is ->
-   ``backtest/components.py``; the dependency direction -> ``tools/check_deps.py``;
+   ``COMPONENTS`` in ``backtest/core/slots.py``; the dependency direction -> ``tools/check_deps.py``;
    whether the results changed -> ``tools/baseline.py``.
 2. **Derived views are generated, never hand-written.** The interface's form, the gap
    list, and this status.

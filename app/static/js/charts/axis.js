@@ -22,9 +22,30 @@
 "use strict";
 
 import {esc} from "../dom.js";
+import {dateLong, dateShort} from "../fmt.js";
 
 const PAD = {left: 58, right: 14, top: 10, bottom: 4};
 const AXIS_HEIGHT = 20;
+
+/* ── the hatch ───────────────────────────────────────────────────────────────────
+ *
+ * The design plan asks for the locked hold-out, and every span with no data, to be
+ * **hatched** rather than filled: a flat tint reads as a region that has a value in it, and
+ * that is the one thing these two spans do not have. `--holdout-fill` is the token for it
+ * and had no user — a CSS gradient cannot fill an SVG shape — so the pattern is defined in
+ * the document and referenced by the rects.
+ */
+
+/** The id of one layer's hatch pattern. An id resolves per document and each layer owns its
+ *  own svg, so the id carries the layer's key. */
+const hatchId = key => `hatch-${String(key).replace(/[^\w-]/g, "-")}`;
+
+/** The 45° hatch the design plan asks for over the locked hold-out and over any span with
+ *  no data. Defined per svg because that is the scope an id resolves in. */
+const hatchPattern = key => `<defs><pattern id="${hatchId(key)}" width="8" height="8"
+    patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+  <line class="hatch-line" x1="0" y1="0" x2="0" y2="8"/>
+</pattern></defs>`;
 
 /**
  * Build a stack.
@@ -34,6 +55,7 @@ const AXIS_HEIGHT = 20;
  *   dates   {string[]}  the shared domain, one entry per step, ascending
  *   layers  {object[]}  {key, title, height, hint, series, draw, read}
  *   holdOut {object}    {from, to} drawn as a hatch and left empty, or null
+ *   held    {object}    {from, to} of one trade's holding period, shaded, or null
  *   marks   {object[]}  {date, kind, label} drawn as triangles on the axis
  *   onBrush {function}  called with ({from, to}) or (null) when cleared
  */
@@ -42,6 +64,7 @@ export function chartStack(root, spec){
     dates: spec.dates || [],
     layers: (spec.layers || []).filter(Boolean),
     holdOut: spec.holdOut || null,
+    held: spec.held || null,
     marks: spec.marks || [],
     onBrush: spec.onBrush || (() => {}),
     collapsed: new Set(spec.collapsed || []),
@@ -85,6 +108,9 @@ export function chartStack(root, spec){
           <span class="layer-title">${esc(layer.title)}</span>
           ${layer.hint ? `<span class="layer-hint">${esc(layer.hint)}</span>` : ""}
           <span class="layer-value" data-value="${layer.key}"></span>
+          ${layer.columns ? `<button type="button" class="layer-csv" data-csv="${layer.key}"
+             data-tip="Download this layer as CSV${state.brush
+               ? ", for the brushed range" : ""}. The stored values, not the drawn ones.">CSV</button>` : ""}
         </header>
         ${open ? `<svg class="layer-svg" viewBox="0 0 ${w} ${h}"
                       preserveAspectRatio="none" height="${h}"
@@ -104,20 +130,40 @@ export function chartStack(root, spec){
                left: PAD.left, right: w - PAD.right},
         dates: state.dates,
       };
-      svg.innerHTML = shading(scale) + (layer.draw(scale) || "") + crosshair(scale);
+      svg.innerHTML = hatchPattern(layer.key) + shading(scale, layer.key)
+        + (layer.draw(scale, layer.key) || "") + crosshair(scale);
     }
     paintTip();
   }
 
   /** The hold-out and the brush, drawn under every layer so the eye reads one band. */
-  function shading(scale){
+  function shading(scale, key){
     let out = "";
+    // One trade's holding period, shaded across every layer at once. The design plan's
+    // rule 4: selecting a trade shades the time it was open, so the question "what was the
+    // book doing while this position was on" is answered by looking rather than by
+    // remembering two dates.
+    if(state.held){
+      const a = indexOfDate(state.held.from), b = indexOfDate(state.held.to);
+      // `scale.plot` carries edges, not a height — this read `scale.plot.height`, which is
+      // undefined, so the rect went out as `height="undefined"` and SVG drew nothing. The
+      // selftest asserted the element existed, which it did; a band of zero height is in
+      // the document and invisible, so "selecting a trade shades its holding period" was
+      // true of the markup and false of the screen. Height is measured here, and the test
+      // now asserts the measurement.
+      if(a != null && b != null)
+        out += `<rect class="held" x="${scale.x(a)}" y="${scale.plot.top}"
+                  width="${Math.max(scale.x(b) - scale.x(a), 1.5)}"
+                  height="${scale.plot.bottom - scale.plot.top}"/>`;
+    }
+
     if(state.holdOut){
       const a = indexOfDate(state.holdOut.from), b = indexOfDate(state.holdOut.to);
       if(a != null && b != null && b > a)
         out += `<rect class="holdout" x="${scale.x(a)}" y="${scale.plot.top}"
                   width="${scale.x(b) - scale.x(a)}"
-                  height="${scale.plot.bottom - scale.plot.top}"/>`;
+                  height="${scale.plot.bottom - scale.plot.top}"
+                  fill="url(#${hatchId(key)})"/>`;
     }
     if(state.brush){
       const a = scale.x(state.brush.from), b = scale.x(state.brush.to);
@@ -138,16 +184,40 @@ export function chartStack(root, spec){
   }
 
   /** The date axis, shared, plus the event markers. */
-  function axisStrip(w){
+  /** The month alone, for an axis that has already said the year. */
+const MONTH_OF = iso => dateShort(iso).split(" ")[0];
+
+function axisStrip(w){
     const n = state.dates.length;
     if(!n) return "";
+    // Ticks at the grain the span can carry. It used to tick only where the year changed,
+    // so a run inside one year got a single label and a lone `2023-04` bolted on the end —
+    // an axis with one mark is a caption. Under two years the months are the useful
+    // divisions; beyond that the years are.
+    const first = String(state.dates[0]).slice(0, 10);
+    const last = String(state.dates[n - 1]).slice(0, 10);
+    const months = (+last.slice(0, 4) - +first.slice(0, 4)) * 12
+                 + (+last.slice(5, 7) - +first.slice(5, 7));
     const ticks = [];
-    let lastYear = "";
-    for(let i = 0; i < n; i++){
-      const year = String(state.dates[i]).slice(0, 4);
-      if(year !== lastYear){ ticks.push({i, label: year}); lastYear = year; }
+    if(months <= 24){
+      let lastKey = "";
+      for(let i = 0; i < n; i++){
+        const d = String(state.dates[i]);
+        const key = d.slice(0, 7);
+        if(key === lastKey) continue;
+        lastKey = key;
+        // The month, and the year with it the first time and whenever it turns over, so
+        // the axis never asks the reader to remember which year they are in.
+        const showYear = ticks.length === 0 || d.slice(0, 4) !== String(state.dates[ticks[ticks.length - 1].i]).slice(0, 4);
+        ticks.push({i, label: showYear ? `${dateShort(d)}` : MONTH_OF(d)});
+      }
+    }else{
+      let lastYear = "";
+      for(let i = 0; i < n; i++){
+        const year = String(state.dates[i]).slice(0, 4);
+        if(year !== lastYear){ ticks.push({i, label: year}); lastYear = year; }
+      }
     }
-    if(ticks.length === 1) ticks.push({i: n - 1, label: String(state.dates[n - 1]).slice(0, 7)});
     const marks = state.marks.map(m => {
       const i = indexOfDate(m.date);
       if(i == null) return "";
@@ -183,8 +253,18 @@ export function chartStack(root, spec){
     }
     const at = state.hover;
     tip.hidden = false;
-    tip.innerHTML = `<div class="tip-date">${esc(state.dates[at])}</div>`
+    tip.innerHTML = `<div class="tip-date">${esc(dateLong(state.dates[at]))}</div>`
       + state.layers.map(layer => {
+          // A layer holding several series gives one row per series, **named**. Joined into
+          // one string they read as three numbers in an order the reader has to remember —
+          // and a comparison whose tooltip cannot say which run a number belongs to is worse
+          // than no tooltip.
+          if(layer.rows){
+            return layer.rows(at).map(({name, value}) =>
+              value === "" || value == null ? "" : `<div class="tip-row">
+                <span class="tip-key">${esc(name)}</span>
+                <span class="tip-val">${esc(value)}</span></div>`).join("");
+          }
           const value = layer.read ? layer.read(at) : "";
           return value === "" || value == null ? "" : `<div class="tip-row">
             <span class="tip-key">${esc(layer.title)}</span>
@@ -254,7 +334,61 @@ export function chartStack(root, spec){
       state.onBrush({from: state.dates[state.brush.from], to: state.dates[state.brush.to]});
   });
 
+  /* ── taking a layer away with you ──────────────────────────────────────────────
+   *
+   * The design plan's chart rules end with "each layer exports PNG, CSV, or a link to the
+   * current range". CSV, because the other two answer a smaller question: a researcher who
+   * wants this layer outside the page wants to put it beside something else, and a picture
+   * cannot be joined to anything.
+   *
+   * **The stored values, not the drawn ones.** Downsampling is a drawing step; a file that
+   * carried the drawn points would be a different series from the one the metrics were
+   * computed on, and would not say so. When a range is brushed the file is that range,
+   * because that is what is on screen and what the reader means by "this".
+   */
+  function csv(layer){
+    const from = state.brush ? state.brush.from : 0;
+    const to = state.brush ? state.brush.to : state.dates.length - 1;
+    const cols = layer.columns || [];
+    const head = ["date", ...cols.map(c => c.name)];
+    const lines = [head.map(quote).join(",")];
+    for(let i = from; i <= to; i++)
+      lines.push([String(state.dates[i]).slice(0, 10),
+                  ...cols.map(c => {
+                    const v = c.values[i];
+                    return v == null || !Number.isFinite(v) ? "" : String(v);
+                  })].map(quote).join(","));
+    return lines.join("\n") + "\n";
+  }
+
+  /** A field that contains a comma, a quote or a newline would otherwise split the row. */
+  function quote(value){
+    const s = String(value ?? "");
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  function download(name, text){
+    const url = URL.createObjectURL(new Blob([text], {type: "text/csv;charset=utf-8"}));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    // Revoked on the next turn rather than immediately: Safari starts the download
+    // asynchronously and a URL revoked in the same tick is gone before it is read.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
   body.addEventListener("click", e => {
+    const save = e.target.closest("[data-csv]");
+    if(save){
+      const layer = state.layers.find(l => l.key === save.dataset.csv);
+      if(layer){
+        const span = state.brush
+          ? `${state.dates[state.brush.from]}_${state.dates[state.brush.to]}` : "full";
+        download(`${layer.key}_${span}.csv`.replace(/[^\w.-]/g, "-"), csv(layer));
+      }
+      return;
+    }
     const toggle = e.target.closest("[data-toggle]");
     if(!toggle) return;
     const key = toggle.dataset.toggle;
@@ -288,6 +422,11 @@ export function chartStack(root, spec){
 
   return {
     draw,
+    /** Shade one trade's holding period, or clear it. */
+    setHeld(range){
+      state.held = range && range.from && range.to ? range : null;
+      draw();
+    },
     /** Set the brush from outside — restoring it from the URL, for instance. */
     setBrush(range){
       state.brush = range && range.from && range.to
@@ -306,19 +445,32 @@ export function chartStack(root, spec){
    Each returns a `draw` for the stack. They take values already computed by the
    backend; none of them derives a statistic. */
 
-/** A line, optionally with a second comparison line and an area to a baseline. */
+/** A line, optionally with a second comparison line and an area to a baseline.
+ *
+ * `log` draws the vertical axis on a logarithmic scale, which the design plan asks for on
+ * the equity curve. It is **ignored where it would lie**: a log axis cannot show a value at
+ * or below zero, and an account that went to zero is exactly the run whose curve must not
+ * be quietly redrawn as if it had not. `logUsable` says which happened, so the control that
+ * asked for it can report back instead of looking broken.
+ */
 export function lineLayer({key, title, hint, height, values, second, secondTitle,
-                           baseline, colour = "var(--data-strategy)", format}){
+                           baseline, colour = "var(--data-strategy)", format, log = false}){
   const finite = values.filter(v => v != null && Number.isFinite(v));
-  const lo = Math.min(...finite, ...(second || []).filter(Number.isFinite));
-  const hi = Math.max(...finite, ...(second || []).filter(Number.isFinite));
+  const others = (second || []).filter(v => v != null && Number.isFinite(v));
+  const logUsable = log && finite.every(v => v > 0) && others.every(v => v > 0)
+    && finite.length > 0;
+  const scaleOf = v => logUsable ? Math.log10(v) : v;
+  const lo = Math.min(...finite.map(scaleOf), ...others.map(scaleOf));
+  const hi = Math.max(...finite.map(scaleOf), ...others.map(scaleOf));
   return {
-    key, title, hint, height,
+    key, title, hint, height, logUsable,
+    columns: [{name: title, values},
+              ...(second ? [{name: secondTitle || "second", values: second}] : [])],
     read: i => format ? format(values[i]) : String(values[i] ?? ""),
     draw(scale){
       if(!finite.length) return "";
-      const y = v => scale.plot.bottom
-        - ((v - lo) / ((hi - lo) || 1)) * (scale.plot.bottom - scale.plot.top);
+      const y = raw => scale.plot.bottom
+        - ((scaleOf(raw) - lo) / ((hi - lo) || 1)) * (scale.plot.bottom - scale.plot.top);
       // A gap is a gap: the path breaks rather than drawing a straight line across days
       // the run has no value for, which would invent a trend.
       const path = series => {
@@ -331,13 +483,83 @@ export function lineLayer({key, title, hint, height, values, second, secondTitle
         return d;
       };
       let out = "";
-      if(baseline != null && baseline >= lo && baseline <= hi)
+      const inside = v => scaleOf(v) >= lo && scaleOf(v) <= hi;
+      if(baseline != null && Number.isFinite(baseline) && (!logUsable || baseline > 0)
+         && inside(baseline))
         out += `<line class="rule" x1="${scale.plot.left}" x2="${scale.plot.right}"
                   y1="${y(baseline)}" y2="${y(baseline)}"/>`;
       if(second)
         out += `<path class="series second" d="${path(second)}" fill="none"
                   stroke="var(--data-benchmark)"><title>${esc(secondTitle || "")}</title></path>`;
       out += `<path class="series" d="${path(values)}" fill="none" stroke="${colour}"/>`;
+      // The labels carry the **values**, never the transform: on a log axis `hi` is a
+      // logarithm, and printing it would put "5.1" on an axis of dollars.
+      //
+      // And they are **this series' own extremes**, not the pair's. The scale is shared with
+      // the comparison line, so the top label used to be whichever of the two happened to be
+      // higher — on a run that lost against the underlying, the number at the top of the
+      // equity chart was the benchmark's peak, printed where every other layer prints its own
+      // value. It read as the strategy's best moment.
+      const rawHi = Math.max(...finite);
+      const rawLo = Math.min(...finite);
+      for(const v of [rawHi, rawLo])
+        out += `<text class="y-label" x="${scale.plot.left - 6}" y="${y(v) + 3.5}"
+                  text-anchor="end">${format ? format(v) : v.toFixed(0)}</text>`;
+      return out;
+    },
+  };
+}
+
+/** Several series on one scale — the comparison's overlay, one line per run.
+ *
+ * **Colour is not the only carrier.** Each series takes its colour from `--data-N` and its
+ * dash pattern from `--dash-N`, in column order, because a line has no number printed on it:
+ * under either common form of colour blindness two of the four proposed series are nearly the
+ * same hue, and a comparison where two runs are drawn alike is worse than no comparison. The
+ * dash survives colour blindness, greyscale printing and a washed-out projector.
+ *
+ * A series with no value on a date breaks rather than spanning it, so a run that covered a
+ * shorter period does not get a straight line drawn across the years it did not run.
+ */
+export function seriesLayer({key, title, hint, height, series, format}){
+  const all = series.flatMap(s => s.values.filter(v => v != null && Number.isFinite(v)));
+  const lo = Math.min(...all), hi = Math.max(...all);
+  return {
+    key, title, hint, height,
+    columns: series.map(s => ({name: s.name, values: s.values})),
+    // Every series at the hovered date, **one named row each**: the fixed tooltip exists so
+    // one date can be read across everything on screen, and that only works if each number
+    // carries the name of what it belongs to.
+    rows: i => series.map(s => {
+      const v = s.values[i];
+      return {name: s.name,
+              value: v == null || !Number.isFinite(v) ? "—" : (format ? format(v) : String(v))};
+    }),
+    // The layer's own bar shows the first series, which is the baseline column.
+    read: i => {
+      const v = series[0]?.values[i];
+      return v == null || !Number.isFinite(v) ? "" : (format ? format(v) : String(v));
+    },
+    draw(scale){
+      if(!all.length) return "";
+      const y = v => scale.plot.bottom
+        - ((v - lo) / ((hi - lo) || 1)) * (scale.plot.bottom - scale.plot.top);
+      let out = "";
+      for(const s of series){
+        let d = "", pen = false;
+        s.values.forEach((v, i) => {
+          if(v == null || !Number.isFinite(v)){ pen = false; return; }
+          d += `${pen ? "L" : "M"}${scale.x(i).toFixed(1)},${y(v).toFixed(1)}`;
+          pen = true;
+        });
+        // `style` and not a presentation attribute: a custom property is substituted in a
+        // declaration and **not** in an attribute value, so `stroke="var(--data-2)"` would
+        // leave the line with no colour at all — and a line that is simply not there is the
+        // hardest kind of missing thing to notice on a chart with three others on it.
+        out += `<path class="series" d="${d}" fill="none"
+          style="stroke:var(--data-${s.column});stroke-dasharray:var(--dash-${s.column})"
+          ><title>${esc(s.name)}</title></path>`;
+      }
       for(const v of [hi, lo])
         out += `<text class="y-label" x="${scale.plot.left - 6}" y="${y(v) + 3.5}"
                   text-anchor="end">${format ? format(v) : v.toFixed(0)}</text>`;
@@ -346,23 +568,63 @@ export function lineLayer({key, title, hint, height, values, second, secondTitle
   };
 }
 
+/** A run of consecutive indices that have a value, so an area can be drawn per run and a
+ *  day with no value stays a hole rather than being filled with a zero.
+ *
+ * Substituting zero is the quiet version of interpolating: a missing drawdown became "at
+ * its peak that day" and a missing deployed figure became "nothing on the book", both of
+ * which the eye reads as a fact about the strategy. The design plan's rule is that gaps are
+ * hatched and never crossed; this is the half of it that keeps the area honest. */
+function runsOf(values){
+  const out = [];
+  let run = null;
+  values.forEach((v, i) => {
+    if(v == null || !Number.isFinite(v)){ run = null; return; }
+    if(!run){ run = {from: i, points: []}; out.push(run); }
+    run.points.push([i, v]);
+  });
+  return out;
+}
+
+/** The hatch over a span with no value, so a hole reads as a hole and not as a zero. */
+function gapHatch(values, scale, key){
+  let out = "";
+  for(let i = 0; i < values.length; i++){
+    const v = values[i];
+    if(v != null && Number.isFinite(v)) continue;
+    let j = i;
+    while(j + 1 < values.length
+          && (values[j + 1] == null || !Number.isFinite(values[j + 1]))) j++;
+    out += `<rect class="gap" x="${scale.x(i)}" y="${scale.plot.top}"
+              width="${Math.max(scale.x(j) - scale.x(i), 1.5)}"
+              height="${scale.plot.bottom - scale.plot.top}"
+              fill="url(#${hatchId(key)})"/>`;
+    i = j;
+  }
+  return out;
+}
+
 /** An area hanging from zero — a drawdown, which is always negative. */
 export function underwaterLayer({key, title, hint, height, values, format}){
   const finite = values.filter(v => v != null && Number.isFinite(v));
   const worst = Math.min(...finite, 0);
   return {
     key, title, hint, height,
+    columns: [{name: title, values}],
     read: i => format ? format(values[i]) : String(values[i] ?? ""),
-    draw(scale){
+    draw(scale, key){
       if(!finite.length) return "";
       const y = v => scale.plot.top
         + (v / (worst || -1)) * (scale.plot.bottom - scale.plot.top);
-      let d = `M${scale.x(0)},${scale.plot.top}`;
-      values.forEach((v, i) => {
-        d += `L${scale.x(i).toFixed(1)},${y(Number.isFinite(v) ? v : 0).toFixed(1)}`;
-      });
-      d += `L${scale.x(values.length - 1)},${scale.plot.top}Z`;
-      return `<path class="underwater" d="${d}"/>`
+      const areas = runsOf(values).map(run => {
+        const [first] = run.points;
+        let d = `M${scale.x(first[0]).toFixed(1)},${scale.plot.top}`;
+        for(const [i, v] of run.points) d += `L${scale.x(i).toFixed(1)},${y(v).toFixed(1)}`;
+        const last = run.points[run.points.length - 1];
+        return `<path class="underwater" d="${d}L${scale.x(last[0]).toFixed(1)},${
+          scale.plot.top}Z"/>`;
+      }).join("");
+      return gapHatch(values, scale, key) + areas
         + `<text class="y-label" x="${scale.plot.left - 6}" y="${scale.plot.bottom}"
              text-anchor="end">${format ? format(worst) : worst.toFixed(2)}</text>`;
     },
@@ -376,17 +638,20 @@ export function areaLayer({key, title, hint, height, values, limit, format,
   const hi = Math.max(...finite, limit || 0);
   return {
     key, title, hint, height,
+    columns: [{name: title, values}],
     read: i => format ? format(values[i]) : String(values[i] ?? ""),
-    draw(scale){
+    draw(scale, key){
       if(!finite.length) return "";
       const y = v => scale.plot.bottom
         - (v / (hi || 1)) * (scale.plot.bottom - scale.plot.top);
-      let d = `M${scale.x(0)},${scale.plot.bottom}`;
-      values.forEach((v, i) => {
-        d += `L${scale.x(i).toFixed(1)},${y(Number.isFinite(v) ? v : 0).toFixed(1)}`;
-      });
-      d += `L${scale.x(values.length - 1)},${scale.plot.bottom}Z`;
-      let out = `<path class="area" d="${d}" fill="${colour}"/>`;
+      let out = gapHatch(values, scale, key) + runsOf(values).map(run => {
+        const [first] = run.points;
+        let d = `M${scale.x(first[0]).toFixed(1)},${scale.plot.bottom}`;
+        for(const [i, v] of run.points) d += `L${scale.x(i).toFixed(1)},${y(v).toFixed(1)}`;
+        const last = run.points[run.points.length - 1];
+        return `<path class="area" d="${d}L${scale.x(last[0]).toFixed(1)},${
+          scale.plot.bottom}Z" fill="${colour}"/>`;
+      }).join("");
       if(limit)
         out += `<line class="limit" x1="${scale.plot.left}" x2="${scale.plot.right}"
                   y1="${y(limit)}" y2="${y(limit)}"/>`

@@ -20,18 +20,15 @@
  */
 "use strict";
 
-import {$, esc} from "./../dom.js";
+import {$, esc, mark} from "./../dom.js";
 import {API, clearIssues, getJSON, notice, postJSON} from "./../net.js";
 import {CONTRACT, checkContract, checkMeta} from "./../contract.js";
-import {money, num, pct, sgn} from "./../fmt.js";
-import {stats} from "./../stats.js";
+import {num} from "./../fmt.js";
 import {go} from "./../router.js";
+import {bind} from "./../ui/keys.js";
 
 let META = null;          // the contents of /api/meta
 let LIVE = false;         // is the service up
-let RUNS = [];            // the runs submitted in this session
-let CURRENT = null;       // the most recent, highlighted in the list
-let BASE = null;          // the pinned baseline run id (the server's `id` field)
 
 /* Which registered form fills each slot, and the parameters typed into it. Held here
    rather than read back off the DOM, because the component forms are regenerated whenever
@@ -81,6 +78,7 @@ async function loadMeta(){
   switchMode();                     // generate the seven components' forms
   fillDefaults();
   updateSpanHint();
+  paintSettingGaps();
 }
 
 /* Fill the generated controls with the backend's defaults. The code fields
@@ -96,6 +94,76 @@ function fillDefaults(){
   if($("f_entry_code") && !$("f_entry_code").value) $("f_entry_code").value = d.entry_code || "";
   if($("f_review_code") && !$("f_review_code").value) $("f_review_code").value = d.review_code || "";
   bindFields();
+  markChanged();
+}
+
+/* ── what has been changed, and from what ────────────────────────────────────────
+ *
+ * The addendum asks for a dot on every field that differs from the baseline, with the
+ * baseline value on hover and a way back, and a line at the top saying how many slots
+ * differ. There is no baseline **run** to compare against yet — that needs the comparison
+ * page — but there is a baseline every field already has: the starting value the backend
+ * ships in `META.defaults`, which `check_defaults` holds to being visible rather than
+ * applied on omission.
+ *
+ * So the dot says "you changed this from what the platform starts at", which is the
+ * question a researcher actually asks of a form they have been editing for ten minutes:
+ * what in here is mine. Comparing against another run can replace the source later without
+ * changing any of this.
+ */
+function baselineOf(name){
+  const d = META?.defaults || {};
+  return Object.prototype.hasOwnProperty.call(d, name) ? d[name] : undefined;
+}
+
+/** Whether a control holds something other than its starting value. Compared as strings,
+ *  because a number typed into a text input is a string and `5 !== "5"` would mark every
+ *  untouched numeric field as changed. */
+function isChanged(el){
+  const was = baselineOf(el.name);
+  if(was === undefined || was === null) return false;
+  return String(el.value) !== String(was);
+}
+
+function markChanged(){
+  const form = $("form");
+  if(!form) return;
+  let n = 0;
+  for(const el of form.elements){
+    if(!el.name) continue;
+    const field = el.closest(".field");
+    if(!field) continue;
+    const changed = isChanged(el);
+    field.classList.toggle("changed", changed);
+    if(changed){
+      n++;
+      // The starting value, and a way back to it. Both on the dot, because a reader who
+      // wants to know what they changed from wants to undo it about half the time.
+      let dot = field.querySelector(".baseline-dot");
+      if(!dot){
+        dot = document.createElement("button");
+        dot.type = "button";
+        dot.className = "baseline-dot";
+        field.append(dot);
+        dot.addEventListener("click", () => {
+          el.value = baselineOf(el.name);
+          el.dispatchEvent(new Event("change", {bubbles: true}));
+          el.dispatchEvent(new Event("input", {bubbles: true}));
+          markChanged();
+        });
+      }
+      dot.title = `starts at ${baselineOf(el.name)} — click to put it back`;
+    }else{
+      field.querySelector(".baseline-dot")?.remove();
+    }
+  }
+  const line = $("changedLine");
+  if(line){
+    line.hidden = n === 0;
+    line.textContent = n === 1
+      ? "1 field differs from the starting configuration"
+      : `${n} fields differ from the starting configuration`;
+  }
 }
 
 /* ── the signal reference ──────────────────────────────
@@ -149,21 +217,190 @@ function insertSignal(name){
 }
 
 /* ── the seven components' forms, generated from the backend definition ───────
-   What a component is and what it asks for is defined once, in
-   backtest/components.py. The interface draws from it rather than hand-coding — two
+   What a component is and what it asks for is defined once, as COMPONENTS in
+   backtest/core/slots.py. The interface draws from it rather than hand-coding — two
    definitions always drift. */
 const STATUS_MARK = { done: "", partial: "partial", missing: "not built" };
 
+/* ── where each slot sits on the board ──────────────────────────────────────────
+ *
+ * The addendum's wireframe puts the slot board in three lifecycle columns, "so the card order
+ * reads like a trade's life": Idle, Armed, Open. The backend's `form` groups them by layer,
+ * which is a different cut — it answers "when does the engine call this" — so the mapping is
+ * written here, once, with the column each slot acts in.
+ *
+ * The Open column's cards carry a number, which is `open_state_order`: the order the engine
+ * asks them in while a position is on. It is fixed in the engine today, so the numbers are
+ * shown and not yet dragged.
+ */
+const COLUMNS_BY_SLOT = {
+  setup: {column: "idle", level: "candidate, per underlying",
+          when: "every snapshot while Idle **or Armed** — it can disarm as well as arm",
+          emits: ["arm", "disarm"]},
+  entry: {column: "armed", level: "underlying, then contracts",
+          when: "every snapshot while Armed",
+          emits: ["OPEN with legs", "nothing"]},
+  select: {column: "armed", level: "contracts",
+           when: "inside Entry, once it has fired",
+           emits: ["the legs Entry opens"]},
+  position: {column: "armed", level: "trade within the book",
+             when: "when OPEN or ADD is issued, **and when REDUCE needs a quantity** — so it "
+                 + "serves the open state too, not only the entry",
+             emits: ["contract quantities"]},
+  take_profit: {column: "open", order: 1, level: "trade",
+                when: "every snapshot while Open",
+                emits: ["REDUCE", "CLOSE", "SET_STOP", "request HEDGE_ADD", "HOLD"]},
+  stop_loss: {column: "open", order: 2, level: "trade",
+              when: "every snapshot while Open",
+              emits: ["CLOSE", "REDUCE", "HOLD"]},
+  headwind: {column: "open", order: 3, level: "trade **and** book",
+             when: "every snapshot while Open, per trade; and every snapshot on the book",
+             emits: ["REDUCE", "CLOSE", "ROLL", "SET_STOP", "request HEDGE_ADD", "HOLD",
+                     "scale, veto or force on the book"]},
+  hedge: {column: "open", order: 4, level: "trade **and** book",
+          when: "on request, or every snapshot while Open; and every snapshot on the book",
+          emits: ["HEDGE_ADD", "HEDGE_REMOVE"]},
+};
+
+/** How much of a slot's vocabulary a **registered form** can reach.
+ *
+ * Two different gaps, and conflating them is what made the first version of this note wrong.
+ *
+ * The first is the engine's: four of the nine actions are not implemented at all, and
+ * `backtest.core.actions.BUILT` is the one definition of which, with the reason. That comes
+ * over the wire and is marked on each action below rather than restated here.
+ *
+ * The second is this one: of the actions that **do** run, a registered form can only ever
+ * emit CLOSE, because every form registered today is a threshold that closes. REDUCE and ADD
+ * are reachable — through the daily `review(ctx, pos)` hook, which is the engine's own
+ * dynamic form of slots 3, 4, 5 and 6 — so a staged exit can be **written**, and cannot be
+ * **configured**. That distinction is the one a researcher needs before choosing between the
+ * two tabs at the top of this page.
+ */
+const REGISTERED_REACH = {
+  setup: "nothing is registered, so the gate is always open: every candidate is armed.",
+  entry: "the condition fires an OPEN. It cannot decline on the contracts it then finds.",
+  select: "a feasible region and one ranking target, applied inside Entry.",
+  position: "one size, at entry. It is not asked again when a review adds or reduces.",
+  // These three say what the registered forms reach and stop there. Where they stop is the
+  // daily review, and the review is now on the board with a link from each of these cards,
+  // so naming it a third time in prose is the sentence the reader learns to skip.
+  take_profit: "every registered form **closes**, all of it, at one level.",
+  stop_loss: "every registered form **closes**, all of it, at a level fixed at entry.",
+  headwind: "the two registered forms are the **book-level** rule — scale down, halt, "
+          + "liquidate. Neither looks at an individual position.",
+  hedge: "nothing is registered at either level.",
+};
+
+const COLUMN_HEAD = {
+  idle: {name: "Idle", what: "nothing is open; these decide whether to look at all"},
+  armed: {name: "Armed", what: "a setup has fired; these decide what is bought and how much"},
+  open: {name: "Open", what: "a position is on; these are asked in this order, every day"},
+};
+
+/** The daily review, drawn once under the slots it serves.
+ *
+ * Not a fourth card: it is not a slot. It is the engine's own dynamic form of four of them,
+ * asked of every open position every snapshot, and it is the only path to an action other
+ * than closing — `Close`, `Reduce` and `Add`, with the reason recorded against whichever
+ * slot's reasoning produced it.
+ */
+function reviewBlock(all, planMode){
+  const field = all.flatMap(c => c.inputs || []).find(i => i.name === REVIEW_FIELD);
+  // Nothing to draw if the plan has taken over every slot the review serves: there is then
+  // no slot left on the board for it to be the dynamic form of.
+  if(!field) return "";
+  if(planMode && all.every(c => !REVIEW_SLOTS.has(c.key) || c.in_plan)) return "";
+  const mode = all.flatMap(c => c.inputs || []).find(i => i.name === MODE_FIELD);
+  return `<section class="review" id="reviewBlock">
+    <h4 class="comp-h">the daily review</h4>
+    ${mode ? `<div class="review-mode">${fieldHtml(mode)}</div>` : ""}
+    <p class="comp-contract">
+      <span class="comp-level" data-tip="The engine calls review(ctx, pos) for every open
+        position on every snapshot, after the registered forms of slots 3 to 6 have had their
+        say and before the next day is priced.">every open position · every snapshot</span>
+      <span class="comp-emits" data-tip="What the review may return. A struck-through action
+        is one the engine cannot execute yet.">${
+        ["close", "reduce", "add", "roll", "set_stop"].map(actionCode).join(" ")}</span>
+      <span class="comp-wired">${mark("the dynamic form of take profit, stop loss, "
+        + "headwind and positioning — **the only way to act in stages**, and the only way "
+        + "to decide size after entry. Written, not configured: it is code, so it is not a "
+        + "parameter and **cannot be swept or ablated**.")}</span></p>
+    <p class="comp-note" data-depends="${MODE_FIELD}=fixed">the exits are fixed ratios set at
+      entry. Switch to <b>a rule, reviewed daily</b> above to write one instead — the
+      holding cap and the days-to-expiry floor stay in force either way.</p>
+    ${fieldHtml(field)}
+    <p class="hint" data-depends="${MODE_FIELD}=${MODE_RULE}"><button type="button"
+      class="link" id="reviewHelp">hide the reference</button></p>
+    <pre class="help" id="reviewHelpBody" data-depends="${MODE_FIELD}=${MODE_RULE}"></pre>
+  </section>`;
+}
+
 function renderComponents(){
   const planMode = strategyMode() === "plan";
-  $("comps").innerHTML = (META.form || []).map(L => `
-    <section class="layer">
-      <header class="layer-head">
-        <span class="layer-n" data-tip="${esc(L.what)}">${L.layer}</span>
-      </header>
-      ${L.components.map(c => compBlock(c, planMode)).join("")}
-    </section>`).join("");
+  const all = (META.form || []).flatMap(L => L.components);
+  $("comps").innerHTML = ["idle", "armed", "open"].map(column => {
+    const here = all
+      .filter(c => (COLUMNS_BY_SLOT[c.key] || {}).column === column)
+      .sort((a, b) => ((COLUMNS_BY_SLOT[a.key] || {}).order || 0)
+                    - ((COLUMNS_BY_SLOT[b.key] || {}).order || 0));
+    const head = COLUMN_HEAD[column];
+    return `<section class="col" data-col="${column}">
+      <h3 class="col-head" data-tip="${esc(head.what)}">${head.name}</h3>
+      ${here.map(c => compBlock(c, planMode)).join("")
+        || `<p class="hint col-empty">no slot acts here yet</p>`}
+    </section>`;
+  }).join("")
+  // Across the board rather than in a column. It serves four slots standing in two of the
+  // three columns, and it is the one configuration that is **written**: Python in a 313 px
+  // column, beside a reference of its own, is not a thing anyone writes in.
+  + reviewBlock(all, planMode);
+  // A slot the mapping does not place would vanish silently, which is the one way a
+  // generated board can lie about the strategy.
+  const placed = new Set(Object.keys(COLUMNS_BY_SLOT));
+  const stray = all.filter(c => !placed.has(c.key));
+  if(stray.length)
+    notice(`the board has no column for ${stray.map(c => c.key).join(", ")}, so ${
+      stray.length === 1 ? "it is" : "they are"} not on screen. The lifecycle mapping in `
+      + `views/bench.js needs the new slot.`);
   bindFields();
+  paintFoot();
+}
+
+/** What this slot is, in the architecture's terms, and how much of it runs.
+ *
+ * A slot is not its control. The architecture gives each one a level, a moment it is asked,
+ * and an action vocabulary — a take profit may reduce, move the stop or ask for a hedge, not
+ * only close — and the composer showed a number box, which reads as the whole of what the
+ * slot is. The line says what it may emit and, underneath, what of that is actually wired, so
+ * the difference between the design and the engine is on the card rather than in a document.
+ */
+/** One action from the shared vocabulary.
+ *
+ * An action the engine cannot execute is struck through and carries the engine's own reason.
+ * It stays on the card: the architecture gives this slot that action, and a card that listed
+ * only what runs would read as though the slot were smaller than it is.
+ */
+function actionCode(text){
+  const missing = (META.actions || {}).missing || {};
+  const key = text.replace(/^request /, "").split(" ")[0].toLowerCase();
+  const why = missing[key];
+  return why
+    ? `<code class="not-built" data-tip="Not implemented: ${esc(why)}">${esc(text)}</code>`
+    : `<code>${esc(text)}</code>`;
+}
+
+function contractLine(slot, place){
+  if(!place.level) return "";
+  const action = actionCode;
+  return `<p class="comp-contract">
+    <span class="comp-level" data-tip="Where this slot acts, and when the engine asks it: ${
+      esc(place.when.replace(/\*\*/g, ""))}">${mark(place.level)}</span>
+    <span class="comp-emits" data-tip="What this slot may emit, from the architecture's
+      shared vocabulary. A struck-through action is one the engine cannot execute yet.">${
+      place.emits.map(action).join(" ")}</span>
+    <span class="comp-wired">${mark(REGISTERED_REACH[slot] || "")}</span>
+  </p>`;
 }
 
 function compBlock(c, planMode){
@@ -176,27 +413,61 @@ function compBlock(c, planMode){
   // refuses the pair, because a configuration where both are present cannot be resolved by
   // reading it. So picking a form replaces the field rather than sitting above it, and
   // says which field it replaced.
-  const byForm = !taken && PICKED[c.key];
-  // Only the field the form actually decides is replaced — the one named after the slot.
-  // The others in the same component stay: slot 4's holding cap and days-to-expiry floor
-  // are a safety net that applies whichever way the stop is expressed, and a rule written
-  // wrong must not be able to drag a position into expiry.
-  const replaced = byForm ? c.inputs.filter(i => i.name === c.key) : [];
-  const kept = byForm ? c.inputs.filter(i => i.name !== c.key) : c.inputs;
-  const body = taken
+  const choice = PICKED[c.key];
+  const off = !taken && choice === OFF;
+  const byForm = !taken && choice && choice !== OFF;
+  // Only the field the slot itself decides is replaced or switched off — the one named after
+  // it. The others in the same card stay: slot 4's holding cap and days-to-expiry floor are a
+  // safety net that applies whichever way the stop is expressed, and a rule written wrong — or
+  // a stop switched off — must not be able to drag a position into expiry.
+  const own = c.inputs.filter(i => i.name === c.key);
+  // Whether this slot's own setting is only asked while the exits are fixed ratios — which
+  // is to say, whether the daily review takes the slot over rather than merely adding to it.
+  const byMode = own.some(i => i.depends === `${MODE_FIELD}=fixed`);
+  const kept = (off || byForm ? c.inputs.filter(i => i.name !== c.key) : c.inputs)
+    .filter(i => i.name !== REVIEW_FIELD && i.name !== MODE_FIELD);
+  // Split, because only part of a card belongs to the mode. The picker and the notes about
+  // what decides this slot go away when the review takes it over; the fields that are left
+  // do not — slot 4's holding cap and days-to-expiry floor carry no `depends` on purpose,
+  // being the safety net that must hold whichever way the exit is expressed.
+  const notes = taken
     ? `<p class="comp-note">→ <code>${c.in_plan}</code></p>`
-    : !c.inputs.length && !byForm
-      ? `<p class="comp-note">${esc(shortGap(c))}</p>`
-      : `${byForm ? `<p class="comp-note">the <b>${esc(PICKED[c.key])}</b> form decides this${
-            replaced.length ? `, in place of ${replaced.map(i => esc(i.label)).join(" and ")}`
-                            : ""}</p>` : ""}
-         ${kept.length ? `<div class="fields">${kept.map(fieldHtml).join("")}</div>` : ""}`;
+    : !c.inputs.length && !byForm && !off
+      ? `<p class="comp-note">${gapHtml(c)}</p>`
+      : `${off ? `<p class="comp-note off">the engine is given no ${
+            own.map(i => esc(i.label)).join(" or ") || esc(c.name)} at all${kept.length
+              ? `. The settings below still apply` : ""}</p>` : ""}
+         ${byForm ? `<p class="comp-note">the <b>${esc(choice)}</b> rule decides this${
+            own.length ? `, in place of ${own.map(i => esc(i.label)).join(" and ")}`
+                       : ""}</p>` : ""}`;
+  const fields = taken || (!c.inputs.length && !byForm && !off) || !kept.length
+    ? ""
+    : `<div class="fields">${kept.map(fieldHtml).join("")}</div>`;
   const badge = STATUS_MARK[c.status]
     ? `<span class="comp-badge ${c.status}">${STATUS_MARK[c.status]}</span>` : "";
-  return `<article class="comp ${taken ? "by-plan" : ""}" data-comp="${c.key}">
-      <h4 class="comp-h" data-tip="${esc(c.role)}">${c.name}${badge}</h4>
-      ${taken ? "" : variantPicker(c.key)}
-      ${body}
+  const place = COLUMNS_BY_SLOT[c.key] || {};
+  return `<article class="comp ${taken ? "by-plan" : ""}${off ? " is-off" : ""}"
+      data-comp="${c.key}">
+      <h4 class="comp-h" data-tip="${esc(c.role)}">${place.order
+        ? `<span class="comp-order" data-tip="The order the engine asks the open-state slots
+             in, every snapshot a position is on — the architecture's open_state_order. Fixed
+             in the engine today.">${place.order}</span>`
+        : ""}${c.name}${badge}</h4>
+      ${contractLine(c.key, place)}
+      ${taken ? "" : byMode
+        // In rule mode the review decides this slot, so its forms go away with its field.
+        // Leaving the picker up showed a form selected on a slot the review had taken —
+        // two answers to one question, and nothing on screen saying which one ran.
+        ? `<div data-depends="${MODE_FIELD}=fixed">${variantPicker(c.key, own)}${notes}</div>`
+        : `${variantPicker(c.key, own)}${notes}`}
+      ${fields}
+      ${!taken && REVIEW_LACK[c.key] ? `<p class="comp-review">
+        <span data-depends="${MODE_FIELD}=fixed">to ${REVIEW_LACK[c.key]}, write it in
+          <button type="button" class="link" data-review>the daily review</button></span>
+        <span data-depends="${MODE_FIELD}=${MODE_RULE}">${byMode
+            ? `the daily review decides this, in place of a fixed ratio`
+            : `the daily review can also ${REVIEW_LACK[c.key]}`} —
+          <button type="button" class="link" data-review>go to it</button></span></p>` : ""}
     </article>`;
 }
 
@@ -213,47 +484,160 @@ function compBlock(c, planMode){
 
    The slot's own fields stay below. They are what runs when no form is picked, which is
    the behaviour every run before this had. */
-function variantPicker(slot){
+/* A dropdown of bare names made this choice blind: `premium`, `underlying`, `trailing` and
+   `drawdown` say nothing about what they do, and what each decides was shown **only after
+   it had been picked** — so the way to find out was to choose one and read, then choose
+   the next. The registry has a sentence for every one of them; the options carry it.
+
+   A list rather than a select for the same reason. Two or three options that each need a
+   line to be understood are not a dropdown's shape. */
+/** The value that means "this slot does nothing". Not the empty string, which already means
+ *  "the plain setting in this card decides it". */
+const OFF = "__off__";
+
+/** The field that is the daily review, and the slots it is the dynamic form of.
+ *
+ * The backend's own help says it: "define review(ctx, pos). Take profit (3), stop loss (4)
+ * and reduce/roll (5) all live here" — and `signals/review.py` adds 6, because taking half
+ * now and adding on confirmation is sizing decided while the trade is open rather than at
+ * entry. It was rendered as one input inside the headwind card, which is where the slot
+ * definition files it and not where it acts: a reader looking at take profit had no way to
+ * know that the only way to stage one is a code box two cards away.
+ *
+ * So it is drawn once, at the foot of the column whose slots it serves, and those slots point
+ * at it. The field name is unchanged, so the payload is the same.
+ */
+const REVIEW_FIELD = "review_code";
+
+/** The switch between a fixed ratio and a rule reviewed daily.
+ *
+ * It was a field on slot 3's card, where it reads as a property of taking profit. It is
+ * not: its `depends` governs slot 3's ratio, slot 4's ratio **and** the review box on slot
+ * 5, so flipping it on the take-profit card silently emptied two other cards. It is the
+ * review's own switch, so it is drawn on the review and the cards it governs say what it
+ * did to them. The field name and value are unchanged; it never reaches the backend —
+ * which fields are sent is the whole of its effect.
+ */
+const MODE_FIELD = "exit_mode";
+const MODE_RULE = "rule";
+
+/** What each of those slots cannot do by configuration — the reason the review exists for it.
+ *  Specific per slot, because "use the daily review" on four cards says nothing about why. */
+const REVIEW_LACK = {
+  take_profit: "take profit in stages, or move the level as the trade runs",
+  stop_loss: "stop out part of the position, or trail the stop",
+  headwind: "act on one position rather than the whole book",
+  position: "add to a position, or cut it back, after it is open",
+};
+const REVIEW_SLOTS = new Set(Object.keys(REVIEW_LACK));
+
+/** The slots the engine accepts **nothing** for.
+ *
+ * `ExitRule` says it in its own words: "`None` means no such exit, which is a real
+ * configuration rather than a stand-in" — of take profit and stop loss. Entry is not on the
+ * list and must not be: a strategy with no entry condition is not an ablation, it is a
+ * strategy that has been deleted, and offering it would be the composer inventing a
+ * configuration the engine will refuse.
+ *
+ * Declared here rather than read from the slot definition because the definition does not
+ * carry it. If it grows an `optional` flag this should read that instead, and this comment is
+ * the note to do it. */
+const CAN_BE_OFF = new Set(["take_profit", "stop_loss"]);
+
+/* ── what decides a slot: nothing, a level, or a rule ────────────────────────────
+ *
+ * Three kinds, one choice. The card used to offer two — the plain setting, or a registered
+ * rule — and **no way to switch the slot off**, which is the design plan's neutral variant:
+ * "A neutral variant is always available, so any slot can be switched off for an ablation
+ * from the card itself."
+ *
+ * The engine has taken `stop_loss: float | None` all along. A researcher who wanted to ask
+ * "what does this strategy do with no stop at all" had to work out that clearing a number box
+ * means something, and nothing on screen said so — so the question could not be asked, and it
+ * is one of the first questions there is.
+ *
+ * The rules come before the level deliberately. A level is one rule — "exit at this fraction
+ * of premium" — and listing it first made the registered rules read as an advanced option on
+ * top of the real control, when they are the thing a researcher is actually choosing between.
+ */
+function variantPicker(slot, own){
   const forms = (META.components || {})[slot] || [];
-  if(!forms.length) return "";
-  const chosen = PICKED[slot];
+  const canSwitchOff = own.length > 0 && CAN_BE_OFF.has(slot);
+  if(!forms.length && !canSwitchOff) return "";
+  const chosen = PICKED[slot] ?? "";
+  const option = (value, name, why, extra = "") => `
+    <label class="rule-opt${value === chosen ? " on" : ""}">
+      <input type="radio" name="pick_${slot}" value="${esc(value)}" data-pick="${slot}"
+             ${value === chosen ? "checked" : ""}>
+      <span class="rule-name">${esc(name)}${extra}</span>
+      <span class="rule-why">${mark(why)}</span>
+    </label>`;
+  const level = own.map(i => i.label).join(" and ");
   return `<div class="variant" data-slot="${slot}">
-    <label class="variant-lead" data-tip="A registered form decides this slot instead of
-      the field below. Which form is the research question; the platform offers them and
-      picks none.">form</label>
-    <select class="variant-pick" data-pick="${slot}">
-      <option value="">use the setting below</option>
-      ${forms.map(f => `<option value="${esc(f.name)}"${
-        f.name === chosen ? " selected" : ""}>${esc(f.name)}${
-        f.stateful ? " (keeps state)" : ""}</option>`).join("")}
-    </select>
-    ${chosen ? variantParams(slot, forms.find(f => f.name === chosen)) : ""}
+    <div class="rule-opts">
+      ${forms.map(f => option(f.name, f.name, f.describes || "",
+        f.stateful ? ` <span class="rule-tag">keeps state</span>` : "")).join("")}
+      ${own.length
+        ? option("", `a level`, `a single ${esc(level)}, set below — the simplest rule there is`)
+        : ""}
+      ${canSwitchOff
+        ? option(OFF, "not used",
+                 `the engine is given no ${esc(level)}. **This is a research question, not a `
+                 + `blank**: what the strategy does with nothing holding it`)
+        : ""}
+    </div>
+    ${chosen && chosen !== OFF
+      ? variantParams(slot, forms.find(f => f.name === chosen)) : ""}
   </div>`;
 }
 
 function variantParams(slot, form){
   if(!form) return "";
-  return `<p class="variant-why">${esc(form.describes)}</p>
-    <div class="fields">${form.params.map(p => {
+  return `<div class="fields">${form.params.map(p => {
       const id = `v_${slot}_${p.name}`;
-      const step = p.hi != null && p.hi <= 2 ? 0.05 : 1;
-      return `<div class="field">
-        <label for="${id}" data-tip="${esc(p.means)}${p.required ? "" : ". Optional — leave it blank and this form does without it."}">${esc(p.name)}${
-          p.required ? "" : ` <span class="unit">optional</span>`}</label>
-        <input type="number" id="${id}" data-param="${slot}:${p.name}"
-          value="${PARAMS[`${slot}:${p.name}`] ?? ""}" step="${step}"
+      const key = `${slot}:${p.name}`;
+      const held = PARAMS[key];
+      const label = `<label for="${id}" data-tip="${esc(p.means)}${
+        p.required ? "" : ". Optional — left blank, this form does without it."}">${
+        esc(p.name)}${p.required ? "" : ` <span class="unit">optional</span>`}</label>`;
+      // The control follows the parameter's **kind**, which the schema states. An earlier
+      // version rendered everything as a number box and guessed the step from the range —
+      // two things the interface was inventing about parameters it does not own, and the
+      // first boolean parameter registered would have had no way to be set at all.
+      if(p.kind === "bool")
+        return `<div class="field">${label}
+          <select id="${id}" data-param="${key}">
+            <option value=""${held == null || held === "" ? " selected" : ""}>${
+              p.required ? "choose" : "leave unset"}</option>
+            <option value="true"${held === "true" ? " selected" : ""}>true</option>
+            <option value="false"${held === "false" ? " selected" : ""}>false</option>
+          </select></div>`;
+      return `<div class="field">${label}
+        <input type="number" id="${id}" data-param="${key}"
+          value="${held ?? ""}" step="${p.kind === "int" ? "1" : "any"}"
           ${p.lo != null ? `min="${p.lo}"` : ""} ${p.hi != null ? `max="${p.hi}"` : ""}
-          placeholder="${p.required ? "required" : "optional"}">
+          placeholder="${p.required ? "required" : "optional"}${
+            p.lo != null && p.hi != null ? ` · ${p.lo} to ${p.hi}` : ""}">
       </div>`;
     }).join("")}</div>`;
 }
 
-/* A component with no controls says one line about why — one line, not a paragraph.
-   What is missing and how to find it lives in requirements.md and components.py. */
-function shortGap(c){
-  const g = (c.gap || "").replace(/\*\*/g, "");
-  const first = g.split(/[;.]/)[0] || "nothing configurable yet";
-  return first.length > 52 ? first.slice(0, 52) + "…" : first;
+/* A component with no controls says why it has none.
+ *
+ * It was cut at fifty-two characters with an ellipsis and no way to reach the rest, so slot 1
+ * read `rule-based classification (VIX / term structure / tr…` — a sentence that stops
+ * exactly where it was about to say what is missing. The first clause still leads, because a
+ * paragraph in a slot card is not read either; the rest is one click away on the card itself.
+ */
+function gapHtml(c){
+  const whole = (c.gap || "").replace(/\*\*/g, "").trim() || "nothing configurable yet";
+  const first = whole.split(/[;.]/)[0];
+  if(first.length >= whole.length - 1) return `<span>${esc(whole)}</span>`;
+  // The whole sentence **replaces** the opening clause rather than following it; appending
+  // printed the first clause twice, once on its own and once inside the rest.
+  return `<span class="gap-first" id="gapfirst_${esc(c.key)}">${esc(first)}.</span>
+    <button type="button" class="gap-more" data-gap="${esc(c.key)}">more</button>
+    <span class="gap-rest" id="gap_${esc(c.key)}" hidden>${esc(whole)}</span>`;
 }
 
 function fieldHtml(f){
@@ -293,20 +677,73 @@ function bindFields(){
   };
   $("comps").querySelectorAll("select").forEach(sel =>
     sel.addEventListener("change", apply));
+  for(const el of $("form").elements){
+    if(!el.name) continue;
+    el.addEventListener("input", markChanged);
+    el.addEventListener("change", markChanged);
+    // The foot shows what will be sent and what is blocking it; both are wrong the moment
+    // anything changes, and a payload that lags the form is worse than none.
+    el.addEventListener("input", paintFoot);
+    el.addEventListener("change", paintFoot);
+  }
 
   // Choosing a form rebuilds that slot so its parameters appear. Only the components are
   // redrawn, so nothing typed elsewhere in the form is lost.
-  $("comps").querySelectorAll("[data-pick]").forEach(sel =>
-    sel.addEventListener("change", () => {
-      const slot = sel.dataset.pick;
-      if(sel.value) PICKED[slot] = sel.value;
+  $("comps").querySelectorAll("[data-pick]").forEach(input =>
+    input.addEventListener("change", () => {
+      if(!input.checked) return;
+      const slot = input.dataset.pick;
+      // The empty string is "a level", which is the absence of a choice and so is stored as
+      // one; `OFF` is a choice and is stored.
+      if(input.value) PICKED[slot] = input.value;
       else delete PICKED[slot];
       renderComponents();
     }));
-  $("comps").querySelectorAll("[data-param]").forEach(input =>
-    input.addEventListener("input", () => {
-      PARAMS[input.dataset.param] = input.value;
+  // `change` as well as `input`, because a select fires only the former.
+  // The rest of a slot's gap, in place. A sentence cut mid-word with no way to finish it is
+  // worse than no sentence: the reader knows something was said and cannot read it.
+  $("comps").querySelectorAll("[data-gap]").forEach(button =>
+    button.addEventListener("click", () => {
+      const rest = $(`gap_${button.dataset.gap}`);
+      const first = $(`gapfirst_${button.dataset.gap}`);
+      if(!rest) return;
+      rest.hidden = false;
+      if(first) first.hidden = true;
+      button.hidden = true;
     }));
+  // A link from a card that cannot express the rule. In fixed mode the editor is hidden, so
+  // the link flips the mode first — otherwise it scrolls to an empty panel and the reader
+  // concludes the feature is missing, which is how this was found.
+  for(const link of $("comps").querySelectorAll("[data-review]"))
+    link.onclick = () => {
+      const sel = $(`f_${MODE_FIELD}`);
+      if(sel && sel.value !== MODE_RULE){
+        sel.value = MODE_RULE;
+        sel.dispatchEvent(new Event("change", {bubbles: true}));
+      }
+      const box = $(`f_${REVIEW_FIELD}`);
+      $("reviewBlock")?.scrollIntoView({block: "center", behavior: "smooth"});
+      box?.focus();
+    };
+  // The reference is **open**, not behind a disclosure. An empty box with no signature was
+  // read as the feature not existing, and a reader who does not know a `pos.mfe_so_far`
+  // exists has no reason to click something offering to describe it. The button puts it
+  // away once it is not needed; `depends` still shuts both in fixed mode.
+  //
+  // Assigned rather than added: this pass runs again on every mode change, and a second
+  // listener on the same button toggles twice — which looks exactly like a dead button.
+  const body = $("reviewHelpBody");
+  if(body) body.textContent = META.review_help || "";
+  const help = $("reviewHelp");
+  if(help) help.onclick = () => {
+    const shut = $("reviewBlock").classList.toggle("ref-off");
+    help.textContent = shut ? "show the reference" : "hide the reference";
+  };
+  $("comps").querySelectorAll("[data-param]").forEach(el => {
+    const keep = () => { PARAMS[el.dataset.param] = el.value; };
+    el.addEventListener("input", keep);
+    el.addEventListener("change", keep);
+  });
   apply();
 }
 
@@ -325,6 +762,17 @@ function switchMode(){
   }
   renderComponents();
 }
+for(const tab of document.querySelectorAll("[data-foot]"))
+  tab.addEventListener("click", () => {
+    for(const t of document.querySelectorAll("[data-foot]"))
+      t.classList.toggle("on", t === tab);
+    for(const body of document.querySelectorAll("[data-panel]"))
+      body.hidden = body.dataset.panel !== tab.dataset.foot;
+    // The contract reference is the one that costs a request, so it is fetched when it is
+    // first looked at rather than on every page load.
+    if(tab.dataset.foot === "contracts" && !$("toWhen").textContent) loadTradeoff();
+  });
+
 document.querySelectorAll("[data-strat]").forEach(tab =>
   tab.addEventListener("click", () => {
     document.querySelectorAll("[data-strat]").forEach(t => t.classList.toggle("on", t === tab));
@@ -333,19 +781,48 @@ document.querySelectorAll("[data-strat]").forEach(tab =>
 
 
 /* ── the form ── */
-function updateSpanHint(){
+/* How long this will take, from **what runs on this machine have actually taken**.
+ *
+ * It used to say four seconds a year, which is a number somebody once typed: against this
+ * record a five-year event-driven run takes thirteen seconds in the middle and the slowest
+ * tenth take twenty-eight, and individual runs have taken four hundred. An estimate wrong by
+ * a factor of two is worse than none — the reader stops believing the counter and starts
+ * wondering whether the page has hung — so the measured spread is quoted rather than a point,
+ * and where there is no measurement the hint says so.
+ */
+function expected(){
   const f = $("form");
   const a = new Date(f.start.value), b = new Date(f.end.value);
-  if(isNaN(a) || isNaN(b)) { $("spanHint").textContent = ""; return; }
+  if(isNaN(a) || isNaN(b)) return null;
   const years = (b - a) / 31557600000;
-  if(years <= 0){ $("spanHint").textContent = "the start is after the end, so this cannot run."; return; }
-  $("spanHint").textContent =
-    `about ${years.toFixed(1)} years, roughly ${Math.max(3, Math.round(years * 4))} seconds.`
-    + (years > 6 ? " While tuning, use a shorter range first and run the whole period once it is settled." : "");
+  if(years <= 0) return {years};
+  const pace = (META?.pace || {})[f.engine.value];
+  return pace
+    ? {years, middle: Math.max(2, Math.round(years * pace.median)),
+       high: Math.max(3, Math.round(years * pace.high)), runs: pace.runs}
+    : {years};
+}
+
+function updateSpanHint(){
+  const e = expected();
+  if(!e){ $("spanHint").textContent = ""; return; }
+  if(e.years <= 0){
+    $("spanHint").textContent = "the start is after the end, so this cannot run.";
+    return;
+  }
+  const span = `${e.years.toFixed(1)} years`;
+  const hint = $("spanHint");
+  hint.textContent = e.middle ? `${span} · about ${e.middle}s` : `${span}`;
+  hint.dataset.tip = e.middle
+    ? `Measured from the runs on this machine: half of the runs this long finish by ${e.middle
+      } seconds and the slowest tenth take over ${e.high}. What drives it is how many `
+      + `positions are open at once, not the span — the cost is in valuing them.`
+    : "How long a run of this length takes has not been measured on this machine yet.";
 }
 ["start","end"].forEach(n => $("form")[n].addEventListener("change", updateSpanHint));
 
 $("engine").addEventListener("change", updateEngineHint);
+$("engine").addEventListener("change", updateSpanHint);
 function updateEngineHint(){
   const driven = $("engine").value === "event_driven";
   $("concurrentWrap").hidden = !driven;
@@ -355,10 +832,8 @@ function updateEngineHint(){
   // is to wonder which engine is wrong, so it has to be said where the engine is chosen
   // rather than left to be guessed.
   $("engineHint").innerHTML = driven
-    ? "Steps day by day and knows how much money is in the account at any moment. <b>Has an equity curve, drawdown and Sharpe</b>, and is slower."
-      + "<br>Bound by the concurrency limit and by cash, so its <b>trade count is usually below the trade table's</b> — a signal can arrive with no room to open."
-    : "Computes each trade independently, two orders of magnitude faster, and good for sweeps. <b>No equity curve, so no drawdown and no Sharpe.</b>"
-      + "<br>Unconstrained by capital, it enumerates every qualifying opportunity, so its <b>trade count is an upper bound</b>, not what could actually be done.";
+    ? "Has an equity curve, drawdown and Sharpe. Slower, and its trade count is bound by cash and concurrency."
+    : "No equity curve, so no drawdown and no Sharpe. Its trade count is an upper bound, not what the capital allowed.";
 }
 updateEngineHint();
 
@@ -373,10 +848,39 @@ $("planHelp").addEventListener("click", () => {
    an error after pressing run, say so at once and switch the engine — this is not
    deciding for the user, these two options were always bound together. */
 
+/** Is this control inside something the current mode has switched off?
+ *
+ * `depends` has hidden these on screen since it was written, and the reason recorded beside
+ * it was that the backend cannot tell "not filled in" from "filled in but this method does
+ * not use it". **The payload never acted on it.** So choosing "a rule, reviewed daily" still
+ * sent the fixed take profit and stop loss sitting behind the switch, and the engine applied
+ * a review on top of the ratios rather than instead of them — with the ratios, being fixed
+ * and checked first, deciding most of the exits. The same in reverse: a review written and
+ * then switched back to fixed went on running, because `runner.py` compiles `review_code`
+ * whenever it is non-blank.
+ *
+ * Walks every ancestor rather than the nearest, because a hidden group can hold a field
+ * whose own `depends` is satisfied.
+ */
+function unusedHere(el){
+  for(let n = el.parentElement; n; n = n.parentElement)
+    if(n.hidden && n.hasAttribute("data-depends")) return true;
+  return false;
+}
+
 function formPayload(){
   const f = $("form"), o = {};
-  for(const el of f.elements) if(el.name) o[el.name] = el.value;
+  for(const el of f.elements) if(el.name && !unusedHere(el)) o[el.name] = el.value;
   o.strategy_mode = strategyMode();
+  // A slot switched off sends **nothing** for the field it decides, whatever a hidden box
+  // still holds. The backend reads an absent value as "no rule of this kind", which is what
+  // the choice means, and what the engine has always accepted.
+  for(const [slot, choice] of Object.entries(PICKED)){
+    if(choice !== OFF) continue;
+    const picker = document.querySelector(`[data-pick="${slot}"]`);
+    if(picker && unusedHere(picker)) continue;
+    o[slot] = "";
+  }
   // entry_mode is a real field on the form, so this no longer guesses from whether the
   // code box is empty.
   // Sizing: send only the parameters the current method uses. Sending all of them leaves
@@ -393,6 +897,12 @@ function formPayload(){
   // to the book rather than to one trade.
   const components = {};
   for(const [slot, variant] of Object.entries(PICKED)){
+    if(variant === OFF) continue;
+    // A form picked on a slot the daily review has taken over goes the same way as that
+    // slot's field: unsent. Two things answering one question is the configuration the
+    // engine refuses, and the one it cannot refuse is the one it never sees.
+    const picker = document.querySelector(`[data-pick="${slot}"]`);
+    if(picker && unusedHere(picker)) continue;
     const form = ((META.components || {})[slot] || []).find(f => f.name === variant);
     if(!form) continue;
     const params = {};
@@ -401,10 +911,15 @@ function formPayload(){
       // Blank means "not given". It is never filled in here: a component parameter is a
       // strategy choice, and the backend refuses a missing required one by name rather
       // than running on a number nobody chose.
-      if(raw !== "") params[p.name] = Number(raw);
+      if(raw === "") continue;
+      params[p.name] = p.kind === "bool" ? raw === "true" : Number(raw);
     }
     const spec = {variant, version: form.version, params};
-    if(slot === "headwind") o.risk = spec;
+    // Where a form goes is the backend's to say, not this file's. It used to read
+    // `if (slot === "headwind")`, which is a fact about what that slot means — exactly the
+    // kind of thing the interface must not know, because the day a slot's meaning is
+    // settled on professional grounds the interface should not need editing.
+    if(form.sends_to === "risk") o.risk = spec;
     else components[slot] = spec;
   }
   if(Object.keys(components).length) o.components = components;
@@ -417,14 +932,25 @@ function formPayload(){
  * after a round trip — but the backend still refuses, because this check can only see the
  * form and the backend sees the run. */
 function blockingReason(){
+  // **At least one time exit, always.** `ExitRule` refuses a configuration without one —
+  // "a position left to drag into expiry is a mechanism failure rather than a choice" — and
+  // with the stop switched off it is the only thing left closing a trade. Checked here so the
+  // answer arrives on the control rather than after a backtest.
+  const f = $("form");
+  const blank = name => !f.elements[name] || !String(f.elements[name].value).trim();
+  if(blank("hold_days") && blank("dte_floor"))
+    return "a holding cap or a days-to-expiry floor is required — with neither, a position "
+         + "that nothing else closes is dragged into expiry, which the engine refuses as a "
+         + "mechanism failure rather than a choice.";
   for(const [slot, variant] of Object.entries(PICKED)){
+    if(variant === OFF) continue;
     const form = ((META.components || {})[slot] || []).find(f => f.name === variant);
     if(!form) continue;
     for(const p of form.params){
       if(!p.required) continue;
       const raw = (PARAMS[`${slot}:${p.name}`] ?? "").toString().trim();
       if(raw === "")
-        return `${slot} is set to the ${variant} form, which needs ${p.name}: ${p.means}. `
+        return `${slot} is set to the ${variant} rule, which needs ${p.name}: ${p.means}. `
              + `It is a strategy choice, so the platform does not pick one.`;
     }
   }
@@ -434,6 +960,17 @@ function blockingReason(){
 
 /* ── running ── */
 $("run").addEventListener("click", runBacktest);
+
+/* ⌘↩ submits, which is the design plan's appendix and the one shortcut a composer needs:
+   the configuration is typed into a box, and reaching for the mouse to leave it is the step
+   the plan's "2 steps to submit" target does not have room for. Bound while the bench is on
+   screen rather than always — the same keystroke on the analysis page would run whatever the
+   form happened to hold. */
+bind("bench", [
+  {keys: ["mod+Enter"], does: "run this configuration",
+   where: () => !$("view-bench").hidden,
+   run: () => { if(!$("run").disabled) runBacktest(); }},
+]);
 async function runBacktest(){
   if(!LIVE){ notice("no local service, so nothing can be run."); return; }
   clearIssues();
@@ -445,17 +982,32 @@ async function runBacktest(){
   btn.disabled = true; btn.classList.add("busy"); btn.textContent = "running…";
   const note = document.createElement("div");
   note.className = "busy-note";
-  note.innerHTML = `<span class="spin"></span><span>Running. The first fetch is slower; after that it is cached.</span>`;
   $("issues").after(note);
 
   const t0 = performance.now();
+  // **A counter, not just a spinner.** A backtest can take well over a minute — the
+  // engine values American early exercise on a tree, day by day, for every open position
+  // — and a spinner that only spins cannot be told apart from a page that has hung. The
+  // elapsed time rising is the difference between waiting and worrying.
+  // The counter carries what it is counting towards, and says when it has passed it. A bare
+  // "26s so far" cannot be told from a request that will never return.
+  const e = expected();
+  const tick = () => {
+    const secs = (performance.now() - t0) / 1000;
+    const past = e && e.high && secs > e.high;
+    note.innerHTML = `<span class="spin"></span><span>Running — <b>${secs.toFixed(0)}s</b>${
+      e && e.middle ? ` of about ${e.middle}s` : ""}.${past
+        ? ` Longer than nine in ten runs of this length. The cost is in valuing open `
+          + `positions — an American contract is priced on a tree each day it is held — so a `
+          + `configuration that holds many at once takes far longer than its span suggests. `
+          + `It has not hung.`
+        : ""}</span>`;
+  };
+  tick();
+  const ticking = setInterval(tick, 1000);
   try{
     const data = await postJSON(API.run, formPayload());
     checkContract(data);
-    RUNS.push(data);
-    BASE = BASE ?? data.id;
-    CURRENT = data.id;
-    paintRuns();
     if(!data.rows.length){
       // No trades is a fact about the configuration, read here where the configuration
       // is. Sending the reader to an analysis page with nothing on it would be a worse
@@ -473,10 +1025,69 @@ async function runBacktest(){
     // the browser without knowing where is worse than a crash.
     notice(e.detail ? `${e.message}\n\n${e.detail}` : e.message);
   }finally{
+    clearInterval(ticking);
     note.remove();
     btn.disabled = false; btn.classList.remove("busy"); btn.textContent = "run";
-    $("runHint").textContent = `last run took ${((performance.now()-t0)/1000).toFixed(1)} seconds.`;
+    const took = (performance.now() - t0) / 1000;
+    const e2 = expected();
+    $("runHint").textContent = `that run took ${took.toFixed(1)}s`
+      + (e2 && e2.middle ? ` against about ${e2.middle}s expected.` : ".");
   }
+}
+
+/* ── the panel along the foot ────────────────────────────────────────────────────
+ *
+ * The addendum's composer has one: Preview, Validation, YAML. Two of the three are
+ * answerable now and the third is not — the preview needs a `POST /preview` the service does
+ * not have, so that tab says what it would show and what it is waiting on rather than being
+ * absent, which would leave the reader thinking the plan asked for less than it did.
+ *
+ * "What will be sent" rather than YAML: the thing a researcher needs to see is the exact body
+ * of the request, and this service takes JSON. A YAML rendering would be a second format to
+ * keep true for no gain.
+ */
+function paintFoot(){
+  const blocked = blockingReason();
+  const host = $("footValidation");
+  if(host)
+    host.innerHTML = blocked
+      ? `<p class="validation bad">${mark(blocked)}</p>`
+      : `<p class="validation ok">Nothing is blocking this run. The backend checks again
+         when it arrives — this side can only see the form.</p>`;
+  const payload = $("payloadView");
+  if(payload) payload.textContent = JSON.stringify(formPayload(), null, 2);
+  const run = $("runSum");
+  if(run){
+    const f = $("form");
+    run.textContent = `${f.symbol.value} · ${f.start.value} → ${f.end.value} · ${
+      f.engine.value === "event_driven" ? "event driven" : "trade table"}`;
+  }
+}
+
+/** The gaps the settings column names, each from the backend's own list rather than written
+ *  here — a sentence about what is not built goes stale the moment it is. */
+function paintSettingGaps(){
+  const gaps = META.gaps || [];
+  const find = (...words) => gaps.find(g =>
+    words.every(w => String(g).toLowerCase().includes(w))) || "";
+  const put = (id, text, fallback) => {
+    const el = $(id);
+    if(el) el.innerHTML = mark(text || fallback);
+  };
+  put("lifecycleGap", find("lifecycle"),
+      "the open-state order, the conflict policy and the re-entry policy are settings the "
+      + "architecture names; the engine fixes them, so there is nothing here to set.");
+  put("timingGap", find("timing"),
+      "the signal snapshot time and the fill latency are set once per configuration. The "
+      + "engine decides at the close and fills on the next session.");
+  put("dataGap", find("data"),
+      "there is one chain and no snapshot id to choose between, so there is nothing to "
+      + "pick. The run's own page says which data it stood on.");
+  put("bookGap", find("hedge") || find("portfolio"),
+      "premium budgets, Greek limits and a scenario loss limit exist in the engine and are "
+      + "not wired to this form.");
+  const data = $("dataSum");
+  if(data) data.textContent = "one chain";
 }
 
 /* ── the contract-selection reference ─────────────────────
@@ -536,98 +1147,9 @@ function gridTable(meta, g){
     }</tr>`).join("")}</tbody></table></div>`;
 }
 
-$("tradeoffRef").addEventListener("toggle", e => {
-  if(e.target.open && !$("toWhen").textContent) loadTradeoff();
-});
 
-/* ── describing a configuration ───────────────────────────
-   **One reading of the stored config, used by every place that describes a run.**
 
-   There were two, and both had gone stale: each read `select.dte` and `select.moneyness`,
-   neither of which the backend writes — selection has been a feasible region
-   (`dte_lo`/`dte_hi`, a delta band, a ranking target) for some time. The run history
-   printed "undefinedDTE" and the same string was handed to Claude as the strategy's
-   description. Nothing raised, because reading an absent field is not an error in JS; it
-   just renders.
-
-   Absence shows as "—" and never as `undefined`, and the field names are declared in
-   CONTRACT so that check_wiring fails on the next rename instead of the screen. */
-function describeConfig(c){
-  const s = c.select || {}, x = c.exit || {};
-  const band = (lo, hi, fmt = v => v) =>
-    lo != null && hi != null ? `${fmt(lo)}–${fmt(hi)}`
-      : lo != null ? `≥${fmt(lo)}` : hi != null ? `≤${fmt(hi)}` : null;
-  // The target delta is the ranking objective inside the band; both can be present, and
-  // showing only one of them hides half of how the contract was chosen.
-  const deltaBand = band(s.delta_lo, s.delta_hi, v => Number(v).toFixed(2));
-  const strike = [deltaBand ? `Δ${deltaBand}` : null,
-                  s.delta != null ? `→Δ${Number(s.delta).toFixed(2)}` : null,
-                  s.moneyness != null ? `${(s.moneyness*100).toFixed(0)}% OTM` : null]
-                 .filter(Boolean).join(" ") || "any strike";
-  return {
-    engine: c.engine === "event_driven" ? "event driven" : "trade table",
-    entry: typeof c.entry === "string" ? c.entry
-      : c.plan_code ? "(a plan function)" : "(custom code)",
-    right: s.right || "—",
-    dte: band(s.dte_lo, s.dte_hi) ? `${band(s.dte_lo, s.dte_hi)} DTE` : "any tenor",
-    strike,
-    // Both are real constraints on what could be bought, and in live trading the spread
-    // is often the binding one — worth a place in the one-line summary.
-    spread: s.max_spread != null ? `spread ≤${s.max_spread}` : null,
-    openInterest: s.min_open_interest != null ? `OI ≥${s.min_open_interest}` : null,
-    takeProfit: x.take_profit ?? null,
-    stopLoss: x.stop_loss ?? null,
-    holdDays: x.hold_days ?? null,
-    dteFloor: x.dte_floor ?? null,
-    sizing: c.sizing?.method || null,
-    // A slot filled by a registered form decides that slot instead of the matching exit
-    // field, so a summary that omits it describes a different run from the one that ran.
-    components: Object.entries(c.components || {}).map(([slot, one]) =>
-      `${slot}=${one.variant}${one.version != null ? "@" + one.version : ""}`),
-    risk: c.risk?.variant ? `risk=${c.risk.variant}` : null,
-  };
-}
-
-/* ── the run history ── */
-function cfgLine(c){
-  const d = describeConfig(c);
-  const num = v => v == null ? "—" : v;
-  return [`[${d.engine}] ${d.entry}`,
-          `${d.right} ${d.dte} ${d.strike}`,
-          d.spread, d.openInterest,
-          `TP${num(d.takeProfit)} SL${num(d.stopLoss)} hold${num(d.holdDays)}`,
-          ...d.components, d.risk].filter(Boolean).join(" · ");
-}
-function paintRuns(){
-  $("runsSec").hidden = RUNS.length === 0;
-  const base = RUNS.find(r => r.id === BASE);
-  const baseSum = base ? stats(base.rows).sum : null;
-  $("runs").innerHTML = `<thead><tr>
-      <th>#</th><th style="text-align:left">configuration</th><th>trades</th><th>win rate</th>
-      <th>net P&L</th><th>mean</th><th>baseline</th></tr></thead><tbody>` +
-    RUNS.map(r => {
-      const s = stats(r.rows);
-      const d = (baseSum !== null && r.id !== BASE) ? s.sum - baseSum : null;
-      return `<tr data-run="${r.id}" class="${r.id === CURRENT ? "on" : ""}">
-        <td class="n"><a class="run-link" href="#/runs/${r.id}"
-          data-tip="Open run ${r.id} on the analysis page.">${r.id}</a></td>
-        <td><span class="cfg" data-tip="${esc(cfgLine(r.config))}">${cfgLine(r.config)}</span></td>
-        <td class="n">${s.n}</td>
-        <td class="n">${s.n ? pct(s.win) : "—"}</td>
-        <td class="n ${sgn(s.sum)}">${s.n ? money(s.sum) : "—"}
-          ${d !== null ? `<span class="delta ${sgn(d)}">${money(d)} vs baseline</span>` : ""}</td>
-        <td class="n ${sgn(s.mean)}">${s.n ? money(s.mean) : "—"}</td>
-        <td><button class="pin ${r.id === BASE ? "on" : ""}" data-pin="${r.id}">
-          ${r.id === BASE ? "baseline" : "set as baseline"}</button></td></tr>`;
-    }).join("") + `</tbody>`;
-  // The whole row opens the run, not only its number: a table of results where most of
-  // each row is dead is a table people click twice before learning where to aim.
-  $("runs").querySelectorAll("tbody tr").forEach(tr =>
-    tr.addEventListener("click", e => {
-      if(e.target.closest("[data-pin]")) return;      // pinning is not navigating
-      if(e.target.closest(".run-link")) return;       // the link does it itself
-      go(`/runs/${tr.dataset.run}`);
-    }));
-  $("runs").querySelectorAll(".pin").forEach(b =>
-    b.addEventListener("click", e => { e.stopPropagation(); BASE = +b.dataset.pin; paintRuns(); }));
-}
+/* The list of runs made in this session is gone from here. It was a second, smaller
+   experiment log — the same rows, grouped by nothing, lost on reload — and the real one now
+   exists and holds every run under the idea that owns it. A composer that also lists results
+   is the shape the design plan separates in its sections 4 and 5. */
