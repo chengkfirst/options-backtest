@@ -196,3 +196,78 @@ ever have caught it.
 "worth learning" entry carries its file, what we would change, a rough cost, and a plan entry
 where one is defensible — six entries say "no plan entry directly" rather than inventing one.
 
+---
+
+## Phase 3B — The deepening loop — BLOCKED
+
+**Not run.** Not because it was judged unnecessary — because the time it needs is gone.
+
+The plan's own 0.1 says this phase should take most of a run, and this run is stage 5 of six
+in a longer unattended job. A session limit was hit during Phase 3 and cost roughly two
+hours, which both benchmark batches then had to be resumed through. Eight rounds of
+pick → investigate → challenge → record, at three agents a round, could not be started with
+the discussion brief and the handoff still owed.
+
+**What a person needs to know.** The brief in Phase 6 is therefore written at
+**benchmark depth, not deep-dive depth**, and says so in its own section 2. The questions the
+loop would have taken are already named and ready — the plan's own examples are the right
+ones, and the benchmark sharpened two of them:
+
+1. How an honest automated research loop would sit on `research/holdout.py` and
+   `research/tracker.py`, given that RD-Agent's judges on its test period and deflates
+   nothing by its tracked loop count.
+2. Which spot is authoritative when the vendor's chain is snapped 14 minutes before the
+   close — and whether the missing guard is a guard or a configuration field.
+3. The smallest multi-leg design that keeps `TradeRecord`'s guarantees.
+4. What an MCP server for this platform should and must not expose.
+
+## Phase 4 — The `/explore` debate — BLOCKED
+
+Same reason. Its output feeds section 5 of the brief, so the brief derives its five
+directions from the benchmark, the digest and `plan.md` instead, **and marks them as not
+having been argued against by a sceptic**. That label is the point: a direction that has
+survived no opposition is a preference, and the brief says so rather than presenting five
+scored candidates as though they had been contested.
+
+## Phase 5 — The revised research plan — BLOCKED
+
+`docs/research/plan.md` is unchanged from its 2026-11-06 draft. What the benchmark would
+change about it is in the brief's decisions instead, which is where the human will act on it
+— but the plan itself still orders its entries by the reasoning it was written with, and a
+reader should take the brief as the newer document where they disagree.
+
+## Phase 6 — The discussion brief — DONE
+
+`docs/research/discussion-2026-11-06.md`, 390 lines (the cap is 400), seven sections exactly
+as 6.2 specifies. Written by `research-lead`, which is the agent whose standing instruction
+is not to be agreeable, and it was not:
+
+- It opens by saying the platform **has answered nothing** — `docs/findings/` holds two
+  audits and zero research results, and all plan entries are unrun. Verified: the directory
+  holds `audit-adf0495.md`, `baseline-change-2026-11-06.md` and a README.
+- It says three gates hold everything, all three cheap and none needing development: the
+  strategy thesis, the hold-out (**`plan.md:725` records it `NOT FIXED`** — verified), and
+  whether real option data is bought.
+- It **refuses the full automated research loop** and recommends only the honesty machinery
+  behind it — a write-once hold-out receipt and a cross-session trial ledger — on the grounds
+  that RD-Agent demonstrates the failure of the thing itself.
+- It recommends **$199 and not $799**, because the cheap purchase is a test of the adapter
+  path rather than a data purchase.
+- It names the one place it thinks a **guard** is missing rather than a question unasked: the
+  authoritative spot, when the chain is snapped before the close.
+- It nominates its own weakest item for argument — that a deflated Sharpe is the wrong tool
+  and an anytime-valid e-process the right one — saying plainly that it rests on one abstract
+  read, cannot be tested because there is no return stream yet, and should be killed in the
+  backlog if the project will in practice test each candidate once and stop.
+
+It also carries both of the run's health warnings into the document the human will act from:
+the benchmark's cross-check did not run, and the "name a residual" recommendation was false
+about us.
+
+**6.1's reviewer pass was run** — see below. **6.4's Chinese summary** is in the final message
+of the session, not in any file, as 6.4 requires.
+
+Verified: every checkable claim in the brief spot-checked against the code
+(`attribution.py:47` has the residual; `plan.md:725` says `NOT FIXED`; `docs/findings/` holds
+two audits); seven sections; 390 lines; `check_language` → `OK  291 files, all English`.
+
