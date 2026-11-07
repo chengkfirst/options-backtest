@@ -65,6 +65,8 @@ const DIMENSIONS = [
    'What does the first run take: installing, getting data, writing a configuration? Is there an interface beyond a script? What does a result look like, and does it say what it assumed? How good are the error messages when the data is wrong?'],
   ['licence and health',
    'The licence, exactly, and whether it permits what we would want. Then: last commit, release cadence, open issue count, number of contributors, whether tests exist and run in CI. A project worth learning from and a project worth depending on are different questions.'],
+  ['AI and agent integration',
+   'Does the project expose itself to LLM agents at all -- an MCP server, agent skills, a tool-calling interface, a documented API meant for a model rather than a person? Does it run an automated research loop, where a model proposes a hypothesis, an experiment runs, and the result is read back? If it does, the question that matters most: **which data does that loop see when it judges a result** -- the training split, a validation split, or the test period? Is the number of trials counted, and is anything deflated or corrected for the search? What stops the loop selecting on noise? Quote the file that decides it. A loop that reads its test period to choose its next hypothesis is a search whose reported result is in-sample, however the code is arranged.'],
 ]
 
 const CLAIMS_SCHEMA = {
@@ -175,6 +177,14 @@ if (!us) {
 const repos = (args && args.repos) || []
 const date = (args && args.date) || null
 
+/* Leads: `{ "<repo>": ["<claim to check, with the file to start from>"] }`.
+ *
+ * A lead is a hypothesis from a skim, **never a conclusion**. Each one comes back
+ * confirmed with a file and a line, corrected, or reported wrong -- and an unverified
+ * lead does not reach the report at all. The distinction is the whole value: a skim
+ * that is written up as a finding is how a guess acquires a citation. */
+const leads = (args && args.leads) || {}
+
 if (!repos.length || !date) {
   log('Nothing to do: pass { repos: [github urls], date: "YYYY-MM-DD" }. The date is an argument because a workflow script cannot read the clock.')
   return { error: 'repos and date are both required', got: { repos: repos.length, date } }
@@ -195,7 +205,17 @@ const perRepo = await pipeline(
 First, clone it read-only into a scratch directory OUTSIDE this project:
 
     mkdir -p ${SCRATCH}
-    git clone --depth 1 ${repo} ${SCRATCH}/<repo-name>
+    git clone --depth 1 --filter=blob:limit=1m ${repo} ${SCRATCH}/<repo-name>
+
+For a repository with a very large tree -- more than about 3,000 files -- add a sparse
+checkout of only what the dimensions need, which is normally the documentation, the
+backtest or engine package, and the data and model packages:
+
+    git -C ${SCRATCH}/<repo-name> sparse-checkout set docs <engine-pkg> <data-pkg>
+
+**Record in your report what you did not check out.** A dimension answered from a partial
+tree is answered from a partial tree, and saying so is the difference between a limit and
+a mistake.
 
 (If another agent has already cloned it, use the existing clone. Do not pull, do not
 install, do not run.)
@@ -206,6 +226,12 @@ The questions for this dimension:
 
 ${questions}
 
+${(leads[repo] || []).length ? `**Leads to check for this repository.** These are guesses from a skim, not
+findings. For each one: confirm it with a file and a line, correct it, or report it as
+wrong. Do not repeat one back unverified.
+
+${(leads[repo] || []).map((l, i) => `  ${i + 1}. ${l}`).join('\n')}
+` : ''}
 For context, this is what the project you are comparing against does — use it to judge
 what is worth reporting, and to fill in better_than_ours:
 
@@ -222,8 +248,17 @@ guessing at it.`,
   // Stage 2 — a different agent re-opens each cited file. The analyst does not get to
   // verify its own claims; that is the whole point of the stage.
   (results, repo) => {
-    const claims = (results || []).filter(Boolean).flatMap(
+    const analyses = (results || []).filter(Boolean)
+    const claims = analyses.flatMap(
       (r) => (r.claims || []).map((c) => ({ ...c, dimension: r.dimension })))
+    // **Carried, because it used to be dropped here.** The first real run's synthesis
+    // asked for a closing "what the comparison could not establish" section and had
+    // nothing to draw on -- not because the analysts said nothing, but because this
+    // stage rebuilt its payload out of `claims` alone and never forwarded the field.
+    // A section that can only ever be empty is worse than no section: it reads as
+    // "nothing was unclear".
+    const unknown = analyses.flatMap(
+      (r) => (r.could_not_determine || []).map((q) => ({ dimension: r.dimension, q })))
     if (!claims.length) {
       return { repo, claims: [], checked: [], note: 'no claims were produced for this repository' }
     }
@@ -232,6 +267,19 @@ guessing at it.`,
 ${SCRATCH}. You did not make these claims and you are not defending them.
 
 ${NEVER}
+
+**A claim has two halves, and the second one has been wrong.** The claim itself is about
+their repository; better_than_ours is about **this** one. Check both. A verifier that only
+opens the cited file in the clone can confirm "they do X" and wave through "which we do
+not" -- and that happened: an analyst reported that a named unexplained residual was a
+discipline this project lacked, and backtest/accounting/attribution.py:47 already reads
+COMPONENTS = ("delta", "gamma", "vega", "theta", "residual"), with a trust threshold at
+:36-45 the claim never mentioned. A "better than ours" judgement is a claim about two
+codebases, and only one of them was being read.
+
+So for every claim whose better_than_ours is "they" or "we", **also open the corresponding
+file in this repository** and say what it actually does. If the comparison is wrong, the
+verdict is overstated or wrong even when the half about their repository is exactly right.
 
 For each claim: open the file it cites and decide whether the file shows what the claim
 says. Verdicts:
@@ -242,6 +290,9 @@ says. Verdicts:
 - "wrong" — the file does not show it, or shows the opposite.
 - "file_not_found" — the path does not exist in the clone.
 
+A claim that is true about them and false about us is **not** confirmed. Say which
+half failed.
+
 Be willing to return "wrong". A cross-check that confirms everything has told the reader
 nothing, and a benchmark's claims are the only thing in it with any value.
 
@@ -249,7 +300,47 @@ The claims:
 
 ${JSON.stringify(claims, null, 1).slice(0, 20000)}`,
       { label: `cross-check ${repo.split('/').pop()}`, phase: 'Cross-check', schema: VERDICT_SCHEMA },
-    ).then((v) => ({ repo, claims, checked: (v && v.checked) || [] }))
+    ).then((v) => ({ repo, checked: (v && v.checked) || [], claims, unknown }))
+  },
+
+  // Stage 3 -- one file per repository, written before the synthesis reads any of them.
+  // The synthesis is a comparison and is rewritten whenever the set of repositories
+  // changes; these are the record of what was found in one project, and a later run can
+  // compare against them rather than starting over. They are also where a partial
+  // checkout gets declared.
+  (verdict, repo) => {
+    if (!verdict || !verdict.claims || !verdict.claims.length) return verdict
+    const slug = repo.split('/').pop().replace(/[^a-zA-Z0-9._-]/g, '-')
+    return agent(
+      `Write what was found about ${repo} to \`docs/research/benchmarks/${slug}.md\`.
+
+This is the per-repository record, not the comparison — write what **this** project does
+and why, so that a later benchmark can compare against it rather than reading the
+repository again from scratch.
+
+Sections, in this order:
+
+  # ${slug}
+  **Repository:** ${repo} · **Read on:** ${date} · **Licence:** <as read from its own LICENSE file>
+  ## What it is, in a paragraph
+  ## The eight dimensions
+  One subsection each, with the file behind every claim. Where a dimension could not be
+  answered, say so and say what would answer it.
+  ## What was not checked out
+  If the clone was partial, name the directories that were left out. A dimension answered
+  from a partial tree is answered from a partial tree.
+  ## Claims that did not survive the cross-check
+  Every verdict that came back overstated, wrong or file_not_found, with what the file
+  actually shows. **This section is the point of keeping these files**: it is the record
+  of what looked true and was not, and it is what stops the next run believing it.
+
+Everything in English. Cite a file for every claim; leave out anything you cannot cite.
+
+The claims and their verdicts:
+
+${JSON.stringify(verdict, null, 1).slice(0, 40000)}`,
+      { label: `record ${slug}`, phase: 'Cross-check' },
+    ).then(() => verdict)
   },
 )
 
@@ -305,7 +396,22 @@ ${JSON.stringify(us).slice(0, 8000)}
 
 This is what was found and cross-checked:
 
-${JSON.stringify(kept, null, 1).slice(0, 60000)}`,
+${JSON.stringify(kept.map((r) => ({
+    repo: r.repo,
+    // **Verdicts first, deliberately.** They used to serialise after the raw claims,
+    // and the 60,000-character slice then cut the payload mid-way through the first
+    // repository's claims -- so the synthesis received 74 claims, none of them with a
+    // verdict, and could not tell a cross-checked claim from an unchecked one. It
+    // graded the whole report down to single-reader rather than pretend, which was the
+    // right answer to the wrong situation. Order the payload so the cheap, decisive
+    // part survives truncation and the bulky part is what gets cut.
+    checked: r.checked,
+    unknown: r.unknown,
+    claims: r.claims,
+  })), null, 1).slice(0, 60000)}
+
+**If this payload looks truncated, say so in the report and grade the affected claims
+down.** A claim with no verdict beside it was not cross-checked, whatever the reason.`,
   { label: `write benchmark-${date}.md`, phase: 'Synthesise' },
 )
 
