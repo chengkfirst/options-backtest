@@ -248,8 +248,17 @@ guessing at it.`,
   // Stage 2 — a different agent re-opens each cited file. The analyst does not get to
   // verify its own claims; that is the whole point of the stage.
   (results, repo) => {
-    const claims = (results || []).filter(Boolean).flatMap(
+    const analyses = (results || []).filter(Boolean)
+    const claims = analyses.flatMap(
       (r) => (r.claims || []).map((c) => ({ ...c, dimension: r.dimension })))
+    // **Carried, because it used to be dropped here.** The first real run's synthesis
+    // asked for a closing "what the comparison could not establish" section and had
+    // nothing to draw on -- not because the analysts said nothing, but because this
+    // stage rebuilt its payload out of `claims` alone and never forwarded the field.
+    // A section that can only ever be empty is worse than no section: it reads as
+    // "nothing was unclear".
+    const unknown = analyses.flatMap(
+      (r) => (r.could_not_determine || []).map((q) => ({ dimension: r.dimension, q })))
     if (!claims.length) {
       return { repo, claims: [], checked: [], note: 'no claims were produced for this repository' }
     }
@@ -258,6 +267,19 @@ guessing at it.`,
 ${SCRATCH}. You did not make these claims and you are not defending them.
 
 ${NEVER}
+
+**A claim has two halves, and the second one has been wrong.** The claim itself is about
+their repository; better_than_ours is about **this** one. Check both. A verifier that only
+opens the cited file in the clone can confirm "they do X" and wave through "which we do
+not" -- and that happened: an analyst reported that a named unexplained residual was a
+discipline this project lacked, and backtest/accounting/attribution.py:47 already reads
+COMPONENTS = ("delta", "gamma", "vega", "theta", "residual"), with a trust threshold at
+:36-45 the claim never mentioned. A "better than ours" judgement is a claim about two
+codebases, and only one of them was being read.
+
+So for every claim whose better_than_ours is "they" or "we", **also open the corresponding
+file in this repository** and say what it actually does. If the comparison is wrong, the
+verdict is overstated or wrong even when the half about their repository is exactly right.
 
 For each claim: open the file it cites and decide whether the file shows what the claim
 says. Verdicts:
@@ -268,6 +290,9 @@ says. Verdicts:
 - "wrong" — the file does not show it, or shows the opposite.
 - "file_not_found" — the path does not exist in the clone.
 
+A claim that is true about them and false about us is **not** confirmed. Say which
+half failed.
+
 Be willing to return "wrong". A cross-check that confirms everything has told the reader
 nothing, and a benchmark's claims are the only thing in it with any value.
 
@@ -275,7 +300,7 @@ The claims:
 
 ${JSON.stringify(claims, null, 1).slice(0, 20000)}`,
       { label: `cross-check ${repo.split('/').pop()}`, phase: 'Cross-check', schema: VERDICT_SCHEMA },
-    ).then((v) => ({ repo, claims, checked: (v && v.checked) || [] }))
+    ).then((v) => ({ repo, checked: (v && v.checked) || [], claims, unknown }))
   },
 
   // Stage 3 -- one file per repository, written before the synthesis reads any of them.
@@ -371,7 +396,22 @@ ${JSON.stringify(us).slice(0, 8000)}
 
 This is what was found and cross-checked:
 
-${JSON.stringify(kept, null, 1).slice(0, 60000)}`,
+${JSON.stringify(kept.map((r) => ({
+    repo: r.repo,
+    // **Verdicts first, deliberately.** They used to serialise after the raw claims,
+    // and the 60,000-character slice then cut the payload mid-way through the first
+    // repository's claims -- so the synthesis received 74 claims, none of them with a
+    // verdict, and could not tell a cross-checked claim from an unchecked one. It
+    // graded the whole report down to single-reader rather than pretend, which was the
+    // right answer to the wrong situation. Order the payload so the cheap, decisive
+    // part survives truncation and the bulky part is what gets cut.
+    checked: r.checked,
+    unknown: r.unknown,
+    claims: r.claims,
+  })), null, 1).slice(0, 60000)}
+
+**If this payload looks truncated, say so in the report and grade the affected claims
+down.** A claim with no verdict beside it was not cross-checked, whatever the reason.`,
   { label: `write benchmark-${date}.md`, phase: 'Synthesise' },
 )
 

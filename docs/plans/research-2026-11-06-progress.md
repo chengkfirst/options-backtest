@@ -126,3 +126,73 @@ had just read them. Duplicating the choice would have been a second, worse-infor
 
 Verified: `tools/check_language.py` → `OK  286 files, all English`.
 
+---
+
+## Phase 3 — The benchmark — DONE, in two batches, with its own faults named
+
+**All six fixed repositories were read**: optopsy, RD-Agent, nautilus_trader, qlib (batch 1)
+and gs-quant, ArcticDB (batch 2). 56 agents across the two runs.
+
+*A correction, recorded because it was the human's and not mine.* The first run was launched
+with **four** repositories, dropping gs-quant and ArcticDB as a scope reduction I had decided
+on and had not yet written down. The human caught it before I recorded it. The second batch
+was run with their leads from 3.2 and both syntheses merged into one, which is what should
+have happened from the start — a reduction nobody has been told about is not a reduction, it
+is an omission.
+
+**Both runs hit a session limit mid-flight** — 12 agents lost in batch 1, 4 in batch 2 — and
+both were **resumed from cache** rather than re-run, so 39 completed analyses replayed and
+only the failed agents ran again.
+
+### The benchmark's most important finding is about the benchmark
+
+Both reports open by declaring that **this run's cross-check did not happen**, and they are
+right. The merged report carries it at the top: **0 of 48 dimensions are twice-verified.**
+Every claim is graded `[re-opened]` / `[record]` / `[one reader]`, and where the two reports
+graded the same claim differently the **weaker** grade was kept.
+
+That is the behaviour wanted. A report that had quietly presented single-reader claims as
+cross-checked would have been worse than no report, and the thing that made the difference
+was that the workflow asks for verdicts explicitly, so their absence was visible.
+
+### Four faults in the workflow I wrote, all found by running it
+
+| Fault | What it did | Fixed |
+|---|---|---|
+| `could_not_determine` dropped between stages | stage 2 rebuilt its payload from `claims` alone, so the closing "what could not be established" section **could only ever be empty** — and an empty section reads as "nothing was unclear" | carried through as `unknown` |
+| truncation ordering | `claims` serialised **before** `checked`, and a 60,000-character slice cut the payload mid-way through the first repository — so the synthesis got 74 claims and no verdicts | verdicts and unknowns serialise first; the bulky part is what gets cut, and the prompt says to grade down if it looks truncated |
+| the cross-check read only their code | a claim has two halves — `claim` about them, `better_than_ours` about **us** — and the verifier only ever opened the cited file in the clone. So "they do X, which we do not" could be confirmed with the second half unread | the verifier is now told to open the corresponding file **here** for any `better_than_ours` of `they` or `we`, and that a claim true about them and false about us is not `confirmed` |
+| ArcticDB claims mislabelled by dimension | recorded, not fixed — it is in the merged report | — |
+
+**The fourth fault is not hypothetical, and finding it is the single best thing this
+benchmark produced.** An analyst reported that a named unexplained residual was a discipline
+this project lacks. `backtest/accounting/attribution.py:47` already reads
+`COMPONENTS = ("delta", "gamma", "vega", "theta", "residual")`, with a trust threshold at
+`:36-45` the claim never mentioned, and `:57` counting the trades that cross it. **We were
+ahead of what was being recommended to us**, and no cross-check as previously defined could
+ever have caught it.
+
+### Findings worth carrying into the discussion brief
+
+- **RD-Agent's loop judges on its test period.** `conf_combined_factors.yaml:43-45,77-80`
+  sets `backtest.start_time = test_start` while `segments.test = [2017-01-01, null]`; those
+  metrics are `IMPORTANT_METRICS` in `developer/feedback.py:17-21`, which the model reads and
+  answers with "Replace Best Result" / "New Hypothesis" (`:107-111`). The loop count **is**
+  tracked (`loop.py:133-134`) and **nothing is deflated by it**. That is dimension 8's
+  central question, answered, and it is the clearest available argument for what an honest
+  automated loop here would have to do differently.
+- **optopsy states its exit rule on one path and violates it on the other**:
+  `simulator.py:731` sorts by `entry_date`, `:879-881` by `exit_date` with a comment about
+  realising P&L correctly. It is the live proof of why this project holds two engines
+  row-identical by a test.
+- **15 "worth learning" entries survived** (of 20 candidates; 5 were cross-batch duplicates
+  and one was the residual claim, reduced to its surviving half), ordered cheapest first:
+  five afternoons, eight weeks, one month.
+- **Licences:** optopsy AGPL-3.0 (do not borrow), nautilus_trader LGPL-3.0 (link, do not
+  copy), qlib and RD-Agent MIT, gs-quant Apache-2.0, ArcticDB BUSL-1.1 (current tree not
+  borrowable). And: **this platform has no LICENSE file of its own.**
+
+**3.3 — the adoption notes are in the merged report** rather than added afterwards: each
+"worth learning" entry carries its file, what we would change, a rough cost, and a plan entry
+where one is defensible — six entries say "no plan entry directly" rather than inventing one.
+
