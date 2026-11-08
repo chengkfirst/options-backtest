@@ -722,12 +722,17 @@ Fixed on **2026-11-06**, before any entry was run:
   used**, so for now a person must carry it into the reading.
 - **Minimum trade count.** 40 non-overlapping logical trades per compared cell. The unit is
   the **logical trade**, not the position.
-- **Hold-out.** **NOT FIXED — and this is the one gap that makes the plan incomplete.**
-  Section 2, point 2 gives the two options and why both are bad. `research/holdout.py` is
-  built and will refuse a run that reaches into a declared hold-out unless `unlock=` is passed
-  with a reason, which is recorded. It deliberately **does not pick the period**, because
-  that is a group-4 choice. Until a person picks it, entries 5 to 9 and 16 to 20 have no
-  out-of-sample stage, and every one of their results is in-sample.
+- **Hold-out.** **FIXED on 2026-11-07** —
+  `docs/decisions/0001-the-hold-out-part-b-and-the-option-data.md`. **SPY is reserved**: no
+  run may use it until the final check. **All data after 2026-11-07 is also held out**,
+  declared as a period through `research/holdout.py`'s `HoldOut` —
+  `hold_out=("2026-11-08", "2099-12-31")` — which refuses a run reaching into it unless
+  `unlock=` is passed with a reason, recorded in the run's provenance. One gap is on the
+  record in that file: `HoldOut` takes dates and not symbols, so **the SPY half is held by
+  the decision document and nothing else** until the symbol form is merged. Section 2,
+  point 2 gives the two options and why both were bad; the owner accepted the brief's
+  recommendation without stating a preference of their own, which that file records as the
+  basis.
 
 ---
 
