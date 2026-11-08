@@ -26,6 +26,43 @@ The two builders own disjoint paths, and a hook refuses a `Write` or `Edit` outs
 removes the easy way, not every way. A change either side needs from the other travels
 as a spec in `docs/specs/`, not as an edit.
 
+## The pipeline
+
+**This session does not edit `backtest/` or `app/` itself. It delegates.** Not a matter of
+capability — of review. Work that goes through a builder gets read by someone who did not
+write it, and the two defects fixed on `fix/engine-state` were both found that way. Work
+done here gets read by nobody.
+
+| When | Then |
+|---|---|
+| a new feature | `/spec` first, and **wait for approval**. No code before it |
+| after `engine-dev` | `quant-auditor` **and** `reviewer`, in parallel. **No `/ship` until both pass** |
+| after `interface-dev` | `reviewer`, and look at it in `states.html` |
+| after a merge | `doc-keeper`, because a merge is when documents go stale |
+
+The engine pair is not two reviews of the same thing. `reviewer` asks whether the change
+is sound; `quant-auditor` asks whether the **result** is wrong while everything still
+runs. On `fix/engine-state` they found different things, and the auditor's — that the old
+trailing stop made its own level a function of λ, so the λ-sensitivity test was moving a
+strategy rule — was not visible as a code defect at all.
+
+A **Stop hook** holds the engine half of this: with uncommitted changes under `backtest/`
+and no newer report in `docs/findings/`, the session does not finish. Write the report,
+commit the change, or say plainly in your final message that it is unaudited and why.
+
+## Stop and ask, rather than deciding
+
+Three things are the human's, always:
+
+- **A baseline update.** `tools.baseline update` is never run to make a guard green. Where
+  results are *meant* to move, the change is explained trade by trade in `docs/findings/`
+  and committed **before** the baseline command, in its own commit.
+- **An architecture change.** The architecture is transcribed, not authored here. A
+  deviation is recorded in `docs/conventions.md` with its reason, and a change to the
+  intent is a conversation.
+- **A merge.** Branches are stacked and PRs opened; nothing is merged, and `main` is never
+  pushed to directly.
+
 Skills: `/spec` before building · `/ship` to commit · `/new-guard` to add a guard ·
 `/audit-docs` for rotted statements · `/explore` for the debate. And one workflow,
 `/benchmark`, to compare other tools.
@@ -60,11 +97,8 @@ alone.
 
 ## Where a document goes
 
-`specs/` before it is built · `decisions/` never edited once made · `findings/` a result
-with its caveats · `research/plan.md` what to answer next · `ideas/backlog.md` candidates ·
-`feedback/` real use, **written by the human** · `radar/` the scout digest · `plans/` work
-with an end — all under `docs/`. [docs/README.md](docs/README.md) says what makes each kind
-wrong, which is what decides who may change it.
+Everything under `docs/`, and [docs/README.md](docs/README.md) is the index — it says what
+makes each kind of document wrong, which is what decides who may change it.
 
 ## Before committing
 
