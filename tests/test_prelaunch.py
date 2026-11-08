@@ -205,13 +205,52 @@ class TestTheHoldOut:
         assert "correct state" in out.detail
         assert "2023-07-01" in out.detail
 
+    @kind("guard")
+    def test_a_reserved_symbol_is_not_reported_as_nothing_reserved(self):
+        """**The false statement that costs a second reservation.** The criterion read
+        the period alone, so a symbol reserved *and respected* came back "no hold-out was
+        reserved. Pass hold_out=(start, end) to run()" -- and a researcher following that
+        advice adds a period hold-out and unlocks it to turn the criterion green, spending
+        a second reservation to satisfy a report about the first."""
+        note = _holdout_note(symbol="QQQ")
+        out = checklist(_Result(_TRADES, hold_out=note)).checks[0]
+        assert out.status == UNKNOWN
+        assert "SPY" in out.detail
+        assert "no hold-out was reserved" not in out.detail
+        assert "correct state" in out.detail
+
+    @kind("guard")
+    def test_a_spent_symbol_names_the_dimension_that_was_spent(self):
+        note = _holdout_note(symbol="SPY", unlock_symbols="final evaluation")
+        out = checklist(_Result(_TRADES, hold_out=note)).checks[0]
+        assert out.status == PASS
+        assert "underlying" in out.detail and "SPY" in out.detail
+
+
+def _holdout_note(**kwargs):
+    """Hold-out provenance from the real `check`, rather than a hand-written mapping.
+
+    A stub mapping written here would assert what this test file thinks the keys are;
+    this asserts what the module produces.
+    """
+    from backtest.research.holdout import ReservedSymbol, check as holdout_check
+
+    return holdout_check(None, start=date(2021, 1, 4), end=date(2023, 12, 29),
+                         reserved=(ReservedSymbol("SPY"),), **kwargs)
+
+
+_TRADES = pd.DataFrame({
+    "net_pnl": [100.0] * 30,
+    "exit_date": pd.date_range("2021-01-04", periods=30, freq="40D"),
+})
+
 
 class _Result:
     """A result stub carrying only what a criterion reads."""
 
-    def __init__(self, trades: pd.DataFrame):
+    def __init__(self, trades: pd.DataFrame, hold_out: dict | None = None):
         self.trades = trades
-        self.hold_out: dict = {}
+        self.hold_out: dict = dict(hold_out or {})
 
     def attribution_daily(self):
         raise RuntimeError("not available on this stub")

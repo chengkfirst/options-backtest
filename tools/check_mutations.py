@@ -85,6 +85,17 @@ MUTATIONS: tuple[Mutation, ...] = (
         "    if False:\n        raise StartupError(",
         ("tests/test_holdout.py::TestTheRefusal",),
     ),
+    # The symbol half's own refusal. Added with the mechanism rather than after it, as this
+    # file's rule requires: it is the one line whose silent removal produces a result on a
+    # reserved underlying with every guard still green. The period entry above cannot cover
+    # it -- the two halves are refused by separate clauses and answered by separate unlocks.
+    Mutation(
+        "a reserved underlying refuses a run on it",
+        "backtest/research/holdout.py",
+        "    if reached is not None and not unlock_symbols:\n        raise StartupError(",
+        "    if False:\n        raise StartupError(",
+        ("tests/test_holdout.py::TestAReservedSymbol",),
+    ),
     Mutation(
         "a position left open at the range end is reported",
         "backtest/engine/loop.py",

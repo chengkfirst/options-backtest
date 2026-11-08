@@ -280,6 +280,30 @@ class TestWhatCannotBeWritten:
                                                "expression"):
             to_mapping(r)
 
+    @pytest.mark.req("6.4.holdout")
+    def test_a_reserved_period_cannot_be_written(self):
+        """**The round trip that laundered a reservation.** `to_mapping` writes
+        `strategy`, `data` and `run`, and the hold-out is in none of them -- so
+        `save_config` then `run_from` re-ran the reserved period with no refusal, and the
+        replay's provenance read "no hold-out was declared". Dropping it silently is the
+        one thing this format's design refuses everywhere else."""
+        r = run(**(BASE | {"end": "2023-03-31"}), hold_out=("2023-04-01", "2023-06-30"))
+        with pytest.raises(StartupError, match="hold_out"):
+            to_mapping(r)
+
+    @pytest.mark.req("6.4.holdout")
+    def test_a_reserved_symbol_cannot_be_written(self):
+        r = run(**BASE, hold_out_symbols=("SPY",))
+        with pytest.raises(StartupError, match="hold_out_symbols"):
+            to_mapping(r)
+
+    def test_a_run_with_no_reservation_is_unaffected(self, result, tmp_path):
+        """The refusal is for a reservation that exists. A run that declared none writes
+        as it always did -- verified by the round trip rather than by the absence of an
+        exception, because a file that writes and does not reproduce is the failure this
+        module is about."""
+        check_round_trip(result, tmp_path / "no-reservation.yaml")
+
     def test_a_custom_selector_cannot_be_written(self):
         def chooser(chain, view):
             calls = chain[chain["is_call"]]
