@@ -296,8 +296,9 @@ def register(variant: Variant) -> Variant:
     if variant.stateful and variant.initial_state is None:
         raise StartupError(
             f"{variant.ref} declares itself stateful and supplies no `initial_state`. "
-            f"The state a form starts a trade with is part of the form -- a trailing stop "
-            f"starts at the entry price, not at zero -- and a platform-chosen default "
+            f"The state a form starts a trade with is part of the form -- a trailing "
+            f"stop's high-water mark starts at the trade's entry, and not at whatever "
+            f"price the form happens to be shown first -- and a platform-chosen default "
             f"would be the platform deciding a research parameter.\n\n"
             f"Give `initial_state=lambda ctx: {{...}}`, which is called once per trade."
         )

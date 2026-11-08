@@ -15,6 +15,21 @@ A stateful form whose state is per *component* instead of per *trade*: two open 
 under one trailing stop would share a high-water mark, so the second trade's stop would
 move because the first one's did. Nothing about the result would look wrong — the trades
 would exit at plausible levels for a strategy nobody wrote.
+
+## The two failures it did not prevent, and now does
+
+Per trade was not enough, because a trade ends and a run ends and the state outlived both.
+Two more invariants, each with its own class below and each measured rather than imagined:
+
+- **no state is held for any trade that has a record** — `forget` was called on one of the
+  three paths that close a trade, so expiry and early exercise left theirs behind
+- **a run starts carrying nothing** — trade ids restart at 1, so a second run of the same
+  strategy object read the first run's leftovers as its own, and the `run_id` was the same
+  either way
+
+And the mark those invariants are about has to start where the rule says: at the **entry**.
+It started at the fill day's exit-side price, below the entry by the round-trip cost, and
+the test that pinned the rule fed in 0.0 by hand and so could not see it.
 """
 
 from __future__ import annotations
@@ -60,13 +75,28 @@ class TestTheTrailingStop:
             "two rules"
         )
 
-    def test_the_mark_starts_at_entry_and_not_at_zero(self):
-        """A mark starting at zero would let the premium halve before it caught up,
-        making the rule fixed for the first part of the trade and trailing afterwards —
-        two rules wearing one name."""
+    def test_the_mark_starts_at_entry_whatever_the_first_price_seen_is(self):
+        """A mark starting below the entry makes the stop looser than its own rule.
+
+        **The first ratio the form is shown is not the entry**, and feeding it 0.0 is
+        exactly how that went unnoticed. `initial_state` is called lazily, on the form's
+        first call for a trade, and under the one-day execution lag that call happens on
+        the fill day with an **exit-side** ratio -- below zero by the round-trip cost, on
+        every trade. So the value passed in here is the one the engine passes in, not the
+        one the entry would imply.
+
+        A mark starting at the first sellable price is a defensible rule; it is not this
+        form's rule. Give-back is measured from the entry, so the mark starts there and
+        the trailing stop can never fire later than a fixed stop at the same fraction.
+        """
         stop = _bound(0.5)
-        stop(_ctx(1, 0.0))
-        assert stop.state_for(1, _ctx(1, 0.0))["high_water"] == 0.0
+        fill_day = -0.0198          # the round-trip cost on the fixture, measured
+        stop(_ctx(1, fill_day))
+        assert stop.state_for(1, _ctx(1, fill_day))["high_water"] == 0.0, (
+            "the mark started at the first price the trade could be sold at rather than "
+            "at the entry, so the stop is looser than its stated rule by the round-trip "
+            "cost"
+        )
         # Straight down from entry: a 0.5 give-back from a mark of 0 is -0.5.
         assert not stop(_ctx(1, -0.49))
         assert stop(_ctx(1, -0.50))
@@ -166,9 +196,10 @@ class TestTheSnapshot:
 @kind("guard")
 class TestWhatTheRegistryRefuses:
     def test_a_stateful_form_with_no_initial_state_is_refused(self):
-        """The state a form starts a trade with is part of the form — a trailing stop
-        starts at the entry price, not at zero — so a platform-chosen default would be
-        the platform deciding a research parameter."""
+        """The state a form starts a trade with is part of the form — a trailing
+        stop's high-water mark starts at the trade's entry, and not at whatever price
+        the form happens to be shown first — so a platform-chosen default would be the
+        platform deciding a research parameter."""
         with pytest.raises(StartupError) as caught:
             register(Variant(slot="stop_loss", name="_stateless_claim", version=1,
                              describes="x", params=(), decide=lambda ctx: False,
@@ -203,12 +234,53 @@ class TestTheEngineUsesIt:
     )
 
     @staticmethod
-    def _with(variant: str):
+    def _with(variant: str, **over):
         from backtest.api.sdk import run
 
         return run(**(TestTheEngineUsesIt.RUN | {
             "components": {"stop_loss": {"variant": variant,
-                                          "params": {"fraction": 0.5}}}}))
+                                          "params": {"fraction": 0.5}}}} | over))
+
+    @pytest.mark.req("0.2.state")
+    def test_the_mark_a_real_run_starts_a_trade_with_is_the_entry(self):
+        """**Driven through a run, and read off the engine's own snapshot.**
+
+        The unit test above hands the form a ratio, and for as long as the value it
+        handed in was 0.0 it could not see this: `initial_state` is called lazily, on the
+        form's first call for a trade, and under the one-day execution lag that call
+        happens on the **fill day** with an exit-side ratio. The engine was therefore
+        starting every mark at minus the round-trip cost -- measured at -0.0198 on 33 of
+        33 trades -- so the stop was looser than its stated rule by that much, and the
+        trade log showed an ordinary exit on an ordinary date.
+
+        Two readings, both the engine's: the marks it holds at a checkpoint taken on the
+        first fill day, where nothing has had a chance to rise yet, and the marks it is
+        still holding at the end of a whole run.
+        """
+        full = self._with("trailing")
+        first_fill = min(r.entry_date for r in full.raw.records)
+        at_the_fill = self._with("trailing", until=str(first_fill))
+        marks = at_the_fill.raw.checkpoint.component_state["stop_loss"]
+        assert marks, (
+            f"the checkpoint on {first_fill} holds no state, so the stop was not asked "
+            f"about a trade that had just been filled and this test reads nothing"
+        )
+        for trade, held in marks.items():
+            assert held["high_water"] == 0.0, (
+                f"trade {trade} was filled on {first_fill} and its high-water mark "
+                f"starts at {held['high_water']:.6f}, below the entry. The give-back is "
+                f"measured from the entry, so the mark starts at 0.0 -- what the engine "
+                f"showed the form on the fill day is the exit side of the quote, which "
+                f"is below the entry by the round-trip cost"
+            )
+
+        leftover = full.raw.strategy.components["stop_loss"].get_state()
+        below = {t: h["high_water"] for t, h in leftover.items()
+                 if h["high_water"] < 0.0}
+        assert not below, (
+            f"these trades are still open with a mark below the entry: {below}. A mark "
+            f"that starts at the entry and never falls cannot be below it"
+        )
 
     @pytest.mark.req("0.2.state")
     def test_the_mark_survives_between_days_in_a_real_run(self):
@@ -246,11 +318,235 @@ class TestTheEngineUsesIt:
 
     def test_no_state_is_left_for_a_closed_trade(self):
         """Every trade in this run closed, so nothing should still be held. A run that
-        kept them all would snapshot a mapping that grows with the trade count."""
+        kept them all would snapshot a mapping that grows with the trade count.
+
+        **Every trade here closes by its stop or its holding cap**, which is one of the
+        three ways a trade ends, so this passed while the other two were broken. The
+        generalisation is `TestNoStateOutlivesTheTradeItBelongsTo` below.
+        """
         result = self._with("trailing")
         stop = result.raw.strategy.components["stop_loss"]
         closed = {r.trade_id for r in result.raw.records}
         held = {int(k) for k in stop.get_state()}
         assert not (held & closed), (
             f"state is still held for closed trades {sorted(held & closed)[:5]}"
+        )
+
+
+@kind("guard")
+class TestNoStateOutlivesTheTradeItBelongsTo:
+    """The invariant: **no state is held for any trade that has a record.**
+
+    `forget` used to be called from one of the three paths that close a trade -- the exit
+    intent. Passive expiry and early exercise each popped the trade and returned a record
+    with the component's state left in place. Two consequences, neither of which anything
+    in a result shows: a checkpoint's state grows with the expiry count rather than with
+    the open-trade count, and a trade id reused by a later run inherits a closed trade's
+    high-water mark.
+
+    One run, chosen because it reaches **all three** paths. `test_no_state_is_left_for_a_
+    closed_trade` above closes every trade through the exit intent, so it covered one of
+    the three and passed while two were broken -- which is why that is a weaker test of
+    the same thing rather than the same test twice.
+    """
+
+    #: Puts, no holding cap, and the days-to-expiry floor at the lowest the execution lag
+    #: allows -- so contracts reach their expiry (`_settle`) and deep in-the-money puts
+    #: are worth exercising early (`_early_exercise`). The wide stop is what leaves room
+    #: for both: at 0.5 almost everything closes by the stop instead.
+    RUN = dict(
+        symbol="QQQ", start="2022-01-01", end="2023-12-31",
+        entry="close > sma_20 * 1.02",
+        select={"right": "put", "dte_lo": 21, "dte_hi": 45,
+                "delta_lo": 0.25, "delta_hi": 0.45},
+        exit={"dte_floor": 2},
+        engine="event_driven", sizing={"method": "fixed"}, quantity=1,
+        components={"stop_loss": {"variant": "trailing", "params": {"fraction": 0.9}}},
+    )
+
+    @pytest.fixture(scope="class")
+    def result(self):
+        from backtest.api.sdk import run
+
+        return run(**self.RUN)
+
+    def test_the_run_reaches_every_way_a_trade_can_close(self, result):
+        """Asserted out loud, because a guard that quietly stops covering two of the
+        three paths is the failure this class exists to prevent."""
+        reasons = {r.exit_reason.value for r in result.raw.records}
+        for path, how in (("stop_loss", "the exit intent"),
+                          ("expiry_otm", "passive expiry, `_settle`"),
+                          ("early_exercise", "early exercise, `_early_exercise`")):
+            assert path in reasons, (
+                f"no trade in this run closed by {path} ({how}), so the test below "
+                f"cannot see state left behind on that path. Found {sorted(reasons)}"
+            )
+
+    @pytest.mark.req("0.2.state")
+    def test_no_state_is_held_for_any_trade_that_has_a_record(self, result):
+        stop = result.raw.strategy.components["stop_loss"]
+        closed = {r.trade_id for r in result.raw.records}
+        held = {int(k) for k in stop.get_state()}
+        leaked = sorted(held & closed)
+        assert not leaked, (
+            f"{len(leaked)} trades have a record and still hold state: {leaked[:8]}. "
+            f"A record means the trade is over, so its components should have forgotten "
+            f"it -- and a trade id reused by a later run inherits what is left"
+        )
+
+
+@kind("guard")
+class TestStateDoesNotCrossRuns:
+    """Trade ids restart at 1 in every run, so whatever is left over is read as this
+    run's.
+
+    Measured before this was fixed: `research.positioning.compare` run with the
+    **identical** sizing method three times returned 27 / 29 / 27 trades, reproducibly,
+    and the `run_id` was the same for all three -- so nothing in the output distinguished
+    a first run from a later one. The exposed callers are the tools that re-run one
+    strategy object: `positioning.compare`, `sdk.delay_test` and `sdk.realism_test`,
+    which is to say the look-ahead and realism tests themselves.
+
+    A trade still open when the range ends is deliberately left unclosed, so `forget`
+    cannot be the whole answer: a run also has to start with nothing inherited.
+    """
+
+    #: The range ends with a trade open, which is what leaves state behind for a second
+    #: run to find under an id it is about to reuse. Every trade here closes through the
+    #: exit intent, so `forget` covers all of them -- what this configuration isolates is
+    #: the other half: the leftover of a trade the range never closed.
+    #:
+    #: **It is the configuration the fix was measured on**, and on the suite's bars it
+    #: leaves exactly one mark, 0.817 on trade 136, which is above the 0.5 give-back and
+    #: so fires the moment a second run reuses that id: 135 / 136 / 135 trades across
+    #: three runs of one object before the fix. That the mark clears `fraction` is what
+    #: makes the test below able to fail, so the test asserts it rather than trusting it.
+    RUN = dict(
+        symbol="QQQ", start="2022-01-01", end="2023-12-31",
+        entry="close > sma_20 * 1.02",
+        select={"right": "put", "dte_lo": 21, "dte_hi": 45,
+                "delta_lo": 0.25, "delta_hi": 0.45},
+        exit={"hold_days": 10, "dte_floor": 7},
+        engine="event_driven", sizing={"method": "fixed"}, quantity=1,
+        components={"stop_loss": {"variant": "trailing", "params": {"fraction": 0.5}}},
+    )
+
+    @staticmethod
+    def _rows(records) -> list[tuple]:
+        """Everything about a trade a difference could hide in."""
+        return [(r.trade_id, r.entry_date, r.exit_date, str(r.contract),
+                 r.exit_reason.value, round(r.net_pnl, 8)) for r in records]
+
+    #: What `run()` would pass on and `_again` would not. `_again` builds a plain engine
+    #: and calls `.run(strategy)` bare, so a configuration setting any of these would be
+    #: re-run under different execution settings and the second run would differ for a
+    #: reason that is not the leak -- while the failure message blamed the leak. Asserted
+    #: below rather than remembered: `max_concurrent=5` is exactly what turned 113 trades
+    #: into 114 in the measurements behind this fix, so the mechanism is live.
+    #:
+    #: **Two groups, and the second is the one that was missed.** The first seven reach
+    #: the engine's *constructor*; `until` and `resume_from` reach `run()` itself
+    #: (`api/sdk.py:596`). Scoping this to the constructor looked complete and was not:
+    #: `until=` is the obvious way to make a twenty-second test faster, and adding it
+    #: would have the first run stop early and the second run the whole range -- a
+    #: divergence of hundreds of trades, reported under a message about state leaking.
+    ENGINE_SETTINGS = ("max_concurrent", "shadow_days", "risk", "scenario_limit",
+                       "premium_budget", "exposure", "enforce_capital",
+                       "until", "resume_from")
+
+    @classmethod
+    def _again(cls, result):
+        """The same strategy object, through a fresh engine over the same range."""
+        from backtest.engine.loop import EventDrivenEngine
+
+        carried = sorted(set(cls.RUN) & set(cls.ENGINE_SETTINGS))
+        assert not carried, (
+            f"RUN sets {carried}, which reaches the engine's constructor, and this helper "
+            f"builds a plain engine -- so the second run would be run under different "
+            f"execution settings and differ for a reason that is not the leak. Pass them "
+            f"here too, or take them out of RUN"
+        )
+        return EventDrivenEngine(market=result._market, chain=result._chain,
+                                 signals=result._signals,
+                                 config=result.raw.config).run(result.raw.strategy)
+
+    @pytest.fixture(scope="class")
+    def first(self):
+        from backtest.api.sdk import run
+
+        return run(**self.RUN)
+
+    @pytest.mark.req("0.4.reproducible")
+    def test_the_same_strategy_object_run_twice_gives_the_same_trades(self, first):
+        """The measured symptom, with the precondition that makes it able to fail.
+
+        **"The first run left something behind" is not that precondition.** Asserting only
+        that is how this test came to read as evidence while carrying none: on another set
+        of bars the same configuration leaves six marks whose largest is 0.075, a second
+        run inherits every one of them, and not one trade moves -- 0.075 is nowhere near
+        the 0.5 give-back, so no inherited mark fires anything. The leak was fully present
+        and the test was green.
+
+        What has to hold is that an inherited mark can **fire** the stop on the trade that
+        reuses its id. The arithmetic: the reused trade's own ratio is at most 0 on its
+        first session (the engine shows the form the exit side of the quote, which is below
+        the entry), so an inherited mark of at least `fraction` gives a give-back of at
+        least `fraction` straight away -- the trade this range left open is stopped out
+        instead, which is a record the first run does not have. A leftover below `fraction`
+        proves nothing in either direction, and this now says so instead of passing.
+        """
+        fraction = self.RUN["components"]["stop_loss"]["params"]["fraction"]
+        marks = {int(trade): held["high_water"] for trade, held
+                 in first.raw.strategy.components["stop_loss"].get_state().items()}
+        assert marks, (
+            "the first run left no state behind, so a second run has nothing to inherit "
+            "and this test cannot see the leak. Choose a range that ends with a trade "
+            "open"
+        )
+        firing = {trade: round(mark, 4) for trade, mark in marks.items()
+                  if mark >= fraction}
+        assert firing, (
+            f"the first run left {len(marks)} mark(s), "
+            f"{ {t: round(m, 4) for t, m in marks.items()} }, and none of them reaches "
+            f"the {fraction} give-back this stop fires on. A second run can inherit every "
+            f"one of them and still produce the same trades, so this test would pass with "
+            f"the leak fully present -- it is not evidence of anything in this state. "
+            f"Point it at a range whose open trades end at a mark of {fraction} or more, "
+            f"or rely on test_a_run_does_not_inherit_state_set_before_it, which does not "
+            f"wait for the data to cooperate. The suite's own bars leave 0.817 on trade "
+            f"136 here; under BACKTEST_TEST_ONLINE=1 the bars are a vendor's and this "
+            f"configuration was never measured on them"
+        )
+        second = self._again(first)
+        expected, got = self._rows(first.raw.records), self._rows(second.records)
+        assert got == expected, (
+            f"the second run of one strategy object produced {len(got)} trades against "
+            f"the first run's {len(expected)}.\n"
+            f"  only in the first run:  {[r for r in expected if r not in got][:3]}\n"
+            f"  only in the second run: {[r for r in got if r not in expected][:3]}\n"
+            f"The marks the first run left that can fire on their own: {firing}. "
+            f"The run_id is the same either way, so nothing in the output says which "
+            f"figures came from the contaminated run"
+        )
+
+    @pytest.mark.req("0.4.reproducible")
+    def test_a_run_does_not_inherit_state_set_before_it(self, first):
+        """The same leak, driven rather than waited for.
+
+        The test above only bites when the first run happens to leave behind a mark that
+        changes an outcome. This one seeds a mark that cannot not change one: a
+        high-water of 5.0 on the first trade fires a 0.5 give-back on that trade's first
+        session, whatever the data does.
+        """
+        from backtest.api.sdk import run
+
+        seeded = run(**self.RUN)
+        trade = first.raw.records[0].trade_id
+        seeded.raw.strategy.components["stop_loss"].set_state(
+            {str(trade): {"high_water": 5.0}})
+        again = self._again(seeded)
+        assert self._rows(again.records) == self._rows(first.raw.records), (
+            f"a run inherited state that was set on its components before it started. "
+            f"Trade {trade} was stopped out on a give-back from a mark no trade in this "
+            f"run ever reached"
         )
