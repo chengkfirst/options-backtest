@@ -102,16 +102,16 @@ def _thresholds() -> list[str]:
 
 
 def _requirements() -> list[str]:
-    """Count the acceptance criteria in requirements.md.
+    """Count the acceptance criteria in docs/requirements.md.
 
     These statuses are currently **hand-written** — a known inconsistency. Deriving
     them from the code would be better, but criteria like "the interface is clear" or
     "the statistics are honest" cannot be judged automatically. So this only counts
     them and says they are hand-written, rather than pretending they were computed.
     """
-    path = ROOT / "requirements.md"
+    path = ROOT / "docs" / "requirements.md"
     if not path.exists():
-        return ["  (requirements.md is absent)"]
+        return ["  (docs/requirements.md is absent)"]
     text = path.read_text(encoding="utf-8")
     rows = re.findall(r"^\| (\d+\.\d+) \| (.+?) \| (.+?) \|", text, re.M)
     counts = {"done": 0, "partial": 0, "missing": 0}
@@ -122,7 +122,7 @@ def _requirements() -> list[str]:
                 break
     total = sum(counts.values())
     return [
-        f"  {total} acceptance criteria (**hand-written**, requirements.md): "
+        f"  {total} acceptance criteria (**hand-written**, docs/requirements.md): "
         f"{counts['done']} done · {counts['partial']} partial · {counts['missing']} missing",
     ]
 
@@ -155,7 +155,7 @@ def main() -> int:
     print("\n".join(_requirements()))
     print("\n[ guards ]  the constraints a tool can check")
     print("\n".join(_guards()))
-    print("\n[ next ]  see the order of work in requirements.md")
+    print("\n[ next ]  see the order of work in docs/requirements.md")
     print("=" * 62)
     return 0
 

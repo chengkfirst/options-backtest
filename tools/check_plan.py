@@ -1,7 +1,7 @@
 """Every section of the architecture document is accounted for — checked, not remembered.
 
 The document is 38 pages of prose and a tool cannot read it. What a tool *can* do is hold
-the list of its sections and refuse a `requirements.md` that does not say something about
+the list of its sections and refuse a `docs/requirements.md` that does not say something about
 each one. That turns "did I miss anything" from a question about my attention into a
 question with an answer.
 
@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-REQUIREMENTS = ROOT / "requirements.md"
+REQUIREMENTS = ROOT / "docs" / "requirements.md"
 
 #: Every numbered section of the architecture document, with a short title.
 #:
@@ -115,7 +115,7 @@ def check() -> int:
     gaps = [(num, title) for num, title in SECTIONS if num not in have]
     if gaps:
         print("these sections of the architecture document have no row in "
-              "requirements.md:")
+              "docs/requirements.md:")
         for num, title in gaps:
             print(f"  - {num}  {title}")
         print()

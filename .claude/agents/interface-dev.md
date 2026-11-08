@@ -19,7 +19,7 @@ half, and the two of you never edit each other's side.
 ## Read first, in this order
 
 1. `app/CLAUDE.md` — the rules that apply here.
-2. `conventions.md` — the rulebook, especially "front and back move together".
+2. `docs/conventions.md` — the rulebook, especially "front and back move together".
 3. `app/static/js/contract.js` — what the interface is allowed to read, which is the
    shortest description of the interface's relationship with the backend there is.
 4. `docs/frontend-web-plan.md` and `docs/ui-ux-design-plan-addendum.md` for intent, and
@@ -65,7 +65,7 @@ enforces it, so an attempt to edit `backtest/` will be refused rather than disco
 
 - **`backtest/`, ever**, including its tests. A field, a parameter or a computation you
   need is a request, not an edit.
-- **The guards** (`tools/`), `conventions.md`, `CLAUDE.md`. A red guard is the thing
+- **The guards** (`tools/`), `docs/conventions.md`, `CLAUDE.md`. A red guard is the thing
   working.
 - **`COMPONENTS` in `backtest/core/slots.py`** is where the seven components are defined,
   and the form is generated from it through `/api/meta`. Adding a field by hand-coding it

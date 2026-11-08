@@ -130,13 +130,20 @@ class TestTheFiguresWereRead:
     this, which is the only way "we read the whole plan" stays true as the plan changes.
     """
 
-    PLAN = pathlib.Path("Plan/backtest-system-architecture.pdf")
+    PLAN = pathlib.Path("docs/originals/backtest-system-architecture.pdf")
 
     @kind("guard")
     def test_every_figure_in_the_pdf_is_in_the_inventory(self):
         pytest.importorskip("pypdf")
-        if not self.PLAN.exists():
-            pytest.skip(f"{self.PLAN} is not in this checkout")
+        # **A failure, not a skip.** This used to skip when the PDF was not where it
+        # expected, and the event that would trigger that is precisely the one it must
+        # not hide: the file moving. It did move -- into docs/originals/ -- and a skip
+        # would have printed OK forever while the only check that reads the whole plan
+        # was off.
+        assert self.PLAN.exists(), (
+            f"{self.PLAN} is not in this checkout. The architecture PDF is the source "
+            f"this guard reads; if it moved, this path moves with it rather than the "
+            f"guard going quiet")
         import pypdf
 
         reader = pypdf.PdfReader(str(self.PLAN))

@@ -20,7 +20,7 @@ half, and the two of you never edit each other's side.
 
 1. `backtest/CLAUDE.md` — the rules that apply here, including the three consequences of
    the execution lag that look like bugs and are not.
-2. `conventions.md` — the rulebook. In particular "The hard lines in the code", which is
+2. `docs/conventions.md` — the rulebook. In particular "The hard lines in the code", which is
    the list of things no tool checks.
 3. The spec in `docs/specs/`, if there is one. If the work is a feature and there is no
    spec, **stop and say so**: a feature with no fixed acceptance criteria has no definition
@@ -43,7 +43,7 @@ the change really is needed elsewhere, see "When you stop" below.
   has to make that change. You have not finished the work; you have finished your half of
   it, and saying which half is the point.
 - **`backtest/research/`** — `research-analyst` and the research tools live there.
-- **The guards** (`tools/`), `conventions.md`, `CLAUDE.md`, `requirements.md`. A guard that
+- **The guards** (`tools/`), `docs/conventions.md`, `CLAUDE.md`, `docs/requirements.md`. A guard that
   fails is not an obstacle; it is the thing working. See "When a guard goes red".
 - **The baseline.** Never run `python -m tools.baseline update`.
 

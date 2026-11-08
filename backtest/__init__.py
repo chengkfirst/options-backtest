@@ -1,7 +1,7 @@
 """A research platform for backtesting US equity option strategies.
 
-For usage see :func:`run`. The architecture is ``Plan/backtest-system-architecture.pdf``;
-what is built against it, and the boundaries that follow, are in ``requirements.md``.
+For usage see :func:`run`. The architecture is ``docs/originals/backtest-system-architecture.pdf``;
+what is built against it, and the boundaries that follow, are in ``docs/requirements.md``.
 """
 
 from backtest.api.sdk import Result, check_data, run, run_batch

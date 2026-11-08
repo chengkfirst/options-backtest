@@ -61,7 +61,7 @@ class TestEngineDev:
         "app/static/js/views/bench.js",          # the other builder's area
         "app/runner.py",
         "app/CLAUDE.md",
-        "conventions.md",                         # the rulebook is nobody's to edit
+        "docs/conventions.md",                    # the rulebook is nobody's to edit
         "README.md",
         "tools/check_deps.py",                    # the guards are not a builder's
         ".claude/agents/engine-dev.md",           # not its own definition
@@ -101,7 +101,7 @@ class TestInterfaceDev:
         "backtest/engine/loop.py",
         "backtest/core/thresholds.py",
         "tests/test_components.py",
-        "conventions.md",
+        "docs/conventions.md",
     ])
     def test_it_may_not_edit_the_engine_or_its_tests(self, path):
         assert _edit(INTERFACE, path).returncode == 2
@@ -168,13 +168,13 @@ class TestStandsAsideRatherThanBlocking:
         """The matcher in the frontmatter names the writing tools, but a matcher widened
         later must not silently start refusing reads."""
         r = _run(ENGINE, {"tool_name": tool,
-                          "tool_input": {"file_path": "conventions.md"},
+                          "tool_input": {"file_path": "docs/conventions.md"},
                           "cwd": str(ROOT)})
         assert r.returncode == 0
 
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
     def test_every_writing_tool_is_checked(self, tool):
-        assert _edit(ENGINE, "conventions.md", tool=tool).returncode == 2
+        assert _edit(ENGINE, "docs/conventions.md", tool=tool).returncode == 2
 
 
 class TestTheAgentsDeclareWhatTheyOwn:
@@ -221,7 +221,7 @@ class TestTheAgentsDeclareWhatTheyOwn:
         ("engine-dev", "app/runner.py", False),
         ("engine-dev", "app/static/js/views/bench.js", False),
         ("engine-dev", "backtest/research/metrics.py", False),
-        ("engine-dev", "conventions.md", False),
+        ("engine-dev", "docs/conventions.md", False),
         ("engine-dev", "tools/check.py", False),
         ("interface-dev", "app/static/index.html", True),
         ("interface-dev", "app/runner.py", True),
@@ -235,11 +235,20 @@ class TestTheAgentsDeclareWhatTheyOwn:
         ("research-analyst", "tests/test_x.py", False),
         ("research-analyst", "docs/research/plan.md", False),
         ("doc-keeper", "README.md", True),
-        ("doc-keeper", "requirements.md", True),
+        ("doc-keeper", "docs/requirements.md", True),
         ("doc-keeper", "backtest/CLAUDE.md", True),
         ("doc-keeper", "backtest/engine/loop.py", False),
         ("doc-keeper", "tools/check_docs.py", False),
         ("doc-keeper", "docs/architecture.md", False),
+        # The PDFs the three transcriptions come from. They live under `docs/`,
+        # which doc-keeper owns, so without `--block docs/originals` an agent
+        # told never to edit a transcription could edit the original it is made
+        # from -- and nothing else in this suite would have mentioned them.
+        ("doc-keeper", "docs/originals/backtest-system-architecture.pdf", False),
+        ("doc-keeper", "docs/originals/frontend-web-plan.pdf", False),
+        ("doc-keeper", "docs/originals/ui-ux-design-plan-addendum.pdf", False),
+        ("doc-keeper", "docs/conventions.md", True),
+        ("doc-keeper", "docs/research-questions.md", True),
         ("doc-keeper", "docs/feedback/2026-11-06-anything.md", False),
     ]
 

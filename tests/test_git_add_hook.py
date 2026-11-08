@@ -2,7 +2,7 @@
 
 ## Why this is a test and not a one-off check
 
-`conventions.md` requires a new guard to be verified in reverse: plant the error, confirm
+`docs/conventions.md` requires a new guard to be verified in reverse: plant the error, confirm
 the check fails, remove it, confirm it passes. A verification run once in a terminal and
 written up in a commit message answers for the day it was run. The forms this hook has to
 refuse are a list, and a list belongs where it is re-run -- otherwise a later edit to the
@@ -67,7 +67,7 @@ REFUSED = (
 #: deliberate: a hook that blocks too much gets switched off, and then nothing is checked.
 ALLOWED = (
     "git add README.md",
-    "git add tools/check_docs.py README.md conventions.md",
+    "git add tools/check_docs.py README.md docs/conventions.md",
     "git diff --cached --name-only",
     "git commit -m 'why, not what'",
     "git status",
@@ -156,7 +156,7 @@ class TestRefuses:
         assert "Refused:" in err
         assert "git add path/to/each/file" in err, (
             "the refusal has to carry the form that is allowed, or it only says no")
-        assert "conventions.md" in err, "it has to point at the rule it is holding"
+        assert "docs/conventions.md" in err, "it has to point at the rule it is holding"
 
 
 class TestAllows:

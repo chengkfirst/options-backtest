@@ -43,6 +43,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      # `dev` now carries pypdf, which the figure guard needs. It used to sit in a
+      # `docs` extra nobody installed, so tests/test_plan_details.py skipped behind
+      # `importorskip` in every CI run since this workflow was added -- printing OK the
+      # whole time. Moving it rather than installing a second extra here is what makes
+      # that guard real on a fresh clone too, not only on this runner.
       - name: Install the project and its development dependencies
         run: pip install -e ".[dev]"
 
@@ -60,6 +65,15 @@ jobs:
         env:
           PYTEST_ADDOPTS: -m "not timing"
         run: python -m tools.check
+
+      # The figure guard skipped here for months. Asserting that it *ran* is the only
+      # way that stays fixed -- a skip prints no differently from a pass in a summary.
+      - name: The figure guard must have run, not skipped
+        run: |
+          python -m pytest tests/test_plan_details.py -q -rs \
+            -k test_every_figure_in_the_pdf_is_in_the_inventory | tee /tmp/figure.txt
+          grep -q "1 passed" /tmp/figure.txt || {
+            echo "::error::the figure guard did not pass -- it was skipped or failed"; exit 1; }
 
       # Not blocking, by design: this reports a number, it does not judge it. A real
       # tenfold regression is still obvious in the log, and `continue-on-error` keeps a

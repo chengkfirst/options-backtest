@@ -111,7 +111,7 @@ class TestTheOrderWithinATimestamp:
         stages and a table of thirteen numbers, and any pair of them can agree while the
         whole disagrees.
         """
-        # **Nine stages.** The transcription in `requirements.md` had eight: it dropped
+        # **Nine stages.** The transcription in `docs/requirements.md` had eight: it dropped
         # "contract adjustments" from the first and "end-of-day snapshot" from the last,
         # and this test was written from the transcription rather than the document.
         stages = [

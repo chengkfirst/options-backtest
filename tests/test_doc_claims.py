@@ -90,7 +90,14 @@ class TestTheStatusRows:
 
     @staticmethod
     def _run(monkeypatch, tmp_path, row: str):
-        (tmp_path / "requirements.md").write_text(row + "\n", encoding="utf-8")
+        # Written at the path `check_doc_claims` reads, which is `docs/requirements.md`
+        # since the layout tidy. A fixture that writes the basename the module used to
+        # read would make every case here raise FileNotFoundError -- loudly, which is
+        # the good kind, but it is still a fixture agreeing with a stale memory rather
+        # than with the code.
+        target = tmp_path / "docs" / "requirements.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(row + "\n", encoding="utf-8")
         monkeypatch.setattr(claims, "ROOT", tmp_path)
         return claims._status_problems()
 

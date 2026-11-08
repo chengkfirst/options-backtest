@@ -1,6 +1,6 @@
 # `backtest/` — the engine
 
-[conventions.md](../conventions.md) is the rulebook; this is what applies here in
+[docs/conventions.md](../docs/conventions.md) is the rulebook; this is what applies here in
 particular. Read the rulebook first — this file does not repeat it.
 
 ## The six that catch the most, here
@@ -17,7 +17,7 @@ while everything the decision reads is cut at the decision day. Three consequenc
 already paid for and are **not** bugs to fix: a rule written "hold 20 days" holds 21; no
 intraday stop can be modelled; and the gap through a stop routinely exceeds the distance
 `risk_pct` divided by, so the position taken is larger than the budget intended. See
-`conventions.md`, "The timing rule".
+`docs/conventions.md`, "The timing rule".
 
 **`Maybe[T]`, and no bare `None`/`NaN`/`0`.** A delta read as 0 selects the wrong contract
 and the run finishes normally, reporting a number. Absence is a value with a name

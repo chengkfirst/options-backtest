@@ -73,7 +73,7 @@ class EventType(str, Enum):
     said the document named eight and that the other five were "derived rather than
     quoted", with the derivation written out so nobody would read a guess as a
     specification. Reading the document itself -- rather than the transcription in
-    ``requirements.md`` -- showed the derivation was ten right, two invented and three
+    ``docs/requirements.md`` -- showed the derivation was ten right, two invented and three
     missed.
 
     The document's thirteen, from its own event table (pages 10 and 11):

@@ -4,7 +4,7 @@ An options backtesting and research platform — US equity options, QQQ and SPY,
 mid-frequency, days to months. It exists to **settle a strategy's seven components**, then
 to **validate the result** over the long run.
 
-**Read [conventions.md](conventions.md) before changing anything** — the rulebook: what the
+**Read [conventions.md](docs/conventions.md) before changing anything** — the rulebook: what the
 guards are, which failures this project refuses, and why. Area rules are in
 [backtest/](backtest/CLAUDE.md), [app/](app/CLAUDE.md) and [tests/](tests/CLAUDE.md).
 

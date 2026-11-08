@@ -1,6 +1,6 @@
 # `tests/` — what the guards rest on
 
-[conventions.md](../conventions.md) is the rulebook; this is what applies here in
+[docs/conventions.md](../docs/conventions.md) is the rulebook; this is what applies here in
 particular. Read the rulebook first — this file does not repeat it.
 
 ## Three markers on every test
@@ -16,7 +16,7 @@ pytestmark = labels("guard", "cross")       # kind, layer
   `research`, `architecture`, `limit`, `baseline`. See `kinds.py` for each.
 - **`layer`** — where it is, by the architecture document's own numbering: `0`–`7`, or
   `cross` for the few that span layers by nature.
-- **`req`** — the requirement in `requirements.md` it claims to cover.
+- **`req`** — the requirement in `docs/requirements.md` it claims to cover.
 
 `test_labels.py` requires every test to resolve to **exactly one** kind and one layer. A
 module declares its own with `pytestmark`; a class or a test overrides where it differs, and
