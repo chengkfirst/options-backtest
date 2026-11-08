@@ -13,6 +13,27 @@ has stopped working; this says only **something moved**, and the work of decidin
 is the researcher's. That is why it is labelled `baseline` rather than filed under any of
 the others.
 
+## Two configurations, and why one was not enough
+
+`trade_table` is the original: the trade-table engine, slot 4 as a fixed level on the exit
+rule. That engine **refuses a strategy with components outright**
+(`backtest/engine/vectorized.py`, `UNSUPPORTED["components"]`), so for as long as it was
+the only configuration here, **no change to any component could move a recorded number.**
+Both engine defects fixed on `fix/engine-state` were component changes; the file was
+compared row for row in three states, came back identical in all three, and that agreement
+carried no information. See `docs/findings/baseline-change-2026-11-06.md`.
+
+`event_driven` closes that. Same fixture, same strategy, slot 4 given as the stateful
+`stop_loss/trailing` on the engine that steps day by day. Its definition lives in
+`tests/baseline_configurations.py`, because a baseline configuration is a fixture -- the
+inputs were in `tests/conftest.py` already and only the strategy was not -- and this module
+stays the thing that compares and records.
+
+`check` compares both and names the one that moved. `update` writes **exactly one**, named
+on the command line: recording a new configuration must never be a way to overwrite an old
+one, and "just update the baseline while I am here" should not be able to reach a file
+nobody mentioned.
+
 ## It runs on the fixture, not on market data
 
 Deliberately. Pinned to a vendor's history it would go red when the vendor revised a
@@ -21,9 +42,10 @@ update a baseline without reading the diff. The inputs come from `tests/conftest
 including its dividend list -- read from there rather than copied, after the copy was
 found sitting beside it.
 
-Updating the baseline is an **explicit act** (``python -m tools.baseline update``), and
-the difference is printed when it happens — otherwise "just update the baseline while
-I am here" makes this defence worthless.
+Updating a baseline is an **explicit act**
+(``python -m tools.baseline update --configuration <key>``), and the difference is printed
+when it happens — otherwise "just update the baseline while I am here" makes this defence
+worthless.
 
 ## What has moved it, and why
 
@@ -39,13 +61,19 @@ regression that was accepted.
   stop inside the range once the count was right. **The baseline was flattered by 3,210
   of losses that were being discarded**, which is the direction this kind of error always
   takes: a trade dropped for being unresolvable is dropped after its outcome is known.
+- **`event_driven` recorded for the first time: 228 trades, net -13,014.71.** Not a
+  revision of anything -- a configuration that did not exist before, added because the
+  only one that did was structurally unable to see a component change. `trade_table` was
+  not rewritten and did not move; its file is byte-identical across this change.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 
@@ -59,6 +87,29 @@ COMPARED = [
     "entry_price", "exit_price", "gross_pnl", "fees", "net_pnl",
     "exit_reason", "holding_days",
 ]
+
+#: The original configuration's key. Named rather than implied, so a failure and an
+#: ``update`` both say which of the two they are about.
+TRADE_TABLE = "trade_table"
+
+
+@dataclass(frozen=True, slots=True)
+class Configuration:
+    """One recorded configuration: what builds it, where it is stored, what it is for.
+
+    ``compare`` rather than a shared comparison over ``build`` and ``file``, because the
+    two configurations' readers are deliberately separate: the first one's has read
+    ``baseline_trades.csv`` since it was written, and a refactor that merged them would
+    put a file that must not move behind code that had just changed.
+    """
+
+    key: str
+    file: Path
+    #: One line, printed by ``check`` and ``update``, so a reader of a failure knows what
+    #: the configuration is without opening its module.
+    describes: str
+    build: Callable[[], pd.DataFrame]
+    compare: Callable[[], "pd.DataFrame | None"]
 
 
 def build_trades() -> pd.DataFrame:
@@ -112,11 +163,12 @@ def build_trades() -> pd.DataFrame:
 
 
 def compare() -> pd.DataFrame | None:
-    """Return the difference, or ``None`` when there is none. With no baseline this
-    raises and says to capture one first."""
+    """Return the difference for the ``trade_table`` configuration, or ``None`` when
+    there is none. With no baseline this raises and says to capture one first."""
     if not BASELINE_FILE.exists():
         raise FileNotFoundError(f"no baseline at {BASELINE_FILE}; run "
-                                f"`python -m tools.baseline update` first")
+                                f"`python -m tools.baseline update "
+                                f"--configuration {TRADE_TABLE}` first")
     current = build_trades().reset_index(drop=True)
     stored = pd.read_csv(BASELINE_FILE, parse_dates=["entry_date", "exit_date"])
     stored["entry_date"] = stored["entry_date"].dt.date
@@ -131,34 +183,105 @@ def compare() -> pd.DataFrame | None:
     return current.loc[diff_mask] if diff_mask.any() else None
 
 
-def update() -> None:
+def configurations() -> dict[str, Configuration]:
+    """The recorded configurations, by key.
+
+    Built on call rather than at import, because the second one's definition is in
+    ``tests/`` and this module is imported by things that have no business importing the
+    test package. The import below is the only coupling, and it is one-directional:
+    ``tests.baseline_configurations`` reads ``COMPARED`` and ``BASELINE_DIR`` from here.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from tests import baseline_configurations as event_driven
+
+    return {
+        TRADE_TABLE: Configuration(
+            key=TRADE_TABLE, file=BASELINE_FILE,
+            describes="the trade-table engine, slot 4 as a fixed level on the exit rule. "
+                      "Cannot carry a component, so a component change cannot move it",
+            build=build_trades, compare=compare,
+        ),
+        event_driven.KEY: Configuration(
+            key=event_driven.KEY, file=event_driven.EVENT_DRIVEN_FILE,
+            describes=event_driven.DESCRIBES,
+            build=event_driven.build_event_driven_trades,
+            compare=event_driven.compare,
+        ),
+    }
+
+
+def update(key: str) -> None:
+    """Record one configuration, named. Never both: a command that rewrote every
+    recorded file at once would make adding a configuration a way of quietly replacing
+    the others, and the file this guard protects is the one nobody meant to touch."""
+    known = configurations()
+    if key not in known:
+        raise SystemExit(f"{key!r} is not a configuration; one of "
+                         f"{', '.join(sorted(known))}")
+    configuration = known[key]
     BASELINE_DIR.mkdir(parents=True, exist_ok=True)
-    previous = pd.read_csv(BASELINE_FILE) if BASELINE_FILE.exists() else None
-    trades = build_trades()
-    trades.to_csv(BASELINE_FILE, index=False, date_format="%Y-%m-%d")
+    previous = (pd.read_csv(configuration.file)
+                if configuration.file.exists() else None)
+    trades = configuration.build()
+    trades.to_csv(configuration.file, index=False, date_format="%Y-%m-%d")
+    print(f"configuration {configuration.key}: {configuration.describes}")
     if previous is None:
-        print(f"baseline created: {len(trades)} trades -> {BASELINE_FILE}")
+        print(f"baseline created: {len(trades)} trades -> {configuration.file}")
     else:
         print(f"baseline updated: {len(previous)} trades -> {len(trades)}")
         print(f"net P&L {previous['net_pnl'].sum():.2f} -> {trades['net_pnl'].sum():.2f}")
+    print(f"the other configurations were not touched: "
+          f"{', '.join(sorted(set(known) - {key})) or '(none)'}")
+
+
+def check() -> int:
+    """Compare every configuration and say which moved.
+
+    Every one, with no way to narrow it: a check that can be pointed at one configuration
+    is a check someone points at one configuration, and the reason there are two is that
+    the first could not see what the second can.
+    """
+    moved: list[str] = []
+    for key, configuration in sorted(configurations().items()):
+        diff = configuration.compare()
+        if diff is None:
+            print(f"  OK   {key}: unchanged")
+            continue
+        moved.append(key)
+        print(f"  FAIL {key}: {configuration.describes}")
+        print(f"       recorded in {configuration.file}")
+        print(diff.to_string(index=False))
+    if not moved:
+        print("the baseline comparison passed, for every configuration")
+        return 0
+    print(f"\nthe baseline comparison failed for: {', '.join(moved)}")
+    print("If the change really should move the results, run explicitly: "
+          f"python -m tools.baseline update --configuration {moved[0]}")
+    return 1
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="the regression baseline")
     parser.add_argument("action", choices=["check", "update"])
+    parser.add_argument("--configuration", default=None,
+                        help="which configuration to record. Required by `update`, and "
+                             "refused by `check`, which always compares every one")
     args = parser.parse_args()
     if args.action == "update":
-        update()
+        if args.configuration is None:
+            raise SystemExit(
+                "update needs --configuration: one of "
+                f"{', '.join(sorted(configurations()))}. There is more than one recorded "
+                "configuration, and a command that wrote whichever one it felt like is "
+                "how a file nobody was looking at gets overwritten")
+        update(args.configuration)
         return 0
-    diff = compare()
-    if diff is None:
-        print("the baseline comparison passed")
-        return 0
-    print("the baseline comparison failed; these trades changed:")
-    print(diff.to_string(index=False))
-    print("\nIf the change really should move the results, run explicitly: "
-          "python -m tools.baseline update")
-    return 1
+    if args.configuration is not None:
+        raise SystemExit(
+            "check compares every configuration and takes no --configuration. The "
+            "second one exists because the first could not see a component change, so "
+            "checking one of the two is the state this was added to end")
+    return check()
 
 
 if __name__ == "__main__":
