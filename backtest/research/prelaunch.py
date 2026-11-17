@@ -111,22 +111,51 @@ def _out_of_sample(result) -> Check:
     # note and no range. Reading "is there a mapping" rather than "is there a range" made
     # an undeclared hold-out report as a reserved-and-locked one -- a green-ish state for
     # research that reserved nothing.
-    reserved = held.get("hold_out")
+    #
+    # **Both dimensions, because a hold-out is reserved in two of them.** Reading the
+    # period alone told a researcher who had reserved an underlying *and respected it*
+    # that "no hold-out was reserved. Pass hold_out=(start, end) to run()" -- and the
+    # reasonable response to that sentence is to reserve a period and unlock it, spending
+    # a second reservation to satisfy a report about the first.
+    reserved = _reserved_as_text(held)
     if not reserved:
         return Check("out_of_sample", says, UNKNOWN,
-                     "no hold-out was reserved. Pass hold_out=(start, end) to run(), "
-                     "and unlock it once, at the end -- the document's first research "
-                     "rule", held)
-    if not held.get("touched"):
+                     "no hold-out was reserved. Pass hold_out=(start, end), or "
+                     "hold_out_symbols=(\"SPY\",) to reserve an underlying, and unlock "
+                     "it once, at the end -- the document's first research rule", held)
+    spent = _spent_as_text(held)
+    if not spent:
         return Check("out_of_sample", says, UNKNOWN,
-                     f"a hold-out is reserved ({reserved}) and this run does not reach "
-                     f"it. That is the **correct state** while the research is still "
+                     f"a hold-out is reserved ({reserved}) and this run reaches no part "
+                     f"of it. That is the **correct state** while the research is still "
                      f"going on, and it is why this is unknown rather than failed -- the "
                      f"criterion is answerable once, at the end", held)
     return Check("out_of_sample", says, PASS,
-                 f"the run covers the hold-out ({reserved}); compare its figures with "
-                 f"the in-sample ones yourself -- what counts as a collapse is a "
-                 f"judgement this tool does not make for you", held)
+                 f"this run spent {spent}, out of what was reserved ({reserved}); "
+                 f"compare its figures with the in-sample ones yourself -- what counts "
+                 f"as a collapse is a judgement this tool does not make for you", held)
+
+
+def _reserved_as_text(held) -> str:
+    """What was held back, by dimension. Empty when nothing was."""
+    parts = []
+    if held.get("hold_out"):
+        parts.append(f"the period {held['hold_out']}")
+    if held.get("symbols"):
+        parts.append("the underlying " + ", ".join(held["symbols"]))
+    return "; ".join(parts)
+
+
+def _spent_as_text(held) -> str:
+    """Which dimension this run spent. Named rather than implied: "the hold-out was
+    touched" leaves a reader unable to tell a spent period from a spent underlying, and
+    only one of the two makes a figure in sample in time."""
+    parts = []
+    if held.get("touched"):
+        parts.append(f"the period {held.get('hold_out')}")
+    if held.get("symbol_touched"):
+        parts.append(f"the underlying {held.get('symbol_spent') or ''}".strip())
+    return "; ".join(parts)
 
 
 def _stable_parameters(result, sweep=None) -> Check:

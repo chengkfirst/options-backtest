@@ -111,7 +111,7 @@ def test_regression_baseline_unchanged():
         "the output differs from the baseline:\n"
         + diff.to_string(index=False)
         + "\nIf the change really should move the results, run "
-          "`python -m tools.baseline update` explicitly"
+          "`python -m tools.baseline update --configuration trade_table` explicitly"
     )
 
 

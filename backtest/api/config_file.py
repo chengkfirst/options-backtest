@@ -28,6 +28,13 @@ An entry condition written as an expression is text and travels. An entry writte
 would have to carry code, and loading one would mean executing whatever a file on disk
 said. Those raise on export, naming what blocked it, rather than writing a file that
 silently drops the part that did the deciding.
+
+**A hold-out raises for a different reason, in the same direction.** A reserved period or
+a reserved underlying is plain data, but this format has no block for it, so the file was
+written without it: ``save_config`` then ``run_from`` re-ran the reserved data with no
+refusal, and the replay's provenance read as though nothing had been held back. A file
+that launders a reservation is the worst thing this carrier could produce, so it refuses
+instead -- see :data:`NOT_WRITABLE`.
 """
 
 from __future__ import annotations
@@ -65,13 +72,45 @@ RUN_KEYS: tuple[str, ...] = (
 #: Inside ``data``.
 DATA_KEYS: tuple[str, ...] = ("symbol", "start", "end", "chain")
 
-#: Keys that carry a Python object rather than data, and so cannot be written to a file.
-#: The value is the reason, shown to whoever tried.
+#: Keys this format cannot carry, and so refuses rather than drops. The value is the
+#: reason, shown to whoever tried.
+#:
+#: Two kinds of entry, for one reason. ``plan`` and ``review`` are **Python objects**: a
+#: file would have to carry code. ``hold_out`` and ``hold_out_symbols`` are plain data and
+#: are refused anyway, because there is nowhere in the file's shape to put them -- neither
+#: is in :data:`DATA_KEYS`, :data:`RUN_KEYS` or :data:`STRATEGY_KEYS`. So ``to_mapping``
+#: dropped a reservation silently, and ``save_config`` followed by ``run_from`` re-ran the
+#: reserved data with no refusal and provenance reading ``symbols: None`` -- a replay that
+#: looks out of sample and is not, which is the direction that flatters.
+#:
+#: Refusing is this module's own design applied consistently: this mapping, the
+#: ``<callable>`` select and :func:`_plain`'s unknown type all refuse for the same stated
+#: reason, that the file would otherwise "look complete and reproduce nothing".
+#:
+#: **The period half is pre-existing.** It has been dropped since this format was written
+#: and is not a defect the symbol half introduced; it becomes blocking now because the
+#: symbol half is the change that moves "SPY is reserved" out of a document and into code,
+#: so a file that launders a reservation now launders something enforced.
+#:
+#: *Carrying* them would be a new file schema -- a block of its own, ``load`` understanding
+#: it, ``flatten`` lifting it back into ``run()`` arguments, and ``check_round_trip``
+#: proving a reservation survives. That is a feature rather than a repair, and is not built
+#: here.
 NOT_WRITABLE: Mapping[str, str] = {
     "plan": "a plan is a Python function that decides what to buy, how much and how to "
             "get out. Writing it to a file would mean the file carried code, and loading "
             "one would mean running whatever a file on disk said",
     "review": "a daily review is a Python function, as above",
+    "hold_out": "a reserved period is declared before the research begins, and is "
+                "neither part of the strategy nor part of the run settings, so this "
+                "format has nowhere to carry it. A file written without it would re-run "
+                "the reserved period with no refusal, and the replay's provenance would "
+                "read as if nothing had ever been held back. Re-run it with "
+                "hold_out=(start, end) passed to run() instead",
+    "hold_out_symbols": "a reserved underlying, for the same reason and in the same "
+                        "direction: the file would carry no reservation, and the replay "
+                        "would spend the one underlying held out of the whole research "
+                        "while reading as a run that reserved nothing",
 }
 
 
@@ -106,7 +145,14 @@ def to_mapping(result) -> dict[str, Any]:
     strategy, config = manifest["strategy"], manifest["config"]
     execution = manifest["execution"]
 
-    blocked = [k for k in NOT_WRITABLE if strategy.get(k)]
+    # A reservation lives in the provenance rather than in the strategy block, so the
+    # refusal reads both. Keyed by the ``run()`` parameter rather than by the provenance
+    # key (``symbols``), because the parameter is what whoever reads the refusal passes.
+    held = (manifest.get("provenance") or {}).get("hold_out") or {}
+    reserved = {"hold_out": held.get("hold_out"),
+                "hold_out_symbols": held.get("symbols")}
+
+    blocked = [k for k in NOT_WRITABLE if strategy.get(k) or reserved.get(k)]
     if blocked:
         raise StartupError(
             "this run cannot be written to a config file: "

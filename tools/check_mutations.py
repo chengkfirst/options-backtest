@@ -85,6 +85,33 @@ MUTATIONS: tuple[Mutation, ...] = (
         "    if False:\n        raise StartupError(",
         ("tests/test_holdout.py::TestTheRefusal",),
     ),
+    # The symbol half's own refusal. Added with the mechanism rather than after it, as this
+    # file's rule requires: it is the one line whose silent removal produces a result on a
+    # reserved underlying with every guard still green. The period entry above cannot cover
+    # it -- the two halves are refused by separate clauses and answered by separate unlocks.
+    Mutation(
+        "a reserved underlying refuses a run on it",
+        "backtest/research/holdout.py",
+        "    if reached is not None and not unlock_symbols:\n        raise StartupError(",
+        "    if False:\n        raise StartupError(",
+        ("tests/test_holdout.py::TestAReservedSymbol",),
+    ),
+    # The half the old check could not see. The defect fixed on `fix/engine-state` *was*
+    # an `initial_state` -- the trailing stop's mark starting below the entry on every
+    # trade -- and the version bump was made by hand, with nothing forcing it. Two rules
+    # could therefore have shared one `run_id`, which makes a search look smaller than it
+    # was. What it moved is measured trade by trade in
+    # docs/findings/baseline-second-configuration-2026-11-08.md; the figure is not
+    # restated here, so a permitted baseline update cannot leave this comment asserting a
+    # number that is no longer true.
+    Mutation(
+        "a changed starting state forces a version change, as changed logic does",
+        "backtest/core/component.py",
+        '''    if _starting_state(existing.initial_state) != _starting_state(variant.initial_state):
+        changed.append("initial_state")''',
+        '    if False:\n        changed.append("initial_state")',
+        ("tests/test_component_state.py::TestAChangedStartingStateNeedsAVersion",),
+    ),
     Mutation(
         "a position left open at the range end is reported",
         "backtest/engine/loop.py",

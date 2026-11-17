@@ -28,7 +28,7 @@ itself should change (`/new-guard`). Report which guard failed and its output, a
 
 The baseline is the one that needs naming when it goes red: **you changed behaviour.** Find
 it and revert it, or stop and report that the results move and why, so a person decides.
-**Never run `python -m tools.baseline update` to get past it.**
+**Never run `python -m tools.baseline update --configuration <key>` to get past it**, in any form.
 
 ## 2. What is in the tree
 

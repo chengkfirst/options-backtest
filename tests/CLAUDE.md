@@ -59,8 +59,11 @@ assertions are fine.
 
 ## The baseline is never updated to make a change pass
 
-`python -m tools.baseline update` exists for the case where results are *meant* to change,
-and that case is a deliberate, separately reasoned act. If the baseline goes red and you
+`python -m tools.baseline update --configuration <key>` exists for the case where results
+are *meant* to change, and that case is a deliberate, separately reasoned act. The
+configuration is named on the command line and the command refuses without it: there is more
+than one recorded configuration, and a command that wrote whichever one it felt like is how a
+file nobody was looking at gets overwritten. If the baseline goes red and you
 did not intend to change the results, **you changed behaviour**: find it and revert it.
 Updating the baseline to clear a red guard is the one move this project refuses outright,
 because it destroys the only record that the results used to be different.

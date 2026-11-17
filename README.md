@@ -577,7 +577,7 @@ trades labelled "stop loss" end up profitable — that is a real cost, not a bug
 python -m tools.check               # the guards
 python -m tools.check --fast        # skipping the slow ones
 python -m tools.status              # the project's state (computed from the definitions)
-python -m tools.baseline update     # update the regression baseline (prints the difference)
+python -m tools.baseline update --configuration <key>   # record one baseline (prints the difference)
 ```
 
 | Guard | What it checks |

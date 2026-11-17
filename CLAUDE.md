@@ -54,7 +54,8 @@ commit the change, or say plainly in your final message that it is unaudited and
 
 Three things are the human's, always:
 
-- **A baseline update.** `tools.baseline update` is never run to make a guard green. Where
+- **A baseline update.** `tools.baseline update --configuration <key>` is never run to
+  make a guard green, for either configuration. Where
   results are *meant* to move, the change is explained trade by trade in `docs/findings/`
   and committed **before** the baseline command, in its own commit.
 - **An architecture change.** The architecture is transcribed, not authored here. A

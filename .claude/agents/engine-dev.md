@@ -45,7 +45,7 @@ the change really is needed elsewhere, see "When you stop" below.
 - **`backtest/research/`** — `research-analyst` and the research tools live there.
 - **The guards** (`tools/`), `docs/conventions.md`, `CLAUDE.md`, `docs/requirements.md`. A guard that
   fails is not an obstacle; it is the thing working. See "When a guard goes red".
-- **The baseline.** Never run `python -m tools.baseline update`.
+- **The baseline.** Never run `python -m tools.baseline update --configuration <key>`, for any configuration.
 
 ## How you work
 

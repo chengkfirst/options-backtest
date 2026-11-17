@@ -217,6 +217,271 @@ class TestWhatTheRegistryRefuses:
         assert "declare itself stateful" in str(caught.value)
 
 
+#: The prefix every probe form below is named with, and the **one** place that name is
+#: written: :func:`_probe` builds its name from it and the class fixture sweeps by it, so
+#: a rename cannot leave the sweep matching nothing.
+#:
+#: Why that matters more than it looks: a probe left in the registry changes what
+#: ``variants("stop_loss")`` returns for every later test in the session, and **no
+#: existing test would fail** -- `test_variants.py` asserts a *subset* of the registered
+#: stop_loss names, and the test that loops over them asserting each appears in a refusal
+#: is satisfied by an extra one. The leak is silent in both directions.
+_PROBE = "_probe"
+
+
+def _decide(ctx, **params):
+    """One shared decider, so a test about `initial_state` changes only that."""
+    return ctx["premium_ratio"] < ctx["state"]["high_water"]
+
+
+def _starts_at_entry(ctx):
+    return {"high_water": 0.0}
+
+
+def _starts_at_the_first_price_seen(ctx):
+    return {"high_water": ctx["premium_ratio"]}
+
+
+def _probe(version: int = 1, initial_state=_starts_at_entry, decide=_decide) -> Variant:
+    """One probe form, in the only place its slot and name are written.
+
+    ``initial_state=None`` gives the stateless form of the same name, which is how the
+    gain/lose tests below are written -- `register` refuses `stateful` and `initial_state`
+    disagreeing, so the flag follows the hook rather than being passed separately.
+    """
+    return Variant(slot="stop_loss", name=f"{_PROBE}_state", version=version,
+                   describes="a probe", params=(), decide=decide,
+                   stateful=initial_state is not None, initial_state=initial_state)
+
+
+def _built_again(version: int = 1) -> Variant:
+    """The same form, built a second time -- what a module imported twice produces.
+
+    The lambda is a **new function object** on every call, with the same source. That is
+    the case the guard must keep allowing.
+    """
+    return _probe(version=version, initial_state=lambda ctx: {"high_water": 0.0})
+
+
+def _mark_from(ctx, *, mark: float) -> dict:
+    """A starting state parameterised the only honest way: on the callable, readably."""
+    return {"high_water": mark}
+
+
+def _sourceless(body: str, signature: str = "ctx"):
+    """An `initial_state` with no retrievable source, compiled rather than imported.
+
+    Not an exotic case to invent: `_source` falls back to `repr(fn)` for exactly these,
+    and a lambda's repr carries its memory address -- so a guard built on the repr would
+    refuse a form that had not changed.
+    """
+    namespace: dict = {}
+    exec(f"f = lambda {signature}: {body}", namespace)
+    return namespace["f"]
+
+
+@kind("guard")
+class TestAChangedStartingStateNeedsAVersion:
+    """The state a form starts a trade with is part of the form, and the guard was blind
+    to it.
+
+    This is not hypothetical. The defect fixed on `fix/engine-state` *was* an
+    `initial_state`: the trailing stop's high-water mark started at the fill day's
+    exit-side ratio instead of the entry, on every trade. The version bump to 2 was made
+    by hand, and nothing in `register` would have forced it -- so the two rules could have
+    shared one `run_id`, and two results that are not comparable would have looked like
+    the same run. What that one difference is worth is measured, trade by trade, in
+    `docs/findings/baseline-second-configuration-2026-11-08.md` -- cited rather than
+    restated, because a figure copied out of a finding goes stale where it is copied to.
+
+    **What these tests establish, and what they do not.** Every one of them registers
+    twice in *one process*, because that is the only case `register` can see at all: a
+    fresh process starts with an empty registry, so editing a hook between two runs still
+    forces no version bump, and `code_version()` cannot tell the two trees apart either.
+    `backtest.core.component._what_changed` says why, and says where closing it would
+    have to go. So: a collision guard, tested as one.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_probe_outlives_its_test(self):
+        """Every probe this class registers, out of the registry before and after.
+
+        ``autouse`` so a test added later cannot forget to ask for it, and matched on
+        :data:`_PROBE` rather than on a key written out again here -- see that constant
+        for why a leak would otherwise turn no test red.
+        """
+        from backtest.core.component import _REGISTRY
+
+        def sweep() -> None:
+            for key in [k for k in _REGISTRY
+                        if k.split("/")[-1].startswith(_PROBE)]:
+                del _REGISTRY[key]
+
+        sweep()
+        yield
+        sweep()
+
+    @pytest.mark.req("0.2.registry")
+    def test_a_changed_initial_state_at_the_same_version_is_refused(self):
+        register(_probe(initial_state=_starts_at_entry))
+        with pytest.raises(StartupError) as caught:
+            register(_probe(initial_state=_starts_at_the_first_price_seen))
+        message = str(caught.value)
+        assert "initial_state" in message, (
+            "the refusal does not say which half of the form changed, so the reader is "
+            "told to raise the version without being told what moved"
+        )
+        assert "version" in message
+
+    @pytest.mark.req("0.2.registry")
+    def test_the_same_change_with_a_version_bump_is_accepted(self):
+        """A version bump is the whole point of the refusal: it is a new form, and the
+        fingerprint now says so."""
+        register(_probe(version=1, initial_state=_starts_at_entry))
+        register(_probe(version=2, initial_state=_starts_at_the_first_price_seen))
+        kept = get("stop_loss", _probe().name)
+        assert kept.version == 2
+        assert kept.initial_state is _starts_at_the_first_price_seen
+
+    @pytest.mark.req("0.2.registry")
+    def test_gaining_an_initial_state_is_a_change_and_not_an_absence(self):
+        """`None` on one side means "stateless", which is a form, not "cannot tell"."""
+        register(_probe(version=1, initial_state=None))
+        with pytest.raises(StartupError, match="initial_state"):
+            register(_probe(version=1, initial_state=_starts_at_entry))
+
+    @pytest.mark.req("0.2.registry")
+    def test_losing_an_initial_state_is_a_change_too(self):
+        register(_probe(version=1, initial_state=_starts_at_entry))
+        with pytest.raises(StartupError, match="initial_state"):
+            register(_probe(version=1, initial_state=None))
+
+    @pytest.mark.req("0.2.registry")
+    def test_an_unchanged_form_built_twice_is_still_allowed(self):
+        """A module imported twice is explicitly allowed, and must stay allowed.
+
+        Its `initial_state` is a lambda, which is the shape the guard's own error message
+        asks for, and a new object each time this is called.
+        """
+        first = register(_built_again())
+        again = register(_built_again())
+        assert again is first, (
+            "an unchanged form was registered again as a new variant, so a harmless "
+            "reload now looks like a change"
+        )
+
+    @pytest.mark.req("0.2.registry")
+    def test_an_unchanged_form_with_no_retrievable_source_is_allowed(self):
+        """The trap in building this on `_source`: its fallback is `repr(fn)`, and a
+        lambda's repr carries a memory address, so two identical compiled lambdas would
+        compare unequal and the guard would refuse code that had not changed."""
+        body = '{"high_water": 0.0}'
+        first = register(_probe(initial_state=_sourceless(body)))
+        assert register(_probe(initial_state=_sourceless(body))) is first
+
+    @pytest.mark.req("0.2.registry")
+    def test_a_real_change_with_no_retrievable_source_still_raises(self):
+        """The other direction of the same trap: whatever makes the unchanged case pass
+        must not make every case pass."""
+        register(_probe(initial_state=_sourceless('{"high_water": 0.0}')))
+        moved = _sourceless('{"high_water": ctx["premium_ratio"]}')
+        with pytest.raises(StartupError, match="initial_state"):
+            register(_probe(initial_state=moved))
+
+    @pytest.mark.req("0.2.registry")
+    def test_a_changed_decider_still_raises_and_still_says_logic(self):
+        """`decide`'s behaviour is unchanged, message included -- `test_variants.py`
+        matches on the word."""
+        def other(ctx, **params):
+            return True
+
+        register(_probe(initial_state=_starts_at_entry))
+        with pytest.raises(StartupError) as caught:
+            register(_probe(initial_state=_starts_at_entry, decide=other))
+        assert "different logic" in str(caught.value)
+
+    @pytest.mark.req("0.2.registry")
+    def test_a_changed_decider_with_a_version_bump_is_still_accepted(self):
+        def other(ctx, **params):
+            return True
+
+        register(_probe(version=1, initial_state=_starts_at_entry))
+        register(_probe(version=2, initial_state=_starts_at_entry, decide=other))
+        assert get("stop_loss", _probe().name).version == 2
+
+    @pytest.mark.req("0.2.registry")
+    def test_a_starting_state_parameterised_by_a_closure_is_refused(self):
+        """**The live case**, and the one the source comparison cannot see.
+
+        A closure is the *only* way to parameterise a starting state: `Bound.state_for`
+        calls `initial_state(ctx)` with no parameters, and the shipped ratchet says so in
+        its own comment. So this shape is what a researcher sweeping a starting offset
+        writes -- and two of them have the same source and the same bytecode, differing
+        only in what they captured.
+
+        Before this was refused, the second registration returned the **first** variant,
+        so the engine kept the old mark while the code and the configuration both said
+        the new one: N runs reporting the first run's rule under one ref.
+        """
+        def mark_at(mark: float):
+            return lambda ctx: {"high_water": mark}
+
+        register(_probe(initial_state=mark_at(0.0)))
+        with pytest.raises(StartupError, match="initial_state"):
+            register(_probe(initial_state=mark_at(0.5)))
+
+    @pytest.mark.req("0.2.registry")
+    def test_a_captured_value_is_cannot_tell_even_when_it_has_not_changed(self):
+        """The conservative direction, named so it is not read as a bug.
+
+        Two closures that captured the same value are refused as well, because nothing
+        the guard can read tells the two cases apart. It refuses rather than keeping the
+        old rule silently, and the way past it is the version bump that is correct anyway.
+        """
+        def mark_at(mark: float):
+            return lambda ctx: {"high_water": mark}
+
+        register(_probe(initial_state=mark_at(0.0)))
+        with pytest.raises(StartupError, match="initial_state"):
+            register(_probe(initial_state=mark_at(0.0)))
+
+    @pytest.mark.req("0.2.registry")
+    def test_a_changed_default_argument_is_a_changed_form(self):
+        """`lambda ctx, mark=0.0:` is the other way to carry a starting value, and the
+        bytecode is identical for every value of it -- the default lives on the function
+        object, not in the code. Written sourceless so it is the compiled path being
+        tested rather than the two different lines."""
+        register(_probe(initial_state=_sourceless("{'high_water': mark}",
+                                                  "ctx, mark=0.0")))
+        with pytest.raises(StartupError, match="initial_state"):
+            register(_probe(initial_state=_sourceless("{'high_water': mark}",
+                                                      "ctx, mark=0.5")))
+
+    @pytest.mark.req("0.2.registry")
+    def test_an_integer_and_a_float_starting_mark_are_different_forms(self):
+        """`0 == 0.0` in Python, so an untyped comparison of the constants reads the two
+        as one form. They are not: the state a trade starts with differs in type, and
+        what reads it may not be indifferent to that."""
+        register(_probe(initial_state=_sourceless('{"high_water": 0}')))
+        with pytest.raises(StartupError, match="initial_state"):
+            register(_probe(initial_state=_sourceless('{"high_water": 0.0}')))
+
+    @pytest.mark.req("0.2.registry")
+    def test_an_unchanged_partial_is_allowed_and_a_changed_one_is_not(self):
+        """A `partial` is the one parameterisable shape that can be compared honestly:
+        what it bound is on the object and readable, so an unchanged re-import is allowed
+        rather than refused. A guard that refuses correct code is one people get past by
+        raising the version until it stops complaining."""
+        import functools
+
+        unchanged = functools.partial(_mark_from, mark=0.0)
+        first = register(_probe(initial_state=unchanged))
+        assert register(_probe(initial_state=functools.partial(_mark_from, mark=0.0))) \
+            is first
+        with pytest.raises(StartupError, match="initial_state"):
+            register(_probe(initial_state=functools.partial(_mark_from, mark=0.5)))
+
+
 @kind("guard")
 class TestTheEngineUsesIt:
     """The unit tests prove the protocol works when called. These prove the engine calls

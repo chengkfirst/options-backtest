@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -35,7 +36,9 @@ from backtest.engine.strategy import Strategy
 from backtest.research.sweep import SweepResult, sweep as _sweep
 from backtest.engine.vectorized import TradeTableEngine, TradeTableResult
 from backtest.core.errors import InvariantError, StartupError
-from backtest.research.holdout import HoldOut, check as holdout_check
+from backtest.research.holdout import (
+    HoldOut, ReservedSymbol, check as holdout_check,
+)
 from backtest.research import metrics as R
 from backtest.signals.contracts import SelectionRule
 from backtest.signals.registry import SignalSet
@@ -442,7 +445,17 @@ def run(
     components: "Mapping[str, Mapping[str, Any]] | None" = None,
     risk: "Mapping[str, Any] | None" = None,
     hold_out: "tuple[str | date, str | date] | None" = None,
+    #: The symbol half of the hold-out: underlyings reserved from the whole research, as
+    #: in ``hold_out_symbols=("SPY",)``. A run on one of them raises unless ``unlock=``
+    #: gives a reason. A period and an underlying are reserved separately and spent
+    #: separately -- see ``backtest/research/holdout.py``.
+    hold_out_symbols: "str | Sequence[str] | None" = None,
     unlock: str = "",
+    #: The symbol half's unlock, naming why the reserved underlying is being spent.
+    #: Separate from ``unlock=`` on purpose: a reason written about dates is not a
+    #: decision to spend an underlying, and one reason that spent both halves is how a
+    #: reserved symbol gets looked at with no refusal ever naming it.
+    unlock_symbols: str = "",
     #: Slot 1 · setup / regime: ``f(ctx) -> bool``, whether this is an environment to
     #: trade in at all. Returning True **arms** the candidate; it opens nothing by
     #: itself, and entry then looks for timing inside the armed window.
@@ -545,8 +558,25 @@ def run(
     # nothing.
     reserved = (HoldOut(_as_date(hold_out[0]), _as_date(hold_out[1]))
                 if hold_out else None)
+    # A bare string is one symbol, not three letters. Iterating "SPY" would reserve S, P
+    # and Y, match no run ever, and raise nothing -- a hold-out that misses silently,
+    # which is the one failure the module exists to prevent.
+    #
+    # Omitted and empty are forwarded as **different** values, because they are different
+    # declarations: `None` reserves nothing and records that nothing was reserved, while
+    # an empty collection is a declaration that reserves nothing -- almost always a
+    # comprehension that filtered everything out -- and `holdout.check` refuses it. The
+    # refusal lives there so that it answers every caller rather than only this one; here
+    # the two cases must simply not be collapsed, which `or ()` did.
+    if hold_out_symbols is None:
+        reserved_symbols = None
+    else:
+        names = ((hold_out_symbols,) if isinstance(hold_out_symbols, str)
+                 else tuple(hold_out_symbols))
+        reserved_symbols = tuple(ReservedSymbol(n) for n in names)
     hold_out_note = holdout_check(reserved, start=config.start, end=config.end,
-                                  unlock=unlock)
+                                  unlock=unlock, unlock_symbols=unlock_symbols,
+                                  symbol=config.symbol, reserved=reserved_symbols)
 
     market = MarketData(config, refresh=refresh)
     signal_set = SignalSet.from_bars(market.bars, extra=signals, vol_proxy=market.vol_proxy)
