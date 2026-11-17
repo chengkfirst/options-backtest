@@ -53,6 +53,7 @@ what it is.
 
 from __future__ import annotations
 
+import functools
 import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
@@ -288,6 +289,11 @@ def register(variant: Variant) -> Variant:
     with different code would make yesterday's result and today's share a reference; a
     name re-registered with the *same* code is a harmless reload (a module imported twice)
     and is allowed.
+
+    "Different code" is **both** halves of a form -- what it decides and the state it
+    starts a trade with. See :func:`_what_changed` for why the second is not a detail,
+    and for what this guard does **not** reach: it fires on a name colliding within one
+    process, not on an edit between two runs.
     """
     if variant.slot not in SLOTS:
         raise StartupError(
@@ -311,19 +317,74 @@ def register(variant: Variant) -> Variant:
         )
     key = f"{variant.slot}/{variant.name}"
     existing = _REGISTRY.get(key)
-    if existing is not None:
-        same_code = (existing.version == variant.version
-                     and _source(existing.decide) == _source(variant.decide))
-        if existing.version == variant.version and not same_code:
+    if existing is not None and existing.version == variant.version:
+        changed = _what_changed(existing, variant)
+        if changed:
             raise StartupError(
-                f"{variant.ref} is already registered with different logic. Raise the "
-                f"version: a result produced by the old code and one produced by the new "
-                f"would otherwise carry the same reference and look like the same run"
+                f"{variant.ref} is already registered with different "
+                f"{' and '.join(changed)}. Raise the version: a result produced by the "
+                f"old code and one produced by the new would otherwise carry the same "
+                f"reference and look like the same run"
+                + (_STARTING_STATE_NOTE if "initial_state" in changed else "")
             )
-        if same_code:
-            return existing
+        return existing
     _REGISTRY[key] = variant
     return variant
+
+
+#: Added to the refusal when the starting state is what moved, because that half does not
+#: look like logic and the first instance of it got past a person rather than a guard.
+#:
+#: The size of the difference is **cited and not restated**: a figure copied into an error
+#: message goes stale at the user, with nothing to notice that the finding it came from was
+#: re-measured.
+_STARTING_STATE_NOTE = (
+    "\n\nThe state a form starts a trade with is part of the form, not a detail of it: "
+    "`stop_loss/trailing`'s high-water mark once started at the fill day's exit-side "
+    "ratio instead of at the entry, which is a different rule and different trades. What "
+    "it moved is measured trade by trade in "
+    "docs/findings/baseline-second-configuration-2026-11-08.md -- on the test suite's "
+    "synthetic chain, so the size there is that fixture's own and not a general figure."
+)
+
+
+def _what_changed(existing: Variant, variant: Variant) -> tuple[str, ...]:
+    """Which halves of a form differ, named -- never just "it differs".
+
+    A refusal that says "raise the version" without saying what moved gets the same
+    registration retried, and the reader's first guess is that the guard is wrong.
+
+    **Both halves decide trades, so both are compared.** The starting state is the one
+    this comparison used to leave out, and the omission was not hypothetical: the defect
+    fixed on `fix/engine-state` *was* an `initial_state` -- the trailing stop's high-water
+    mark starting at the fill day's exit-side ratio rather than at the entry, on every
+    trade.
+
+    **What this does not do, written down because the obvious reading is wrong.** It runs
+    only where a name is registered twice in *one process*: a reload, a notebook, two
+    modules importing the same form. In the ordinary workflow -- edit the hook, re-run a
+    fresh process -- the registry starts empty, `existing` is None, and **no version bump
+    is forced**. So this would not have required the hand-made bump to `trailing@2`
+    either. It is a collision guard, not an edit guard.
+
+    And nothing else catches that edit. ``initial_state`` reaches the run fingerprint by
+    one route only -- ``version``, inside :attr:`Variant.ref` -- while `run_id`'s other
+    defence is `core.run_id.code_version`, which is the commit plus a `+dirty` flag and so
+    is identical for every state of a dirty tree. Two runs at one commit whose starting
+    states differ therefore share one `run_id` *and* one ref, and the trade log has no
+    component column to tell them apart. Closing that means carrying this function's
+    answer into the ``components`` entry of the fingerprint -- `api/sdk.py`, where
+    ``{"ref": c.ref, "params": dict(c.params)}`` is built -- which changes the fingerprint
+    of every component run. That is a spec and an owner's decision, not a detail of this
+    guard, so it is recorded here rather than done: the next reader should not mistake the
+    collision guard for the edit guard.
+    """
+    changed: list[str] = []
+    if _source(existing.decide) != _source(variant.decide):
+        changed.append("logic")
+    if _starting_state(existing.initial_state) != _starting_state(variant.initial_state):
+        changed.append("initial_state")
+    return tuple(changed)
 
 
 def _source(fn: Callable) -> str:
@@ -334,6 +395,93 @@ def _source(fn: Callable) -> str:
         # session). Treated as "cannot tell", which makes the re-registration check fall
         # through to raising rather than quietly allowing it.
         return repr(fn)
+
+
+def _starting_state(fn: "Callable | None") -> tuple:
+    """A comparable identity for ``initial_state``, stable across a module reload.
+
+    **Deliberately not :func:`_source`.** Its fallback for a callable with no retrievable
+    source is ``repr(fn)``, and a lambda's repr carries a memory address -- while a lambda
+    is exactly the shape the stateful refusal above asks people to write. Two identical
+    lambdas would then compare unequal, so a module imported twice (explicitly allowed)
+    would be refused; and a guard that refuses correct code is one people get past by
+    raising the version until it stops complaining, which is how a version stops meaning
+    anything. The two functions are two different rules rather than one fact written
+    twice, and this divergence is deliberate: ``decide``'s weakness runs in the
+    conservative direction, and this one must not refuse an unchanged reload.
+
+    ``None`` is a value here and equals only itself. A form that gains or loses its
+    ``initial_state`` entirely is a changed form, and absence must not read as "unchanged"
+    -- the general rule in `core/maybe.py`, applied to a callable.
+
+    **Why this reads more than the written body.** ``decide`` varies through ``params``,
+    and ``params`` is in the run fingerprint. ``initial_state`` has no such route:
+    :meth:`Bound.state_for` calls it with the context alone, and the shipped ratchet says
+    so in its own comment. So a captured value is the *only* way to parameterise a
+    starting state, and it is both invisible in the source and absent from the
+    fingerprint. Hence, in order:
+
+    - a ``functools.partial`` is compared by what it bound, which is readable on the
+      object -- so an unchanged re-import of ``partial(base, mark=0.0)`` is allowed rather
+      than refused;
+    - a closure (a non-empty ``co_freevars``) is **"cannot tell" and refuses**, because
+      two closures over different values have the same source *and* the same bytecode.
+      Two over the *same* value are refused as well; that is the conservative direction,
+      and the way past it is the version bump that is correct anyway. Silently keeping the
+      first registration -- which is what returning ``existing`` did -- gives a sweep of N
+      starting offsets where every run reports the first one's rule;
+    - otherwise the written source, or where there is none the code object's own bytecode,
+      constants and names -- which say what the body does without saying where it lives;
+    - a callable with no code object at all, such as an instance with ``__call__``, is
+      "cannot tell" by identity.
+
+    Either way the function object's own ``__defaults__`` and ``__kwdefaults__`` are
+    included: ``lambda ctx, mark=0.0:`` carries its value on the object, not in the code,
+    so every value of it compiles identically.
+
+    **What it still cannot see, recorded rather than left to be found.** A module global
+    (``lambda ctx: {"high_water": MARK}`` with ``MARK`` edited) compares equal on both
+    paths -- the constant's definition is not in the lambda's own source line and not in
+    its bytecode -- and no comparison of the callable can close that. The source path is
+    also docstring-sensitive: a comment-only edit to a hook demands a version bump on a
+    reload, which is the same kind of over-strictness ``decide`` already has.
+    """
+    if fn is None:
+        return ("stateless",)
+    if isinstance(fn, functools.partial):
+        return ("partial", _starting_state(fn.func), _typed(fn.args),
+                _typed_items(fn.keywords))
+    code = getattr(fn, "__code__", None)
+    bound = (_typed(getattr(fn, "__defaults__", None) or ()),
+             _typed_items(getattr(fn, "__kwdefaults__", None)))
+    if code is not None and code.co_freevars:
+        # Only the identical object counts as unchanged. `id` is enough because both
+        # operands are alive in :func:`_what_changed` while they are compared -- it is
+        # not a value to store, and CPython reuses the address of a freed object.
+        return ("closure", id(fn))
+    try:
+        return ("source", inspect.getsource(fn), bound)
+    except (OSError, TypeError):
+        pass
+    if code is None:
+        return ("opaque", id(fn))        # live-only, as above
+    return ("compiled", code.co_code, _typed(code.co_consts), code.co_names,
+            code.co_varnames, bound)
+
+
+def _typed(values: "Any") -> tuple:
+    """Values tagged with their type, because ``0 == 0.0 == False`` in Python.
+
+    A mark starting at ``0`` and one starting at ``0.0`` are not the same starting state,
+    and an untagged comparison of the constants reads them as one form.
+    """
+    return tuple((type(v).__name__, v) for v in values)
+
+
+def _typed_items(mapping: "Mapping[str, Any] | None") -> tuple:
+    """:func:`_typed` for keyword defaults, in a stable order."""
+    return tuple((key, type(value).__name__, value)
+                 for key, value in sorted((mapping or {}).items()))
 
 
 def get(slot: str, name: str) -> Variant:
